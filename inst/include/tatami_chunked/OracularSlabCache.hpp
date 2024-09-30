@@ -4,6 +4,9 @@
 #include <unordered_map>
 #include <vector>
 #include <list>
+#include <type_traits>
+#include <memory>
+
 #include "tatami/tatami.hpp"
 
 /**
@@ -19,6 +22,7 @@ namespace tatami_chunked {
  * @tparam Id_ Type of slab identifier, typically integer.
  * @tparam Index_ Type of row/column index produced by the oracle.
  * @tparam Slab_ Class for a single slab.
+ * @tparam track_reuse_ Whether to track slabs in the cache that are re-used.
  *
  * Implement an oracle-aware cache for slabs.
  * Each slab is defined as the set of chunks required to read an element of the target dimension (or a contiguous block/indexed subset thereof) from a `tatami::Matrix`.
@@ -28,7 +32,7 @@ namespace tatami_chunked {
  * It is assumed that each slab has the same size such that `Slab_` instances can be effectively reused between slabs without requiring any reallocation of memory.
  * For variable-sized slabs, consider using `OracularVariableSlabCache` instead.
  */
-template<typename Id_, typename Index_, class Slab_> 
+template<typename Id_, typename Index_, class Slab_, bool track_reuse_ = false> 
 class OracularSlabCache {
 private:
     std::shared_ptr<const tatami::Oracle<Index_> > my_oracle;
@@ -44,6 +48,8 @@ private:
     std::vector<std::pair<Id_, Slab_*> > my_to_populate;
     std::vector<Id_> my_in_need;
     size_t my_refresh_point = 0;
+
+    typename std::conditional<track_reuse_, std::vector<std::pair<Id_, Slab_*> >, bool>::type my_to_reuse;
 
 public:
     /**
@@ -113,11 +119,20 @@ public:
      *    For example, if each chunk takes up 10 rows, attempting to access row 21 would yield an offset of 1.
      * @param create Function that accepts no arguments and returns a `Slab_` object with sufficient memory to hold a slab's contents when used in `populate()`.
      * This may also return a default-constructed `Slab_` object if the allocation is done dynamically per slab in `populate()`.
-     * @param populate Function that accepts a `std::vector<std::pair<Id_, Slab_*> >&` specifying the slabs to be populated.
-     * The first `Id_` element of each pair contains the slab identifier, i.e., the first element returned by the `identify` function.
-     * The second `Slab_*` element contains a pointer to a `Slab_` returned by `create()`.
-     * This function should iterate over the vector and populate each slab.
-     * Note that the vector is not guaranteed to be sorted. 
+     * @param populate Function where the arguments depend on `track_reuse_`.
+     * The return value is ignored.
+     * - If `track_reuse = false`, this function accepts a single `std::vector<std::pair<Id_, Slab_*> >&` specifying the slabs to be populated.
+     *   The first `Id_` element of each pair contains the slab identifier, i.e., the first element returned by the `identify` function.
+     *   The second `Slab_*` element contains a pointer to a `Slab_` returned by `create()`.
+     *   This function should iterate over the vector and populate each slab.
+     *   The vector is guaranteed to be non-empty but is not guaranteed to be sorted. 
+     * - If `track_reuse_ = true`, this function accepts two `std::vector<std::pair<Id_, Slab_*> >&` arguments.
+     *   The first vector (`to_populate`) specifies the slabs to be populated, identical to the sole expected argument when `track_reuse_ = false`.
+     *   The second vector (`to_reuse`) specifies the existing slabs in the cache to be reused.
+     *   This function should iterate over `to_populate` and populate each slab. 
+     *   The function may also iterate over `to_reuse` to perform some housekeeping on the existing slabs (e.g., defragmentation).
+     *   `to_populate` is guaranteed to be non-empty but `to_reuse` is not.
+     *   Neither vector is guaranteed to be sorted. 
      *
      * @return Pair containing (1) a pointer to a slab's contents and (2) the index of the next predicted row/column inside the retrieved slab.
      */
@@ -158,13 +173,17 @@ public:
                 ++used_slabs;
 
                 auto ccIt = my_current_cache.find(future_slab_info.first);
-                if (ccIt != my_current_cache.end()) {
+                if (ccIt == my_current_cache.end()) {
+                    my_future_cache[future_slab_info.first] = NULL;
+                    my_in_need.push_back(future_slab_info.first);
+
+                } else {
                     auto slab_ptr = ccIt->second;
                     my_future_cache[future_slab_info.first] = slab_ptr;
                     my_current_cache.erase(ccIt);
-                } else {
-                    my_future_cache[future_slab_info.first] = NULL;
-                    my_in_need.push_back(future_slab_info.first);
+                    if constexpr(track_reuse_) {
+                        my_to_reuse.emplace_back(future_slab_info.first, slab_ptr);
+                    }
                 }
             }
 
@@ -185,8 +204,16 @@ public:
             }
             my_in_need.clear();
 
-            populate(my_to_populate);
+            if constexpr(track_reuse_) {
+                populate(my_to_populate, my_to_reuse);
+            } else {
+                populate(my_to_populate);
+            }
+
             my_to_populate.clear();
+            if constexpr(track_reuse_) {
+                my_to_reuse.clear();
+            }
 
             // We always fill my_future_cache to the brim so every entry of
             // my_all_slabs should be referenced by a pointer in

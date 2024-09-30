@@ -131,6 +131,22 @@ public:
     }
 };
 
+// COMMENT:
+// As tempting as it is to implement an LruVariableSlabCache, this doesn't work out well in practice.
+// This is because the Slab_ objects are re-used, and in the worst case, each object would have to be large enough to fit the largest slab.
+// At this point, we have several options:
+//
+// - Pre-allocate each Slab_ instance to have enough memory to fit the largest slab, in which case the slabs are not variable.
+// - Allow Slab_ instances to grow/shrink their memory allocation according to the size of its assigned slab.
+//   This reduces efficiency due to repeated reallocations, and memory usage might end up exceeding the nominal limit anyway due to fragmentation.
+// - Share a single memory pool across slabs, and manually handle defragmentation to free up enough contiguous memory for each new slab.
+//   Unlike the oracular case, we don't have the luxury of defragmenting once for multiple slabs.
+//   Instead, we might potentially need to defragment on every newly requested slab, which is computationally expensive.
+//
+// See also https://softwareengineering.stackexchange.com/questions/398503/is-lru-still-a-good-algorithm-for-a-cache-with-diferent-size-elements.
+// This lists a few methods for dealing with fragmentation, but none of them are particularly clean.
+// It's likely that just using the existing LruSlabCache with the maximum possible slab size is good enough for most applications.
+
 }
 
 #endif

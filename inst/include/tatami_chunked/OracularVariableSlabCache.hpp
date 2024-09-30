@@ -36,7 +36,7 @@ namespace tatami_chunked {
  *
  * When implementing `Slab_`,  we generally suggest using a common memory pool that is referenced by each `Slab_` instance.
  * This guarantees that the actual cache size does not exceed the limit associated with `max_size` when `Slab_` instances are re-used for different slabs.
- * (Otherwise, if each `Slab_` allocates its own memory, re-use of an instance may cause its allocation to increase to the size of the largest enmy_countered slab.)
+ * (Otherwise, if each `Slab_` allocates its own memory, re-use of an instance may cause its allocation to increase to the size of the largest encountered slab.)
  * Callers may need to occasionally defragment the pool to ensure that enough memory is available for loading new slabs.
  */
 template<typename Id_, typename Index_, class Slab_, typename Size_> 
@@ -114,7 +114,7 @@ public:
      * This method should only be called if `max_size > 0` in the constructor; otherwise, no slabs are actually available and cannot be returned.
      *
      * @tparam Ifunction_ Function to identify the slab containing each predicted row/column.
-     * @tparam Efunction_ Function to compute the estimated size of a slab.
+     * @tparam Ufunction_ Function to compute the estimated size of a slab.
      * @tparam Afunction_ Function to compute the actual size of a slab.
      * @tparam Cfunction_ Function to create a new slab.
      * @tparam Pfunction_ Function to populate zero, one or more slabs with their contents.
@@ -126,33 +126,35 @@ public:
      *    For example, if each chunk takes up 10 rows, attempting to access row 21 would require retrieval of slab 2.
      * 2. An `Index_`, the index of row/column `i` inside that slab.
      *    For example, if each chunk takes up 10 rows, attempting to access row 21 would yield an offset of 1.
-     * @param estimated_size Function that accepts `j`, an `Id_` containing the slab identifier.
-     * It should return the size of the slab as a non-negative `Size_`.
+     * @param upper_size Function that accepts `j`, an `Id_` containing the slab identifier.
+     * It should return the upper bound on the size of the slab as a non-negative `Size_`.
+     * This upper bound is typically different from the actual size when the latter is not known _a priori_, e.g., because the size is only known after populating the slab contents.
+     * However, if the latter is known, `upper_size()` may be a trivial function that returns the same value as `actual_size()`.
      * @param actual_size Function that accepts `j`, an `Id_` containing the slab identifier; and `slab`, a populated `const Slab_&` instance corresponding to `j`.
-     * It should return the actual size of the slab as a non-negative `Size_` that is no greater than `estimated_size(j)`.
+     * It should return the actual size of the slab as a non-negative `Size_` that is no greater than `upper_size(j)`.
      * @param create Function that accepts no arguments and returns a `Slab_` object with sufficient memory to hold a slab's contents when used in `populate()`.
      * This may also return a default-constructed `Slab_` object if the allocation is done dynamically per slab in `populate()`.
-     * @param populate Function that accepts three arguments - `my_to_populate`, `my_to_reuse` and `my_all_slabs`.
-     * - The `my_to_populate` argument is a `std::vector<std::pair<Id_, size_t> >&` specifying the slabs to be populated.
+     * @param populate Function that accepts three arguments - `to_populate`, `to_reuse` and `all_slabs`.
+     * - The `to_populate` argument is a `std::vector<std::pair<Id_, size_t> >&` specifying the slabs to be populated.
      *   The first `Id_` element of each pair contains the slab identifier, i.e., the first element returned by the `identify` function.
-     *   The second `size_t` element specifies the entry of `my_all_slabs` containing the corresponding `Slab_` instance, as returned by `create()`.
+     *   The second `size_t` element is the index of the entry of `all_slabs` containing the corresponding `Slab_` instance, as returned by `create()`.
      *   This argument can be modified in any manner.
-     *   It is not guaranteed to be sorted.
-     * - The `my_to_reuse` argument is a `std::vector<std::pair<Id_, size_t> >&` specifying the cached slabs that were re-used in the upcoming set of predictions.
-     *   The elements of each pair are interpreted in the same manner as `my_to_populate`. 
+     *   It is guaranteed to be non-empty but is not guaranteed to be sorted.
+     * - The `to_reuse` argument is a `std::vector<std::pair<Id_, size_t> >&` specifying the cached slabs that were re-used in the upcoming set of predictions.
+     *   The elements of each pair are interpreted in the same manner as `to_populate`. 
      *   This argument can be modified in any manner.
-     *   It is not guaranteed to be sorted.
-     * - The `my_all_slabs` argument is a `std::vector<Slab_>&` containing all slabs in the cache.
-     *   This may include instances that are not referenced by `my_to_populate` or `my_to_reuse`.
+     *   It is not guaranteed to be non-empty or sorted.
+     * - The `all_slabs` argument is a `std::vector<Slab_>&` containing all slabs in the cache.
+     *   This may include instances that are not referenced by `to_populate` or `to_reuse`.
      *   Each element of this argument can be modified but the length should not change.
      * .
-     * The `populate` function should iterate over `my_to_populate` and fill each `Slab_` with the contents of the corresponding slab.
-     * Optionally, callers may use `my_to_reuse` to defragment the already-in-use parts of the cache, in order to free up enough space for new data from `my_to_populate`.
+     * The `populate` function should iterate over `to_populate` and fill each `Slab_` with the contents of the corresponding slab.
+     * Optionally, callers may use `to_reuse` to defragment the already-in-use parts of the cache, in order to free up enough space for new data from `to_populate`.
      *
      * @return Pair containing (1) a pointer to a slab's contents and (2) the index of the next predicted row/column inside the retrieved slab.
      */
-    template<class Ifunction_, class Efunction_, class Afunction_, class Cfunction_, class Pfunction_>
-    std::pair<const Slab_*, Index_> next(Ifunction_ identify, Efunction_ estimated_size, Afunction_ actual_size, Cfunction_ create, Pfunction_ populate) {
+    template<class Ifunction_, class Ufunction_, class Afunction_, class Cfunction_, class Pfunction_>
+    std::pair<const Slab_*, Index_> next(Ifunction_ identify, Ufunction_ upper_size, Afunction_ actual_size, Cfunction_ create, Pfunction_ populate) {
         Index_ index = this->next(); 
         auto slab_info = identify(index);
         if (slab_info.first == my_last_slab_id && my_last_slab_num != static_cast<size_t>(-1)) {
@@ -165,7 +167,7 @@ public:
             // Note that, for any given populate cycle, the first prediction's
             // slab cannot already be in the cache, otherwise it would have
             // incorporated into the previous cycle. So we can skip some code.
-            my_used_size = estimated_size(slab_info.first);
+            my_used_size = upper_size(slab_info.first);
             requisition_new_slab(slab_info.first);
 
             auto last_future_slab_id = slab_info.first;
@@ -193,7 +195,7 @@ public:
                     my_to_reuse.emplace_back(future_slab_info.first, slab_num);
                     my_current_cache.erase(ccIt);
                 } else {
-                    auto candidate = my_used_size + estimated_size(future_slab_info.first);
+                    auto candidate = my_used_size + upper_size(future_slab_info.first);
                     if (candidate > my_max_size) {
                         break;
                     } 

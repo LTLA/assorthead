@@ -265,7 +265,7 @@ public:
      * The second `Slab_*` element specifies the object which to store the contents of the slab.
      * The third `OracularSubsettedSlabCacheSelectionDetails<Index_>*` element contains information about the desired subset of elements on the target dimension of the slab.
      * This function should iterate over the vector and populate the desired subset of each slab.
-     * Note that the vector is not guaranteed to be sorted. 
+     * The vector is guaranteed to be non-empty but is not guaranteed to be sorted. 
      *
      * @return Pair containing (1) a pointer to a cached slab and (2) the index of the next predicted row/column inside the retrieved slab.
      */
