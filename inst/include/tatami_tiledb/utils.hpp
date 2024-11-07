@@ -15,6 +15,7 @@ namespace internal {
 // All TileDB-related members.
 struct Components{
     Components(const std::string& location) : array(ctx, location, TILEDB_READ) {}
+    Components(tiledb::Context context, const std::string& location) : ctx(std::move(context)), array(ctx, location, TILEDB_READ) {}
     tiledb::Context ctx;
     tiledb::Array array;
 };

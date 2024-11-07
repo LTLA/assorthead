@@ -21,6 +21,8 @@ namespace tatami_tiledb {
 
 /**
  * @brief Options for dense TileDB extraction.
+ *
+ * Note that more **TileDB**-specific options can be set by passing in a custom `tiledb::Context` option to the `DenseMatrix` constructor.
  */
 struct DenseMatrixOptions {
     /**
@@ -472,16 +474,49 @@ public:
     /**
      * @param uri File path (or some other appropriate location) of the TileDB array.
      * @param attribute Name of the attribute containing the data of interest.
+     * @param context A **TileDB** `Context` object, typically with some custom configuration.
+     * @param options Further options.
+     */
+    DenseMatrix(const std::string& uri, std::string attribute, tiledb::Context ctx, const DenseMatrixOptions& options) : my_attribute(std::move(attribute)) {
+        initialize(uri, std::move(ctx), options);
+    }
+
+    /**
+     * @param uri File path (or some other appropriate location) of the TileDB array.
+     * @param attribute Name of the attribute containing the data of interest.
      * @param options Further options.
      */
     DenseMatrix(const std::string& uri, std::string attribute, const DenseMatrixOptions& options) : my_attribute(std::move(attribute)) {
+        initialize(uri, false, options);
+    }
+
+    /**
+     * @param uri File path (or some other appropriate location) of the TileDB array.
+     * @param attribute Name of the attribute containing the data of interest.
+     */
+    DenseMatrix(const std::string& uri, std::string attribute) : DenseMatrix(uri, std::move(attribute), DenseMatrixOptions()) {}
+
+private:
+    template<class PossibleContext_>
+    void initialize(const std::string& uri, PossibleContext_ ctx, const DenseMatrixOptions& options) {
         serialize([&]() {
-            // Serializing the deleter. 
-            my_tdb_comp.reset(new DenseMatrix_internal::Components(uri), [](DenseMatrix_internal::Components* ptr) {
-                serialize([&]() {
-                    delete ptr;
-                });
-            });
+            my_tdb_comp.reset(
+                [&]{
+                    // If we have to create our own Context_ object, we do so inside the serialized
+                    // section, rather than using a delegating constructor.
+                    if constexpr(std::is_same<PossibleContext_, tiledb::Context>::value) {
+                        return new DenseMatrix_internal::Components(std::move(ctx), uri);
+                    } else {
+                        return new DenseMatrix_internal::Components(uri);
+                    }
+                }(),
+                [](DenseMatrix_internal::Components* ptr) {
+                    // Serializing the deleter, for completeness's sake.
+                    serialize([&]() {
+                        delete ptr;
+                    });
+                }
+            );
 
             auto schema = my_tdb_comp->array.schema();
             if (schema.array_type() != TILEDB_DENSE) {
@@ -520,12 +555,6 @@ public:
             my_prefer_firstdim = tiles_per_firstdim <= tiles_per_seconddim;
         });
     }
-
-    /**
-     * @param uri File path (or some other appropriate location) of the TileDB array.
-     * @param attribute Name of the attribute containing the data of interest.
-     */
-    DenseMatrix(const std::string& uri, std::string attribute) : DenseMatrix(uri, std::move(attribute), DenseMatrixOptions()) {}
 
 private:
     std::shared_ptr<DenseMatrix_internal::Components> my_tdb_comp;
