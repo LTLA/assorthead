@@ -36,8 +36,8 @@ struct SimplePcaOptions {
 
     /** 
      * Number of PCs to compute.
-     * This should be no greater than the maximum number of PCs, i.e., the smaller dimension of the input matrix;
-     * otherwise, only the maximum number of PCs will be reported in the results.
+     * This should be no greater than the maximum number of PCs, i.e., the smaller dimension of the input matrix, otherwise an error will be thrown.
+     * (This error can be avoided by setting `irlba::Options::cap_number = true` in `SimplePcaOptions::irlba_options`, in which case only the maximum number of PCs will be reported in the results.)
      */
     int number = 25;
 
@@ -87,7 +87,7 @@ void compute_row_means_and_variances(const tatami::Matrix<Value_, Index_>& mat, 
             std::vector<Value_> vbuffer(ncells);
 
             for (Index_ r = start, end = start + length; r < end; ++r) {
-                auto results = [&]() {
+                auto results = [&]{
                     if constexpr(sparse_) {
                         auto range = ext->fetch(vbuffer.data(), NULL);
                         return tatami_stats::variances::direct(range.value, range.number, ncells, /* skip_nan = */ false);
@@ -111,7 +111,7 @@ void compute_row_means_and_variances(const tatami::Matrix<Value_, Index_>& mat, 
             tatami_stats::LocalOutputBuffer<Scalar> cbuffer(t, start, length, center_v.data());
             tatami_stats::LocalOutputBuffer<Scalar> sbuffer(t, start, length, scale_v.data());
 
-            auto running = [&]() {
+            auto running = [&]{
                 if constexpr(sparse_) {
                     return tatami_stats::variances::RunningSparse<Scalar, Value_, Index_>(length, cbuffer.data(), sbuffer.data(), /* skip_nan = */ false, /* subtract = */ start);
                 } else {
