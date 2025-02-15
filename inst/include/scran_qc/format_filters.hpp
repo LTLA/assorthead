@@ -49,6 +49,9 @@ void filter_index(Index_ num, const Keep_* filter, std::vector<Index_>& output) 
 template<typename Index_, typename Keep_>
 std::vector<Index_> filter_index(Index_ num, const Keep_* filter) {
     std::vector<Index_> output;
+#ifdef SCRAN_QC_TEST_INIT
+    output.resize(10, SCRAN_QC_TEST_INIT);
+#endif
     filter_index(num, filter, output);
     return output;
 }
@@ -92,7 +95,11 @@ void combine_filters(size_t num, const std::vector<Keep_*>& filters, Output_* ou
  */
 template<typename Output_ = uint8_t, typename Keep_ = uint8_t>
 std::vector<Output_> combine_filters(size_t num, const std::vector<const Keep_*>& filters) {
-    std::vector<Output_> output(num);
+    std::vector<Output_> output(num
+#ifdef SCRAN_QC_TEST_INIT
+        , SCRAN_QC_TEST_INIT
+#endif
+    );
     combine_filters(num, filters, output.data());
     return output;
 }
@@ -142,6 +149,9 @@ void combine_filters_index(Index_ num, const std::vector<const Keep_*>& filters,
 template<typename Index_, typename Keep_>
 std::vector<Index_> combine_filters_index(Index_ num, const std::vector<const Keep_*>& filters) {
     std::vector<Index_> output;
+#ifdef SCRAN_QC_TEST_INIT
+    output.resize(10, SCRAN_QC_TEST_INIT);
+#endif
     combine_filters_index(num, filters, output);
     return output;
 }

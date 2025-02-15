@@ -153,7 +153,11 @@ template<typename Float_ = double, typename Index_, typename Value_>
 FindMedianMadResults<Float_> find_median_mad(Index_ num, const Value_* metrics, Float_* buffer, const FindMedianMadOptions& options) {
     std::unique_ptr<std::vector<Float_> > xbuffer;
     if (buffer == NULL) {
-        xbuffer = std::make_unique<std::vector<Float_> >(num);
+        xbuffer = std::make_unique<std::vector<Float_> >(num
+#ifdef SCRAN_QC_TEST_INIT
+            , SCRAN_QC_TEST_INIT
+#endif
+        );
         buffer = xbuffer->data();
     }
     std::copy_n(metrics, num, buffer);
@@ -216,7 +220,11 @@ public:
             }
         }
 
-        my_buffer.resize(num);
+        my_buffer.resize(num
+#ifdef SCRAN_QC_TEST_INIT
+            , SCRAN_QC_TEST_INIT
+#endif
+        );
         my_block_ends.resize(my_block_starts.size());
     }
 

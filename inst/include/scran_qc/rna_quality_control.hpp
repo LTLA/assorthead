@@ -25,6 +25,7 @@ namespace scran_qc {
 struct ComputeRnaQcMetricsOptions {
     /**
      * Number of threads to use.
+     * The parallelization scheme is determined by `tatami::parallelize()`.
      */
     int num_threads = 1;
 };
@@ -184,17 +185,29 @@ ComputeRnaQcMetricsResults<Sum_, Detected_, Proportion_> compute_rna_qc_metrics(
     ComputeRnaQcMetricsBuffers<Sum_, Detected_, Proportion_> x;
     ComputeRnaQcMetricsResults<Sum_, Detected_, Proportion_> output;
 
-    output.sum.resize(NC);
+    output.sum.resize(NC
+#ifdef SCRAN_QC_TEST_INIT
+        , SCRAN_QC_TEST_INIT
+#endif
+    );
     x.sum = output.sum.data();
 
-    output.detected.resize(NC);
+    output.detected.resize(NC
+#ifdef SCRAN_QC_TEST_INIT
+        , SCRAN_QC_TEST_INIT
+#endif
+    );
     x.detected = output.detected.data();
 
     size_t nsubsets = subsets.size();
     x.subset_proportion.resize(nsubsets);
     output.subset_proportion.resize(nsubsets);
     for (size_t s = 0; s < nsubsets; ++s) {
-        output.subset_proportion[s].resize(NC);
+        output.subset_proportion[s].resize(NC
+#ifdef SCRAN_QC_TEST_INIT
+            , SCRAN_QC_TEST_INIT
+#endif
+        );
         x.subset_proportion[s] = output.subset_proportion[s].data();
     }
 
@@ -233,7 +246,7 @@ namespace internal {
 template<typename Float_, class Host_, typename Sum_, typename Detected_, typename Proportion_, typename BlockSource_>
 void rna_populate(Host_& host, size_t n, const ComputeRnaQcMetricsBuffers<Sum_, Detected_, Proportion_>& res, BlockSource_ block, const ComputeRnaQcFiltersOptions& options) {
     constexpr bool unblocked = std::is_same<BlockSource_, bool>::value;
-    auto buffer = [&]() {
+    auto buffer = [&]{
         if constexpr(unblocked) {
             return std::vector<Float_>(n);
         } else {
@@ -246,7 +259,7 @@ void rna_populate(Host_& host, size_t n, const ComputeRnaQcMetricsBuffers<Sum_, 
         opts.num_mads = options.sum_num_mads;
         opts.log = true;
         opts.upper = false;
-        host.get_sum() = [&]() {
+        host.get_sum() = [&]{
             if constexpr(unblocked) {
                 return choose_filter_thresholds(n, res.sum, buffer.data(), opts).lower;
             } else {
@@ -260,7 +273,7 @@ void rna_populate(Host_& host, size_t n, const ComputeRnaQcMetricsBuffers<Sum_, 
         opts.num_mads = options.detected_num_mads;
         opts.log = true;
         opts.upper = false;
-        host.get_detected() = [&]() {
+        host.get_detected() = [&]{
             if constexpr(unblocked) {
                 return choose_filter_thresholds(n, res.detected, buffer.data(), opts).lower;
             } else {
@@ -278,7 +291,7 @@ void rna_populate(Host_& host, size_t n, const ComputeRnaQcMetricsBuffers<Sum_, 
         host.get_subset_proportion().resize(nsubsets);
         for (size_t s = 0; s < nsubsets; ++s) {
             auto sub = res.subset_proportion[s];
-            host.get_subset_proportion()[s] = [&]() {
+            host.get_subset_proportion()[s] = [&]{
                 if constexpr(unblocked) {
                     return choose_filter_thresholds(n, sub, buffer.data(), opts).upper;
                 } else {
@@ -294,23 +307,25 @@ void rna_filter(const Host_& host, size_t n, const ComputeRnaQcMetricsBuffers<Su
     constexpr bool unblocked = std::is_same<BlockSource_, bool>::value;
     std::fill_n(output, n, 1);
 
+    const auto& sum = host.get_sum();
     for (size_t i = 0; i < n; ++i) {
-        auto thresh = [&]() {
+        auto thresh = [&]{
             if constexpr(unblocked) {
-                return host.get_sum();
+                return sum;
             } else {
-                return host.get_sum()[block[i]];
+                return sum[block[i]];
             }
         }();
         output[i] = output[i] && (metrics.sum[i] >= thresh);
     }
 
+    const auto& detected = host.get_detected();
     for (size_t i = 0; i < n; ++i) {
-        auto thresh = [&]() {
+        auto thresh = [&]{
             if constexpr(unblocked) {
-                return host.get_detected();
+                return detected;
             } else {
-                return host.get_detected()[block[i]];
+                return detected[block[i]];
             }
         }();
         output[i] = output[i] && (metrics.detected[i] >= thresh);
@@ -321,7 +336,7 @@ void rna_filter(const Host_& host, size_t n, const ComputeRnaQcMetricsBuffers<Su
         auto sub = metrics.subset_proportion[s];
         const auto& sthresh = host.get_subset_proportion()[s];
         for (size_t i = 0; i < n; ++i) {
-            auto thresh = [&]() {
+            auto thresh = [&]{
                 if constexpr(unblocked) {
                     return sthresh;
                 } else {
@@ -449,7 +464,11 @@ public:
      */
     template<typename Output_ = uint8_t, typename Sum_ = double, typename Detected_ = int, typename Proportion_ = double>
     std::vector<Output_> filter(const ComputeRnaQcMetricsResults<Sum_, Detected_, Proportion_>& metrics) const {
-        std::vector<Output_> output(metrics.sum.size());
+        std::vector<Output_> output(metrics.sum.size()
+#ifdef SCRAN_QC_TEST_INIT
+            , SCRAN_QC_TEST_INIT
+#endif
+        );
         filter(metrics, output.data());
         return output;
     }
@@ -617,7 +636,11 @@ public:
      */
     template<typename Output_ = uint8_t, typename Sum_ = double, typename Detected_ = int, typename Proportion_ = double, typename Block_ = int>
     std::vector<Output_> filter(const ComputeRnaQcMetricsResults<Sum_, Detected_, Proportion_>& metrics, const Block_* block) const {
-        std::vector<Output_> output(metrics.sum.size());
+        std::vector<Output_> output(metrics.sum.size()
+#ifdef SCRAN_QC_TEST_INIT
+            , SCRAN_QC_TEST_INIT
+#endif
+        );
         filter(metrics, block, output.data());
         return output;
     }

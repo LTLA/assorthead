@@ -25,6 +25,7 @@ namespace scran_qc {
 struct ComputeAdtQcMetricsOptions {
     /**
      * Number of threads to use.
+     * The parallelization scheme is determined by `tatami::parallelize()`.
      */
     int num_threads = 1;
 };
@@ -71,6 +72,8 @@ struct ComputeAdtQcMetricsBuffers {
  * - The sum of counts in pre-defined feature subsets.
  *   While the exact interpretation depends on the nature of the subset, the most common use case involves isotype control (IgG) features.
  *   IgG antibodies should not bind to anything, so high coverage suggests that non-specific binding is a problem, e.g., due to antibody conjugates.
+ *   (We do not use proportions here, as it is entirely possible for a cell to have no counts for other tags due to the absence of their targeted features;
+ *   this would result in a high proportion even if the cell has a "normal" level of non-specific binding.)
  *
  * We use these metrics to define thresholds for filtering in `compute_adt_qc_filters()`.
  *
@@ -155,17 +158,29 @@ ComputeAdtQcMetricsResults<Sum_, Detected_> compute_adt_qc_metrics(
     ComputeAdtQcMetricsBuffers<Sum_, Detected_> x;
     ComputeAdtQcMetricsResults<Sum_, Detected_> output;
 
-    output.sum.resize(NC);
+    output.sum.resize(NC
+#ifdef SCRAN_QC_TEST_INIT
+        , SCRAN_QC_TEST_INIT
+#endif
+    );
     x.sum = output.sum.data();
 
-    output.detected.resize(NC);
+    output.detected.resize(NC
+#ifdef SCRAN_QC_TEST_INIT
+        , SCRAN_QC_TEST_INIT
+#endif
+    );
     x.detected = output.detected.data();
 
     size_t nsubsets = subsets.size();
     x.subset_sum.resize(nsubsets);
     output.subset_sum.resize(nsubsets);
     for (size_t s = 0; s < nsubsets; ++s) {
-        output.subset_sum[s].resize(NC);
+        output.subset_sum[s].resize(NC
+#ifdef SCRAN_QC_TEST_INIT
+            , SCRAN_QC_TEST_INIT
+#endif
+        );
         x.subset_sum[s] = output.subset_sum[s].data();
     }
 
@@ -204,7 +219,7 @@ namespace internal {
 template<typename Float_, class Host_, typename Sum_, typename Detected_, typename BlockSource_>
 void adt_populate(Host_& host, size_t n, const ComputeAdtQcMetricsBuffers<Sum_, Detected_>& res, BlockSource_ block, const ComputeAdtQcFiltersOptions& options) {
     constexpr bool unblocked = std::is_same<BlockSource_, bool>::value;
-    auto buffer = [&]() {
+    auto buffer = [&]{
         if constexpr(unblocked) {
             return std::vector<Float_>(n);
         } else {
@@ -218,7 +233,7 @@ void adt_populate(Host_& host, size_t n, const ComputeAdtQcMetricsBuffers<Sum_, 
         opts.log = true;
         opts.upper = false;
         opts.min_diff = -std::log(1 - options.detected_min_drop);
-        host.get_detected() = [&]() {
+        host.get_detected() = [&]{
             if constexpr(unblocked) {
                 return choose_filter_thresholds(n, res.detected, buffer.data(), opts).lower;
             } else {
@@ -238,7 +253,7 @@ void adt_populate(Host_& host, size_t n, const ComputeAdtQcMetricsBuffers<Sum_, 
 
         for (size_t s = 0; s < nsubsets; ++s) {
             auto sub = res.subset_sum[s];
-            host.get_subset_sum()[s] = [&]() {
+            host.get_subset_sum()[s] = [&]{
                 if constexpr(unblocked) {
                     return choose_filter_thresholds(n, sub, buffer.data(), opts).upper;
                 } else {
@@ -254,12 +269,13 @@ void adt_filter(const Host_& host, size_t n, const ComputeAdtQcMetricsBuffers<Su
     constexpr bool unblocked = std::is_same<BlockSource_, bool>::value;
     std::fill_n(output, n, 1);
 
+    const auto& detected = host.get_detected();
     for (size_t i = 0; i < n; ++i) {
-        auto thresh = [&]() {
+        auto thresh = [&]{
             if constexpr(unblocked) {
-                return host.get_detected();
+                return detected;
             } else {
-                return host.get_detected()[block[i]];
+                return detected[block[i]];
             }
         }();
         output[i] = output[i] && (metrics.detected[i] >= thresh);
@@ -270,7 +286,7 @@ void adt_filter(const Host_& host, size_t n, const ComputeAdtQcMetricsBuffers<Su
         auto sub = metrics.subset_sum[s];
         const auto& sthresh = host.get_subset_sum()[s];
         for (size_t i = 0; i < n; ++i) {
-            auto thresh = [&]() {
+            auto thresh = [&]{
                 if constexpr(unblocked) {
                     return sthresh;
                 } else {
@@ -387,7 +403,11 @@ public:
      */
     template<typename Output_ = uint8_t, typename Sum_ = double, typename Detected_ = int>
     std::vector<Output_> filter(const ComputeAdtQcMetricsResults<Sum_, Detected_>& metrics) const {
-        std::vector<Output_> output(metrics.detected.size());
+        std::vector<Output_> output(metrics.detected.size()
+#ifdef SCRAN_QC_TEST_INIT
+            , SCRAN_QC_TEST_INIT
+#endif
+        );
         filter(metrics, output.data());
         return output;
     }
@@ -537,7 +557,11 @@ public:
      */
     template<typename Output_ = uint8_t, typename Sum_ = double, typename Detected_ = int, typename Block_ = int>
     std::vector<Output_> filter(const ComputeAdtQcMetricsResults<Sum_, Detected_>& metrics, const Block_* block) const {
-        std::vector<Output_> output(metrics.detected.size());
+        std::vector<Output_> output(metrics.detected.size()
+#ifdef SCRAN_QC_TEST_INIT
+            , SCRAN_QC_TEST_INIT
+#endif
+        );
         filter(metrics, block, output.data());
         return output;
     }
