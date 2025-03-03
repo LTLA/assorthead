@@ -39,7 +39,11 @@ inline void validate_missing_placeholder(const H5::DataSet& handle, const ritsuk
     }
 
     auto ahandle = handle.openAttribute(placeholder);
-    ritsuko::hdf5::check_missing_placeholder_attribute(handle, ahandle, /* type_class_only = */ (version.major == 1 && version.minor == 0) || handle.getTypeClass() == H5T_STRING);
+    if (handle.getTypeClass() == H5T_STRING) {
+        ritsuko::hdf5::check_string_missing_placeholder_attribute(ahandle);
+    } else {
+        ritsuko::hdf5::check_numeric_missing_placeholder_attribute(handle, ahandle, /* type_class_only = */ (version.major == 1 && version.minor == 0));
+    }
 }
 
 inline uint64_t load_along(const H5::Group& handle, const ritsuko::Version& version) {

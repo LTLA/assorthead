@@ -31,14 +31,15 @@ namespace sequence_information {
  * @param options Validation options.
  */
 inline void validate(const std::filesystem::path& path, const ObjectMetadata& metadata, Options& options) {
-    auto vstring = internal_json::extract_version_for_type(metadata.other, "sequence_information");
+    const std::string type_name = "sequence_information"; // use a separate variable to avoid dangling reference warnings from GCC.
+    const auto& vstring = internal_json::extract_version_for_type(metadata.other, type_name);
     auto version = ritsuko::parse_version_string(vstring.c_str(), vstring.size(), /* skip_patch = */ true);
     if (version.major != 1) {
         throw std::runtime_error("unsupported version string '" + vstring + "'");
     }
 
     auto handle = ritsuko::hdf5::open_file(path / "info.h5");
-    auto ghandle = ritsuko::hdf5::open_group(handle, "sequence_information");
+    auto ghandle = ritsuko::hdf5::open_group(handle, type_name.c_str());
 
     size_t nseq = 0;
     {
@@ -71,7 +72,7 @@ inline void validate(const std::filesystem::path& path, const ObjectMetadata& me
         }
         if (lhandle.attrExists(missing_attr_name)) {
             auto ahandle = lhandle.openAttribute(missing_attr_name);
-            ritsuko::hdf5::check_missing_placeholder_attribute(lhandle, ahandle);
+            ritsuko::hdf5::check_numeric_missing_placeholder_attribute(lhandle, ahandle);
         }
     }
 
@@ -85,7 +86,7 @@ inline void validate(const std::filesystem::path& path, const ObjectMetadata& me
         }
         if (chandle.attrExists(missing_attr_name)) {
             auto ahandle = chandle.openAttribute(missing_attr_name);
-            ritsuko::hdf5::check_missing_placeholder_attribute(chandle, ahandle);
+            ritsuko::hdf5::check_numeric_missing_placeholder_attribute(chandle, ahandle);
         }
     }
 
@@ -99,7 +100,7 @@ inline void validate(const std::filesystem::path& path, const ObjectMetadata& me
         }
         if (gnhandle.attrExists(missing_attr_name)) {
             auto ahandle = gnhandle.openAttribute(missing_attr_name);
-            ritsuko::hdf5::check_missing_placeholder_attribute(gnhandle, ahandle);
+            ritsuko::hdf5::check_string_missing_placeholder_attribute(ahandle);
         }
     }
 }

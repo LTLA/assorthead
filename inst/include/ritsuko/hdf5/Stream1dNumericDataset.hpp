@@ -31,7 +31,7 @@ template<typename Type_>
 class Stream1dNumericDataset {
 public:
     /**
-     * @param ptr Pointer to a HDF5 dataset handle.
+     * @param ptr Pointer to a 1-dimensional HDF5 dataset.
      * @param length Length of the dataset as a 1-dimensional vector.
      * @param buffer_size Size of the buffer for holding streamed blocks of values.
      * Larger buffers improve speed at the cost of some memory efficiency.
@@ -48,7 +48,7 @@ public:
     /**
      * Overloaded constructor where the length is automatically determined.
      *
-     * @param ptr Pointer to a HDF5 dataset handle.
+     * @param ptr Pointer to a 1-dimensional HDF5 dataset. 
      * @param buffer_size Size of the buffer for holding streamed blocks of values.
      */
     Stream1dNumericDataset(const H5::DataSet* ptr, hsize_t buffer_size) : 

@@ -4,6 +4,7 @@
 #include "H5Cpp.h"
 #include "ritsuko/ritsuko.hpp"
 #include "ritsuko/hdf5/hdf5.hpp"
+#include "ritsuko/hdf5/vls/vls.hpp"
 
 #include <cstdint>
 #include <string>
@@ -84,21 +85,44 @@ inline hsize_t validate_column_names(const H5::Group& ghandle, const Options& op
     throw std::runtime_error("failed to validate the column names for '" + ritsuko::hdf5::get_name(ghandle) + "'; " + std::string(e.what()));
 }
 
-inline void validate_column(const H5::Group& dhandle, const std::string& dset_name, hsize_t num_rows, const Options& options) try { 
+inline void validate_column(const H5::Group& dhandle, const std::string& dset_name, hsize_t num_rows, const ritsuko::Version& version, const Options& options) try { 
+    const char* missing_attr_name = "missing-value-placeholder";
+
     auto dtype = dhandle.childObjType(dset_name);
     if (dtype == H5O_TYPE_GROUP) {
-        auto fhandle = dhandle.openGroup(dset_name);
-        auto type = ritsuko::hdf5::open_and_load_scalar_string_attribute(fhandle, "type");
-        if (type != "factor") {
-            throw std::runtime_error("expected HDF5 groups to have a 'type' attribute set to 'factor'");
-        }
+        auto ghandle = dhandle.openGroup(dset_name);
+        auto type = ritsuko::hdf5::open_and_load_scalar_string_attribute(ghandle, "type");
 
-        internal_factor::check_ordered_attribute(fhandle);
+        if (type == "factor") {
+            internal_factor::check_ordered_attribute(ghandle);
+            auto num_levels = internal_factor::validate_factor_levels(ghandle, "levels", options.hdf5_buffer_size);
+            auto num_codes = internal_factor::validate_factor_codes(ghandle, "codes", num_levels, options.hdf5_buffer_size);
+            if (num_codes != num_rows) {
+                throw std::runtime_error("expected column to have length equal to the number of rows");
+            }
 
-        auto num_levels = internal_factor::validate_factor_levels(fhandle, "levels", options.hdf5_buffer_size);
-        auto num_codes = internal_factor::validate_factor_codes(fhandle, "codes", num_levels, options.hdf5_buffer_size);
-        if (num_codes != num_rows) {
-            throw std::runtime_error("expected column to have length equal to the number of rows");
+        } else if (type == "vls") {
+            if (version.lt(1, 1, 0)) {
+                throw std::runtime_error("unsupported type '" + type + "'");
+            }
+
+            auto phandle = ritsuko::hdf5::vls::open_pointers(ghandle, "pointers", 64, 64);
+            auto vlen = ritsuko::hdf5::get_1d_length(phandle.getSpace(), false);
+            if (vlen != num_rows) {
+                throw std::runtime_error("expected column to have length equal to the number of rows");
+            }
+
+            auto hhandle = ritsuko::hdf5::vls::open_heap(ghandle, "heap");
+            auto hlen = ritsuko::hdf5::get_1d_length(hhandle.getSpace(), false);
+            ritsuko::hdf5::vls::validate_1d_array<uint64_t, uint64_t>(phandle, vlen, hlen, options.hdf5_buffer_size);
+
+            if (phandle.attrExists(missing_attr_name)) {
+                auto attr = phandle.openAttribute(missing_attr_name);
+                ritsuko::hdf5::check_string_missing_placeholder_attribute(attr);
+            }
+
+        } else {
+            throw std::runtime_error("unsupported type '" + type + "'");
         }
 
     } else if (dtype == H5O_TYPE_DATASET) {
@@ -107,8 +131,6 @@ inline void validate_column(const H5::Group& dhandle, const std::string& dset_na
             throw std::runtime_error("expected column to have length equal to the number of rows");
         }
 
-        const char* missing_attr_name = "missing-value-placeholder";
-
         auto type = ritsuko::hdf5::open_and_load_scalar_string_attribute(xhandle, "type");
         if (type == "string") {
             if (!ritsuko::hdf5::is_utf8_string(xhandle)) {
@@ -116,7 +138,7 @@ inline void validate_column(const H5::Group& dhandle, const std::string& dset_na
             }
             auto missingness = ritsuko::hdf5::open_and_load_optional_string_missing_placeholder(xhandle, missing_attr_name);
             std::string format = internal_string::fetch_format_attribute(xhandle);
-            internal_string::validate_string_format(xhandle, num_rows, format, missingness.first, missingness.second, options.hdf5_buffer_size);
+            internal_string::validate_string_format(xhandle, num_rows, format, missingness, options.hdf5_buffer_size);
 
         } else {
             if (type == "integer") {
@@ -137,7 +159,7 @@ inline void validate_column(const H5::Group& dhandle, const std::string& dset_na
 
             if (xhandle.attrExists(missing_attr_name)) {
                 auto ahandle = xhandle.openAttribute(missing_attr_name);
-                ritsuko::hdf5::check_missing_placeholder_attribute(xhandle, ahandle);
+                ritsuko::hdf5::check_numeric_missing_placeholder_attribute(xhandle, ahandle);
             }
         }
 
@@ -158,14 +180,15 @@ inline void validate_column(const H5::Group& dhandle, const std::string& dset_na
  * @param options Validation options.
  */
 inline void validate(const std::filesystem::path& path, const ObjectMetadata& metadata, Options& options) {
-    const auto& vstring = internal_json::extract_version_for_type(metadata.other, "data_frame");
+    const std::string type_name = "data_frame"; // use a separate variable to avoid dangling reference warnings from GCC.
+    const auto& vstring = internal_json::extract_version_for_type(metadata.other, type_name);
     auto version = ritsuko::parse_version_string(vstring.c_str(), vstring.size(), /* skip_patch = */ true);
     if (version.major != 1) {
         throw std::runtime_error("unsupported version '" + vstring + "'");
     }
 
     auto handle = ritsuko::hdf5::open_file(path / "basic_columns.h5");
-    auto ghandle = ritsuko::hdf5::open_group(handle, "data_frame");
+    auto ghandle = ritsuko::hdf5::open_group(handle, type_name.c_str());
 
     // Checking the number of rows.
     auto attr = ritsuko::hdf5::open_scalar_attribute(ghandle, "row-count");
@@ -203,7 +226,7 @@ inline void validate(const std::filesystem::path& path, const ObjectMetadata& me
             }
 
         } else {
-            validate_column(dhandle, dset_name, num_rows, options);
+            validate_column(dhandle, dset_name, num_rows, version, options);
             ++num_basic;
         }
     }

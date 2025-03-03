@@ -24,7 +24,8 @@ namespace hdf5 {
  */
 struct IterateNdDataset {
     /**
-     * @param d Dataset dimensions.
+     * @param d Dataset dimension extents.
+     * This should contain at least one value.
      * @param b Block dimensions, typically obtained from `pick_nd_block_dimensions()`.
      * This should be of the same length as `d`, where each value of `b` is no greater than its counterpart in `d`.
      */

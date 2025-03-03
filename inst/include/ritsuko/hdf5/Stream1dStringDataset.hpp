@@ -11,7 +11,7 @@
 #include "get_1d_length.hpp"
 #include "get_name.hpp"
 #include "as_numeric_datatype.hpp"
-#include "_strings.hpp"
+#include "utils_string.hpp"
 
 /**
  * @file Stream1dStringDataset.hpp
@@ -31,7 +31,7 @@ namespace hdf5 {
 class Stream1dStringDataset {
 public:
     /**
-     * @param ptr Pointer to a HDF5 dataset handle.
+     * @param ptr Pointer to a 1-dimensional HDF5 dataset. 
      * @param length Length of the dataset as a 1-dimensional vector.
      * @param buffer_size Size of the buffer for holding streamed blocks of values.
      * Larger buffers improve speed at the cost of some memory efficiency.
@@ -57,7 +57,7 @@ public:
     /**
      * Overloaded constructor where the length is automatically determined.
      *
-     * @param ptr Pointer to a HDF5 dataset handle.
+     * @param ptr Pointer to a 1-dimensional HDF5 dataset. 
      * @param buffer_size Size of the buffer for holding streamed blocks of values.
      */
     Stream1dStringDataset(const H5::DataSet* ptr, hsize_t buffer_size) : 

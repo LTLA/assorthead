@@ -8,7 +8,7 @@
 
 #include "get_1d_length.hpp"
 #include "as_numeric_datatype.hpp"
-#include "_strings.hpp"
+#include "utils_string.hpp"
 
 /**
  * @file load_attribute.hpp
@@ -31,8 +31,8 @@ inline std::string load_scalar_string_attribute(const H5::Attribute& attr) {
     // as we need to catch NULL pointers in the variable case.
 
     if (dtype.isVariableStr()) {
-        auto mspace = attr.getSpace();
-        char* buffer;
+        auto mspace = attr.getSpace(); // don't set as a temporary in the Cleaner constructor, as it will be deleted and its ID invalidated.
+        char* buffer = NULL;
         attr.read(dtype, &buffer);
         [[maybe_unused]] VariableStringCleaner deletor(dtype.getId(), mspace.getId(), &buffer);
         if (buffer == NULL) {
@@ -58,11 +58,11 @@ inline std::string load_scalar_string_attribute(const H5::Attribute& attr) {
  */
 inline std::vector<std::string> load_1d_string_attribute(const H5::Attribute& attr, hsize_t full_length) {
     auto dtype = attr.getDataType();
-    auto mspace = attr.getSpace();
     std::vector<std::string> output;
     output.reserve(full_length);
 
     if (dtype.isVariableStr()) {
+        auto mspace = attr.getSpace(); // don't set as a temporary in the Cleaner constructor, as it will be deleted and its ID invalidated.
         std::vector<char*> buffer(full_length);
         attr.read(dtype, buffer.data());
         [[maybe_unused]] VariableStringCleaner deletor(dtype.getId(), mspace.getId(), buffer.data());

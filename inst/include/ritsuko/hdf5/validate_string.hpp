@@ -13,7 +13,7 @@
 #include "pick_1d_block_size.hpp"
 #include "pick_nd_block_dimensions.hpp"
 #include "IterateNdDataset.hpp"
-#include "_strings.hpp"
+#include "utils_string.hpp"
 
 /**
  * @file validate_string.hpp
@@ -37,9 +37,9 @@ inline void validate_scalar_string_dataset(const H5::DataSet& handle) {
         return;
     }
 
-    char* vptr;
-    handle.read(&vptr, dtype);
     auto dspace = handle.getSpace(); // don't set as temporary in constructor below, otherwise it gets destroyed and the ID invalidated.
+    char* vptr = NULL;
+    handle.read(&vptr, dtype);
     [[maybe_unused]] VariableStringCleaner deletor(dtype.getId(), dspace.getId(), &vptr);
     if (vptr == NULL) {
         throw std::runtime_error("detected a NULL pointer for a variable length string in '" + get_name(handle) + "'");

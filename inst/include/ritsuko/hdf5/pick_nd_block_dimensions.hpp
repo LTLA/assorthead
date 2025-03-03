@@ -17,7 +17,8 @@ namespace hdf5 {
  * For compressed datasets, this aims to be the smallest multiple of the chunk size that fits into a buffer.
  *
  * @param cplist The creation property list for this dataset.
- * @param dimensions Dimensions of this dataset.
+ * @param dimensions Dimension extents of this dataset.
+ * This should contain at least one value.
  * @param buffer_size Size of the buffer in terms of the number of elements.
  * Smaller values reduce peak memory usage at the cost of more iterations.
  *

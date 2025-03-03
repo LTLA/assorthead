@@ -51,31 +51,34 @@ struct SequenceLimits {
 };
 
 inline SequenceLimits find_sequence_limits(const std::filesystem::path& path, Options& options) {
+    const std::string type_name = "sequence_information";
     auto smeta = read_object_metadata(path);
-    if (!derived_from(smeta.type, "sequence_information", options)) {
+    if (!derived_from(smeta.type, type_name, options)) {
         throw std::runtime_error("'sequence_information' directory should contain a 'sequence_information' object");
     }
     ::takane::validate(path, smeta, options);
 
     auto handle = ritsuko::hdf5::open_file(path / "info.h5");
-    auto ghandle = handle.openGroup("sequence_information");
+    auto ghandle = handle.openGroup(type_name.c_str());
+
+    const char* missing_attr_name = "missing-value-placeholder";
 
     auto lhandle = ghandle.openDataSet("length");
     auto num_seq = ritsuko::hdf5::get_1d_length(lhandle.getSpace(), false);
     ritsuko::hdf5::Stream1dNumericDataset<uint64_t> lstream(&lhandle, num_seq, options.hdf5_buffer_size);
-    auto lmissing = ritsuko::hdf5::open_and_load_optional_numeric_missing_placeholder<uint64_t>(lhandle, "missing-value-placeholder");
+    auto lmissing = ritsuko::hdf5::open_and_load_optional_numeric_missing_placeholder<uint64_t>(lhandle, missing_attr_name);
 
     auto chandle = ghandle.openDataSet("circular");
     ritsuko::hdf5::Stream1dNumericDataset<int32_t> cstream(&chandle, num_seq, options.hdf5_buffer_size);
-    auto cmissing = ritsuko::hdf5::open_and_load_optional_numeric_missing_placeholder<int32_t>(chandle, "missing-value-placeholder");
+    auto cmissing = ritsuko::hdf5::open_and_load_optional_numeric_missing_placeholder<int32_t>(chandle, missing_attr_name);
 
     SequenceLimits output(num_seq);
     for (size_t i = 0; i < num_seq; ++i, lstream.next(), cstream.next()) {
         auto slen = lstream.get();
         auto circ = cstream.get();
-        output.has_seqlen[i] = !(lmissing.first && lmissing.second == slen);
+        output.has_seqlen[i] = !(lmissing.has_value() && *lmissing == slen);
         output.seqlen[i] = slen;
-        output.has_circular[i] = !(cmissing.first && cmissing.second == circ);
+        output.has_circular[i] = !(cmissing.has_value() && *cmissing == circ);
         output.circular[i] = circ;
     }
 
@@ -93,7 +96,8 @@ inline SequenceLimits find_sequence_limits(const std::filesystem::path& path, Op
  * @param options Validation options.
  */
 inline void validate(const std::filesystem::path& path, const ObjectMetadata& metadata, Options& options) {
-    const auto& vstring = internal_json::extract_version_for_type(metadata.other, "genomic_ranges");
+    const std::string type_name = "genomic_ranges"; // use a separate variable to avoid dangling reference warnings from GCC.
+    const auto& vstring = internal_json::extract_version_for_type(metadata.other, type_name);
     auto version = ritsuko::parse_version_string(vstring.c_str(), vstring.size(), /* skip_patch = */ true);
     if (version.major != 1) {
         throw std::runtime_error("unsupported version string '" + vstring + "'");
@@ -105,7 +109,7 @@ inline void validate(const std::filesystem::path& path, const ObjectMetadata& me
 
     // Now loading all three components.
     auto handle = ritsuko::hdf5::open_file(path / "ranges.h5");
-    auto ghandle = ritsuko::hdf5::open_group(handle, "genomic_ranges");
+    auto ghandle = ritsuko::hdf5::open_group(handle, type_name.c_str());
     auto id_handle = ritsuko::hdf5::open_dataset(ghandle, "sequence");
     auto num_ranges = ritsuko::hdf5::get_1d_length(id_handle, false);
     if (ritsuko::hdf5::exceeds_integer_limit(id_handle, 64, false)) {

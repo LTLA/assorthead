@@ -15,6 +15,7 @@
 #include "byteme/SomeFileReader.hpp"
 #include "byteme/SomeBufferReader.hpp"
 #include "millijson/millijson.hpp"
+#include "ritsuko/ritsuko.hpp"
 
 #include "interfaces.hpp"
 #include "Dummy.hpp"
@@ -233,7 +234,8 @@ std::shared_ptr<Base> parse_object(const millijson::Base* contents, Externals& e
             }
         }
 
-        const auto& lvals = extract_array(map, "levels", path);
+        const std::string levels_name = "levels"; // avoid dangling reference from casting of string literal.
+        const auto& lvals = extract_array(map, levels_name, path);
         int32_t nlevels = lvals.size();
         auto fptr = process_array_or_scalar_values(map, path, [&](const auto& vals, bool named, bool scalar) -> auto {
             auto ptr = Provisioner::new_Factor(vals.size(), named, scalar, nlevels, ordered);
@@ -364,7 +366,8 @@ std::shared_ptr<Base> parse_object(const millijson::Base* contents, Externals& e
         auto names_ptr = has_names(map, path);
         bool has_names = names_ptr != NULL;
 
-        const auto& vals = extract_array(map, "values", path);
+        const std::string values_name = "values"; // avoid dangling reference from casting of string literal.
+        const auto& vals = extract_array(map, values_name, path);
         auto ptr = Provisioner::new_List(vals.size(), has_names);
         output.reset(ptr);
 

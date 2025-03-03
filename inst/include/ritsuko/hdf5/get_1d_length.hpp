@@ -16,10 +16,11 @@ namespace hdf5 {
 /**
  * Get the length of a 1-dimensional HDF5 dataset.
  *
- * @param space The data space of the dataset.
+ * @param space The dataspace of the dataset.
  * @param allow_scalar Whether to allow scalars.
  * 
  * @return Length of the dataset, i.e., the extent of its single dimension.
+ * An error is raised if the dataset contains more than 1 dimension.
  * If `allow_scalar = true`, zero is returned in the presence of a scalar dataset, otherwise an error is raised.
  */
 inline hsize_t get_1d_length(const H5::DataSpace& space, bool allow_scalar) {

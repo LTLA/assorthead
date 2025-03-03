@@ -11,7 +11,7 @@
 #include "Stream1dStringDataset.hpp"
 #include "Stream1dNumericDataset.hpp"
 #include "as_numeric_datatype.hpp"
-#include "_strings.hpp"
+#include "utils_string.hpp"
 
 /**
  * @file load_dataset.hpp
@@ -29,16 +29,18 @@ namespace hdf5 {
  */
 inline std::string load_scalar_string_dataset(const H5::DataSet& handle) {
     auto dtype = handle.getDataType();
+
     if (dtype.isVariableStr()) {
+        auto dspace = handle.getSpace(); // don't set as temporary in constructor below, otherwise it gets destroyed and the ID invalidated.
         char* vptr;
         handle.read(&vptr, dtype);
-        auto dspace = handle.getSpace(); // don't set as temporary in constructor below, otherwise it gets destroyed and the ID invalidated.
         [[maybe_unused]] VariableStringCleaner deletor(dtype.getId(), dspace.getId(), &vptr);
         if (vptr == NULL) {
             throw std::runtime_error("detected a NULL pointer for a variable length string in '" + get_name(handle) + "'");
         }
         std::string output(vptr);
         return output;
+
     } else {
         size_t fixed_length = dtype.getSize();
         std::vector<char> buffer(fixed_length);
@@ -73,7 +75,6 @@ inline std::vector<std::string> load_1d_string_dataset(const H5::DataSet& handle
 inline std::vector<std::string> load_1d_string_dataset(const H5::DataSet& handle, hsize_t buffer_size) {
     return load_1d_string_dataset(handle, get_1d_length(handle, false), buffer_size);
 }
-
 
 /**
  * Load a scalar numeric dataset into a single number.

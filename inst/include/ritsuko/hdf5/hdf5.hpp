@@ -18,6 +18,7 @@
 #include "pick_nd_block_dimensions.hpp"
 #include "IterateNdDataset.hpp"
 #include "validate_string.hpp"
+#include "utils_string.hpp"
 
 /**
  * @file hdf5.hpp
