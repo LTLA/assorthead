@@ -3,6 +3,8 @@
 
 #include <vector>
 #include <utility>
+#include <type_traits>
+
 #include "Prebuilt.hpp"
 
 /**
@@ -46,21 +48,76 @@ void parallelize(int num_workers, Task_ num_tasks, Run_ run_task_range) {
  * sorted by increasing distance.
  *
  * @tparam Index_ Integer type for the indices.
- * @tparam Float_ Floating point type for the distances.
+ * @tparam Distance_ Floating point type for the distances.
  */
-template<typename Index_ = int, typename Float_ = double> 
-using NeighborList = std::vector<std::vector<std::pair<Index_, Float_> > >;
+template<typename Index_, typename Distance_>
+using NeighborList = std::vector<std::vector<std::pair<Index_, Distance_> > >;
+
+/**
+ * Cap the number of neighbors to use in `Searcher::search()` with an index `i`.
+ *
+ * @tparam Index_ Integer type for the number of observations.
+ * @param k Number of nearest neighbors, should be non-negative.
+ * @param num_observations Number of observations in the dataset.
+ *
+ * @return Capped number of neighbors to search for.
+ * This is equal to `k` if it is less than `num_observations`;
+ * otherwise it is equal to `num_observations - 1` if `num_observations > 0`;
+ * otherwise it is equal to zero.
+ */
+template<typename Index_>
+int cap_k(int k, Index_ num_observations) {
+    if constexpr(std::is_signed<Index_>::value) {
+        if (k < num_observations) {
+            return k;
+        }
+    } else {
+        if (static_cast<typename std::make_unsigned<Index_>::type>(k) < num_observations) {
+            return k;
+        }
+    }
+    if (num_observations) {
+        return num_observations - 1;
+    }
+    return 0;
+}
+
+/**
+ * Cap the number of neighbors to use in `Searcher::search()` with a pointer `query`.
+ *
+ * @tparam Index_ Integer type for the number of observations.
+ * @param k Number of nearest neighbors, should be non-negative.
+ * @param num_observations Number of observations in the dataset.
+ *
+ * @return Capped number of neighbors to query.
+ * This is equal to the smaller of `k` and `num_observations`.
+ */
+template<typename Index_>
+int cap_k_query(int k, Index_ num_observations) {
+    if constexpr(std::is_signed<Index_>::value) {
+        if (k <= num_observations) {
+            return k;
+        }
+    } else {
+        if (static_cast<typename std::make_unsigned<Index_>::type>(k) <= num_observations) {
+            return k;
+        }
+    }
+    return num_observations;
+}
 
 /**
  * Find the nearest neighbors within a pre-built index.
  * This is a convenient wrapper around `Searcher::search` that saves the caller the trouble of writing a loop.
  *
- * @tparam Dim_ Integer type for the number of dimensions.
- * @tparam Index_ Integer type for the indices.
- * @tparam Float_ Floating point type for the query data and output distances.
+ * @tparam Index_ Integer type for the observation indices.
+ * @tparam Data_ Numeric type for the input data.
+ * @tparam Distance_ Floating point type for the distances.
  *
  * @param index A `Prebuilt` index.
  * @param k Number of nearest neighbors. 
+ * This should be non-negative.
+ * Explicitly calling `cap_k()` is not necessary as this is done automatically inside this function.
  * @param num_threads Number of threads to use.
  * The parallelization scheme is defined by `parallelize()`.
  *
@@ -68,15 +125,16 @@ using NeighborList = std::vector<std::vector<std::pair<Index_, Float_> > >;
  * Each entry contains (up to) the `k` nearest neighbors for each observation, sorted by increasing distance.
  * The `i`-th entry is guaranteed to not contain `i` itself.
  */
-template<typename Dim_, typename Index_, typename Float_>
-NeighborList<Index_, Float_> find_nearest_neighbors(const Prebuilt<Dim_, Index_, Float_>& index, int k, int num_threads = 1) {
+template<typename Index_, typename Data_, typename Distance_>
+NeighborList<Index_, Distance_> find_nearest_neighbors(const Prebuilt<Index_, Data_, Distance_>& index, int k, int num_threads = 1) {
     Index_ nobs = index.num_observations();
-    NeighborList<Index_, Float_> output(nobs);
+    k = cap_k(k, nobs);
+    NeighborList<Index_, Distance_> output(nobs);
 
     parallelize(num_threads, nobs, [&](int, Index_ start, Index_ length) -> void {
         auto sptr = index.initialize();
         std::vector<Index_> indices;
-        std::vector<Float_> distances;
+        std::vector<Distance_> distances;
         for (Index_ i = start, end = start + length; i < end; ++i) {
             sptr->search(i, k, &indices, &distances);
             int actual_k = indices.size();
@@ -94,12 +152,14 @@ NeighborList<Index_, Float_> find_nearest_neighbors(const Prebuilt<Dim_, Index_,
  * Find the nearest neighbors within a pre-built search index.
  * Here, only the neighbor indices are returned, not the distances.
  *
- * @tparam Dim_ Integer type for the number of dimensions.
  * @tparam Index_ Integer type for the indices.
- * @tparam Float_ Floating point type for the query data and output distances.
+ * @tparam Data_ Numeric type for the input and query data.
+ * @tparam Distance_ Floating point type for the distances.
  *
  * @param index A `Prebuilt` index.
  * @param k Number of nearest neighbors. 
+ * This should be non-negative.
+ * Explicitly calling `cap_k()` is not necessary as this is done automatically inside this function.
  * @param num_threads Number of threads to use.
  * The parallelization scheme is defined by `parallelize()`.
  *
@@ -107,9 +167,10 @@ NeighborList<Index_, Float_> find_nearest_neighbors(const Prebuilt<Dim_, Index_,
  * Each vector contains the indices of (up to) the `k` nearest neighbors for each observation, sorted by increasing distance.
  * The `i`-th entry is guaranteed to not contain `i` itself.
  */
-template<typename Dim_, typename Index_, typename Float_>
-std::vector<std::vector<Index_> > find_nearest_neighbors_index_only(const Prebuilt<Dim_, Index_, Float_>& index, int k, int num_threads = 1) {
+template<typename Index_, typename Data_, typename Distance_>
+std::vector<std::vector<Index_> > find_nearest_neighbors_index_only(const Prebuilt<Index_, Data_, Distance_>& index, int k, int num_threads = 1) {
     Index_ nobs = index.num_observations();
+    k = cap_k(k, nobs);
     std::vector<std::vector<Index_> > output(nobs);
 
     parallelize(num_threads, nobs, [&](int, Index_ start, Index_ length) -> void {

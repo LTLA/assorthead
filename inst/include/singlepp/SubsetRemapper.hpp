@@ -5,6 +5,8 @@
 
 #include <vector>
 #include <limits>
+#include <cstddef>
+#include <type_traits>
 
 namespace singlepp {
 
@@ -40,12 +42,12 @@ private:
     // This uses a vector instead of an unordered_map for fast remap()
     // inside the inner loop of the fine-tuning iterations.
     std::vector<std::pair<bool, Index_> > my_mapping;
-    std::vector<size_t> my_used;
+    std::vector<Index_> my_used;
     Index_ my_counter = 0;
 
 public:
-    void add(size_t i) {
-        if (i >= my_mapping.size()) {
+    void add(Index_ i) {
+        if (static_cast<typename std::make_unsigned<Index_>::type>(i) >= my_mapping.size()) {
             my_mapping.resize(i + 1);
         }
         if (!my_mapping[i].first) {
@@ -64,7 +66,7 @@ public:
         my_used.clear();
     }
 
-    void reserve(size_t n) {
+    void reserve(typename decltype(my_mapping)::size_type n) {
         my_mapping.reserve(n);
     }
 
@@ -73,9 +75,10 @@ public:
     void remap(const RankedVector<Stat_, Index_>& input, RankedVector<Stat_, Index_>& output) const {
         output.clear();
 
-        if (static_cast<size_t>(std::numeric_limits<Index_>::max()) < my_mapping.size()) {
+        auto mapsize = my_mapping.size();
+        if (static_cast<typename std::make_unsigned<Index_>::type>(std::numeric_limits<Index_>::max()) < mapsize) {
             // Avoid unnecessary check if the size is already greater than the largest possible index.
-            // This also avoids the need to cast to indices size_t for comparison to my_mapping.size().
+            // This also avoids the need to cast indices to size_t for comparison to my_mapping.size().
             for (const auto& x : input) {
                 const auto& target = my_mapping[x.second];
                 if (target.first) {
@@ -86,7 +89,7 @@ public:
         } else {
             // Otherwise, it is safe to cast the size to Index_ outside the
             // loop so that we don't need to cast x.second to size_t inside the loop.
-            Index_ maxed = my_mapping.size();
+            Index_ maxed = mapsize;
             for (const auto& x : input) {
                 if (maxed > x.second) {
                     const auto& target = my_mapping[x.second];

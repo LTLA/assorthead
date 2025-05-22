@@ -4,6 +4,7 @@
 #include <vector>
 #include <algorithm>
 #include <memory>
+#include <cstddef>
 
 #include "knncolle/knncolle.hpp"
 
@@ -74,7 +75,7 @@ struct BuildSnnGraphResults {
     /**
      * Number of cells in the dataset.
      */
-    size_t num_cells;
+    Node_ num_cells;
 
     /**
      * Vector of paired indices defining the edges between cells.
@@ -114,9 +115,10 @@ typedef double DefaultWeight;
  *
  * @tparam Node_ Integer type for the node indices.
  * @tparam Weight_ Floating-point type for the edge weights.
- * @tparam GetNeighbors_ Function that accepts a `size_t` cell index and returns a (const reference to) a container-like object.
+ * @tparam Index_ Integer type for the observation index.
+ * @tparam GetNeighbors_ Function that accepts an `Index_` cell index and returns a (const reference to) a container-like object.
  * The container should be iterable in a range-based for loop, support the `[]` operator, and have a `size()` method.
- * @tparam GetIndex_ Function that accepts an element of the container type returned by `GetNeighbors_` and returns `Node_`.
+ * @tparam GetIndex_ Function that accepts an element of the container type returned by `GetNeighbors_` and returns an `Index_` containing its observation index.
  *
  * @param num_cells Number of cells in the dataset.
  * @param get_neighbors Function that accepts an integer cell index in `[0, num_cells)` and returns a container of that cell's neighbors.
@@ -129,15 +131,15 @@ typedef double DefaultWeight;
  * @param[out] output On output, the edges and weights of the SNN graph.
  * The input value is ignored so this can be re-used across multiple calls to `build_snn_graph()`.
  */
-template<typename Node_ = DefaultNode, typename Weight_ = DefaultWeight, class GetNeighbors_, class GetIndex_>
-void build_snn_graph(size_t num_cells, GetNeighbors_ get_neighbors, GetIndex_ get_index, const BuildSnnGraphOptions& options, BuildSnnGraphResults<Node_, Weight_>& output) {
+template<typename Node_ = DefaultNode, typename Weight_ = DefaultWeight, typename Index_, class GetNeighbors_, class GetIndex_>
+void build_snn_graph(Index_ num_cells, GetNeighbors_ get_neighbors, GetIndex_ get_index, const BuildSnnGraphOptions& options, BuildSnnGraphResults<Node_, Weight_>& output) {
     // Reverse mapping is not parallel-frendly, so we don't construct this with the neighbor search.
     std::vector<std::vector<Node_> > simple_hosts;
     std::vector<std::vector<std::pair<Node_, Weight_> > > ranked_hosts;
 
     if (options.weighting_scheme == SnnWeightScheme::RANKED) {
         ranked_hosts.resize(num_cells);
-        for (size_t i = 0; i < num_cells; ++i) {
+        for (Index_ i = 0; i < num_cells; ++i) {
             ranked_hosts[i].emplace_back(i, 0); // each point is its own 0-th nearest neighbor
             const auto& current = get_neighbors(i);
             Weight_ rank = 1;
@@ -148,7 +150,7 @@ void build_snn_graph(size_t num_cells, GetNeighbors_ get_neighbors, GetIndex_ ge
         }
     } else {
         simple_hosts.resize(num_cells);
-        for (size_t i = 0; i < num_cells; ++i) {
+        for (Index_ i = 0; i < num_cells; ++i) {
             simple_hosts[i].emplace_back(i); // each point is its own 0-th nearest neighbor
             const auto& current = get_neighbors(i);
             for (auto x : current) {
@@ -161,18 +163,18 @@ void build_snn_graph(size_t num_cells, GetNeighbors_ get_neighbors, GetIndex_ ge
     std::vector<std::vector<Node_> > edge_stores(num_cells);
     std::vector<std::vector<Weight_> > weight_stores(num_cells);
 
-    knncolle::parallelize(options.num_threads, num_cells, [&](int, size_t start, size_t length) -> void {
+    knncolle::parallelize(options.num_threads, num_cells, [&](int, Index_ start, Index_ length) -> void {
         std::vector<Weight_> current_score(num_cells);
         std::vector<Node_> current_added;
         current_added.reserve(num_cells);
 
-        for (size_t j = start, end = start + length; j < end; ++j) {
+        for (Index_ j = start, end = start + length; j < end; ++j) {
             const Node_ j_cast = j;
 
             const auto& current_neighbors = get_neighbors(j);
-            const size_t nneighbors = current_neighbors.size();
+            auto nneighbors = current_neighbors.size();
 
-            for (size_t i = 0; i <= nneighbors; ++i) {
+            for (decltype(nneighbors) i = 0; i <= nneighbors; ++i) {
                 // First iteration treats 'j' as the zero-th neighbor.
                 // Remaining iterations go through the neighbors of 'j'.
                 const Node_ cur_neighbor = (i == 0 ? j : get_index(current_neighbors[i-1]));
@@ -243,7 +245,7 @@ void build_snn_graph(size_t num_cells, GetNeighbors_ get_neighbors, GetIndex_ ge
     });
 
     // Collating the total number of edges.
-    size_t nedges = 0;
+    std::size_t nedges = 0;
     for (const auto& w : weight_stores) {
         nedges += w.size();
     }
@@ -288,9 +290,9 @@ template<typename Node_ = DefaultNode, typename Weight_ = DefaultWeight, typenam
 BuildSnnGraphResults<Node_, Weight_> build_snn_graph(const knncolle::NeighborList<Index_, Distance_>& neighbors, const BuildSnnGraphOptions& options) {
     BuildSnnGraphResults<Node_, Weight_> output;
     build_snn_graph(
-        neighbors.size(), 
-        [&](size_t i) -> const auto& { return neighbors[i]; }, 
-        [](const auto& x) -> Node_ { return x.first; }, 
+        static_cast<Index_>(neighbors.size()), 
+        [&](Index_ i) -> const std::vector<std::pair<Index_, Distance_> >& { return neighbors[i]; }, 
+        [](const std::pair<Index_, Distance_>& x) -> Index_ { return x.first; }, 
         options,
         output
     );
@@ -315,9 +317,9 @@ template<typename Node_ = int, typename Weight_ = double, typename Index_>
 BuildSnnGraphResults<Node_, Weight_> build_snn_graph(const std::vector<std::vector<Index_> >& neighbors, const BuildSnnGraphOptions& options) {
     BuildSnnGraphResults<Node_, Weight_> output;
     build_snn_graph(
-        neighbors.size(), 
-        [&](size_t i) -> const std::vector<Index_>& { return neighbors[i]; }, 
-        [](Index_ x) -> Node_ { return x; }, 
+        static_cast<Index_>(neighbors.size()),
+        [&](Index_ i) -> const std::vector<Index_>& { return neighbors[i]; }, 
+        [](Index_ x) -> Index_ { return x; }, 
         options,
         output
     );
@@ -329,17 +331,18 @@ BuildSnnGraphResults<Node_, Weight_> build_snn_graph(const std::vector<std::vect
  *
  * @tparam Node_ Integer type for the node indices.
  * @tparam Weight_ Floating-point type for the edge weights.
- * @tparam Dim_ Integer type for the dimension index.
  * @tparam Index_ Integer type for the cell index.
- * @tparam Float_ Floating-point type for the distances.
+ * @tparam Input_ Numeric type for the input data used to build the search index.
+ * This is only required to define the `knncolle::Prebuilt` class and is otherwise ignored.
+ * @tparam Distance_ Floating-point type for the distances.
  *
  * @param[in] prebuilt A prebuilt nearest-neighbor search index on the cells of interest.
  * @param options Further options for graph construction.
  *
  * @return The edges and weights of the SNN graph.
  */
-template<typename Node_ = DefaultNode, typename Weight_ = DefaultWeight, typename Dim_, typename Index_, typename Float_>
-BuildSnnGraphResults<Node_, Weight_> build_snn_graph(const knncolle::Prebuilt<Dim_, Index_, Float_>& prebuilt, const BuildSnnGraphOptions& options) {
+template<typename Node_ = DefaultNode, typename Weight_ = DefaultWeight, typename Index_, typename Input_, typename Distance_>
+BuildSnnGraphResults<Node_, Weight_> build_snn_graph(const knncolle::Prebuilt<Index_, Input_, Distance_>& prebuilt, const BuildSnnGraphOptions& options) {
     auto neighbors = knncolle::find_nearest_neighbors_index_only(prebuilt, options.num_neighbors, options.num_threads);
     return build_snn_graph<Node_, Weight_>(neighbors, options);
 }
@@ -349,10 +352,11 @@ BuildSnnGraphResults<Node_, Weight_> build_snn_graph(const knncolle::Prebuilt<Di
  *
  * @tparam Node_ Integer type for the node indices.
  * @tparam Weight_ Floating-point type for the edge weights.
- * @tparam Dim_ Integer type for the dimension index.
  * @tparam Index_ Integer type for the cell index.
- * @tparam Value_ Numeric type for the input data.
- * @tparam Float_ Floating-point type for the distances.
+ * @tparam Input_ Numeric type for the input data.
+ * @tparam Distance_ Floating-point type for the distances.
+ * @tparam Matrix_ Class of the input data matrix for the neighbor search.
+ * This should satisfy the `knncolle::Matrix` interface.
  *
  * @param num_dims Number of dimensions for the cell coordinates.
  * @param num_cells Number of cells in the dataset.
@@ -362,15 +366,15 @@ BuildSnnGraphResults<Node_, Weight_> build_snn_graph(const knncolle::Prebuilt<Di
  *
  * @return The edges and weights of the SNN graph.
  */
-template<typename Node_ = DefaultNode, typename Weight_ = DefaultWeight, typename Dim_, typename Index_, typename Value_, typename Float_>
+template<typename Node_ = DefaultNode, typename Weight_ = DefaultWeight, typename Index_, typename Input_, typename Distance_, class Matrix_ = knncolle::Matrix<Index_, Input_> >
 BuildSnnGraphResults<Node_, Weight_> build_snn_graph(
-    Dim_ num_dims, 
+    std::size_t num_dims, 
     Index_ num_cells, 
-    const Value_* data, 
-    const knncolle::Builder<knncolle::SimpleMatrix<Dim_, Index_, Value_>, Float_>& knn_method,
+    const Input_* data, 
+    const knncolle::Builder<Index_, Input_, Distance_, Matrix_>& knn_method,
     const BuildSnnGraphOptions& options) 
 {
-    auto prebuilt = knn_method.build_unique(knncolle::SimpleMatrix<Dim_, Index_, Value_>(num_dims, num_cells, data));
+    auto prebuilt = knn_method.build_unique(knncolle::SimpleMatrix(num_dims, num_cells, data));
     return build_snn_graph<Node_, Weight_>(*prebuilt, options);
 }
 

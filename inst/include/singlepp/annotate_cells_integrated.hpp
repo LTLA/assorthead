@@ -39,9 +39,9 @@ struct PerReferenceIntegratedWorkspace {
     std::vector<Float_> all_correlations;
 };
 
-template<typename Label_, typename Index_, typename Value_, typename Float_>
+template<typename RefLabel_, typename Label_, typename Index_, typename Value_, typename Float_>
 Float_ compute_single_reference_score_integrated(
-    size_t ref_i,
+    RefLabel_ ref_i,
     Label_ best,
     RankedVector<Value_, Index_> test_ranked_full,
     const TrainedIntegrated<Index_>& trained,
@@ -87,11 +87,11 @@ Float_ compute_single_reference_score_integrated(
     // 'ranked' already contains sorted pairs where the
     // indices refer to the rows of the original data matrix.
     const auto& best_ranked = trained.ranked[ref_i][best];
-    size_t nranked = best_ranked.size();
+    auto nranked = best_ranked.size();
     workspace.all_correlations.clear();
     workspace.ref_scaled.resize(workspace.test_scaled.size());
 
-    for (size_t s = 0; s < nranked; ++s) {
+    for (decltype(nranked) s = 0; s < nranked; ++s) {
         workspace.ref_ranked.clear();
         mapping->remap(best_ranked[s], workspace.ref_ranked);
         scaled_ranks(workspace.ref_ranked, workspace.ref_scaled.data());
@@ -185,7 +185,7 @@ void annotate_cells_integrated(
         for (Index_ i = start, end = start + len; i < end; ++i) {
             // Extracting only the markers of the best labels for this cell.
             miniverse_tmp.clear();
-            for (size_t r = 0; r < nref; ++r) {
+            for (decltype(nref) r = 0; r < nref; ++r) {
                 auto curassigned = assigned[r][i];
                 const auto& curmarkers = trained.markers[r][curassigned];
                 miniverse_tmp.insert(curmarkers.begin(), curmarkers.end());
@@ -205,7 +205,7 @@ void annotate_cells_integrated(
             // Scanning through each reference and computing the score for the best group.
             all_scores.clear();
             workspace.direct_mapping_filled = false;
-            for (size_t r = 0; r < nref; ++r) {
+            for (decltype(nref) r = 0; r < nref; ++r) {
                 auto score = compute_single_reference_score_integrated(
                     r,
                     assigned[r][i],

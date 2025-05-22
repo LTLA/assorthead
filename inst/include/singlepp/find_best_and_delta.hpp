@@ -16,7 +16,7 @@ std::pair<Label_, Float_> find_best_and_delta(const std::vector<Float_>& scores)
     }
 
     auto top = std::max_element(scores.begin(), scores.end());
-    size_t best_idx = top - scores.begin();
+    decltype(scores.size()) best_idx = top - scores.begin();
 
     Float_ topscore = scores[best_idx];
     Float_ second;

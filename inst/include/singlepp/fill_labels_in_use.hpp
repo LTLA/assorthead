@@ -50,18 +50,18 @@ std::pair<Label_, Stat_> update_labels_in_use(const std::vector<Stat_>& scores, 
     static_assert(std::is_integral<Label_>::value);
 
     auto it = std::max_element(scores.begin(), scores.end());
-    size_t best_index = it - scores.begin();
+    auto nscores = scores.size();
+    decltype(nscores) best_index = it - scores.begin();
     Stat_ max_score = *it;
 
     Label_ best_label = in_use[best_index];
-    size_t counter = 0;
+    decltype(in_use.size()) counter = 0;
 
     constexpr Stat_ DUMMY = -1000;
     Stat_ next_score = DUMMY;
     const Stat_ bound = max_score - threshold;
 
-    size_t nscores = scores.size();
-    for (size_t i = 0; i < nscores; ++i) {
+    for (decltype(nscores) i = 0; i < nscores; ++i) {
         const auto& val = scores[i];
         if (val >= bound) {
             in_use[counter] = in_use[i];

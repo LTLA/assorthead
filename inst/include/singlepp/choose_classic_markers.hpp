@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <algorithm>
 #include <set>
+#include <cstddef>
 
 /**
  * @file choose_classic_markers.hpp
@@ -30,7 +31,7 @@ namespace singlepp {
  *
  * @return An appropriate number of markers for each pairwise comparison.
  */
-inline size_t number_of_classic_markers(size_t num_labels) {
+inline std::size_t number_of_classic_markers(std::size_t num_labels) {
     return std::round(500.0 * std::pow(2.0/3.0, std::log(static_cast<double>(num_labels)) / std::log(2.0)));
 }
 
@@ -81,40 +82,40 @@ Markers<Index_> choose_classic_markers(
     const std::vector<const Label_*>& labels,
     const ChooseClassicMarkersOptions& options)
 {
-    size_t nrefs = representatives.size();
+    auto nrefs = representatives.size();
     if (nrefs != labels.size()) {
         throw std::runtime_error("'representatives' and 'labels' should have the same length");
     }
     if (nrefs == 0) {
         throw std::runtime_error("'representatives' should contain at least one entry");
     }
-    size_t ngenes = representatives.front()->nrow();
+    auto ngenes = representatives.front()->nrow();
 
-    size_t nlabels = 0;
-    for (size_t r = 0; r < nrefs; ++r) {
+    std::size_t nlabels = 0;
+    for (decltype(nrefs) r = 0; r < nrefs; ++r) {
         const auto& current = *representatives[r];
 
-        size_t nrows = current.nrow();
+        auto nrows = current.nrow();
         if (nrows != ngenes) {
             throw std::runtime_error("all entries of 'representatives' should have the same number of rows");
         }
 
-        size_t ncols = current.ncol();
+        auto ncols = current.ncol();
         if (ncols) {
             auto curlab = labels[r];
-            nlabels = std::max(nlabels, static_cast<size_t>(*std::max_element(curlab, curlab + ncols)) + 1);
+            nlabels = std::max(nlabels, static_cast<std::size_t>(*std::max_element(curlab, curlab + ncols)) + 1);
         }
     }
 
     // Generating mappings.
     std::vector<std::vector<std::pair<bool, Index_> > > labels_to_index(nrefs);
-    for (size_t r = 0; r < nrefs; ++r) {
+    for (decltype(nrefs) r = 0; r < nrefs; ++r) {
         auto& current = labels_to_index[r];
         current.resize(nlabels);
-        size_t ncols = representatives[r]->ncol();
+        auto ncols = representatives[r]->ncol();
         auto curlab = labels[r];
 
-        for (size_t c = 0; c < ncols; ++c) {
+        for (decltype(ncols) c = 0; c < ncols; ++c) {
             auto& info = current[curlab[c]];
             if (info.first) {
                 throw std::runtime_error("each label should correspond to no more than one column in each reference");
@@ -141,11 +142,11 @@ Markers<Index_> choose_classic_markers(
     std::vector<std::pair<Label_, Label_> > pairs;
     {
         std::set<std::pair<Label_, Label_> > pairs0;
-        for (size_t r = 0; r < nrefs; ++r) {
-            size_t ncols = representatives[r]->ncol();
+        for (decltype(nrefs) r = 0; r < nrefs; ++r) {
+            auto ncols = representatives[r]->ncol();
             auto curlab = labels[r];
-            for (size_t c1 = 0; c1 < ncols; ++c1) {
-                for (size_t c2 = 0; c2 < c1; ++c2) {
+            for (decltype(ncols) c1 = 0; c1 < ncols; ++c1) {
+                for (decltype(c1) c2 = 0; c2 < c1; ++c2) {
                     pairs0.emplace(curlab[c1], curlab[c2]);
                 }
             }
@@ -153,21 +154,22 @@ Markers<Index_> choose_classic_markers(
         pairs.insert(pairs.end(), pairs0.begin(), pairs0.end()); // already sorted by the std::set.
     }
 
-    tatami::parallelize([&](int, size_t start, size_t len) {
+    auto npairs = pairs.size();
+    tatami::parallelize([&](int, decltype(npairs) start, decltype(npairs) len) {
         std::vector<std::pair<Value_, Index_> > sorter(ngenes);
         std::vector<Value_> rbuffer(ngenes), lbuffer(ngenes);
         std::vector<std::shared_ptr<tatami::MyopicDenseExtractor<Value_, Index_> > > rextractors(nrefs), lextractors(nrefs);
 
-        for (size_t p = start, end = start + len; p < end; ++p) {
+        for (decltype(npairs) p = start, end = start + len; p < end; ++p) {
             auto curleft = pairs[p].first;
             auto curright = pairs[p].second;
 
-            for (size_t g = 0; g < ngenes; ++g) {
+            for (decltype(ngenes) g = 0; g < ngenes; ++g) {
                 sorter[g].first = 0;
                 sorter[g].second = g;
             }
 
-            for (size_t i = 0; i < nrefs; ++i) {
+            for (decltype(nrefs) i = 0; i < nrefs; ++i) {
                 const auto& curavail = labels_to_index[i];
                 auto lcol = curavail[curleft];
                 auto rcol = curavail[curright];
@@ -188,7 +190,7 @@ Markers<Index_> choose_classic_markers(
                 }
                 auto rptr = rext->fetch(rcol.second, rbuffer.data());
 
-                for (size_t g = 0; g < ngenes; ++g) {
+                for (decltype(ngenes) g = 0; g < ngenes; ++g) {
                     sorter[g].first += lptr[g] - rptr[g]; 
                 }
             }
@@ -219,7 +221,7 @@ Markers<Index_> choose_classic_markers(
                 }
             }
         }
-    }, pairs.size(), options.num_threads);
+    }, npairs, options.num_threads);
 
     return output;
 }

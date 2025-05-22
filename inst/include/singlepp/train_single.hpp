@@ -11,6 +11,7 @@
 
 #include <vector>
 #include <memory>
+#include <cstddef>
 
 /**
  * @file train_single.hpp
@@ -23,8 +24,10 @@ namespace singlepp {
  * @brief Options for `train_single()` and friends.
  * @tparam Index_ Integer type for the row/column indices of the matrix.
  * @tparam Float_ Floating-point type for the correlations and scores.
+ * @tparam Matrix_ Class of the input data for the neighbor search.
+ * This should satisfy the `knncolle::Matrix` interface.
  */
-template<typename Index_ = DefaultIndex, typename Float_ = DefaultFloat>
+template<typename Index_ = DefaultIndex, typename Float_ = DefaultFloat, class Matrix_ = knncolle::Matrix<Index_, Float_> >
 struct TrainSingleOptions {
     /**
      * Number of top markers to use from each pairwise comparison between labels.
@@ -40,7 +43,7 @@ struct TrainSingleOptions {
      * This allows us to skip the explicit calculation of correlations between each test cell and every reference sample.
      * If NULL, this defaults to an exact search based on `knncolle::VptreeBuilder`.
      */
-    std::shared_ptr<knncolle::Builder<knncolle::SimpleMatrix<Index_, Index_, Float_>, Float_> > trainer;
+    std::shared_ptr<knncolle::Builder<Index_, Float_, Float_, Matrix_> > trainer;
 
     /**
      * Number of threads to use.
@@ -54,19 +57,18 @@ struct TrainSingleOptions {
  */
 namespace internal {
 
-template<typename Value_, typename Index_, typename Label_, typename Float_>
+template<typename Value_, typename Index_, typename Label_, typename Float_, class Matrix_>
 std::vector<PerLabelReference<Index_, Float_> > build_references(
     const tatami::Matrix<Value_, Index_>& ref,
     const Label_* labels,
     const std::vector<Index_>& subset,
-    const TrainSingleOptions<Index_, Float_>& options) 
+    const TrainSingleOptions<Index_, Float_, Matrix_>& options) 
 {
-    if (options.trainer) {
-        return build_indices(ref, labels, subset, *(options.trainer), options.num_threads);
-    } else {
-        typedef knncolle::VptreeBuilder<knncolle::EuclideanDistance, knncolle::SimpleMatrix<Index_, Index_, Float_>, Float_> DefaultBuilder;
-        return build_indices(ref, labels, subset, DefaultBuilder(), options.num_threads);
+    auto builder = options.trainer;
+    if (!builder) {
+        builder.reset(new knncolle::VptreeBuilder<Index_, Float_, Float_, Matrix_>(std::make_shared<knncolle::EuclideanDistance<Float_, Float_> >()));
     }
+    return build_indices(ref, labels, subset, *builder, options.num_threads);
 }
 
 }
@@ -138,15 +140,15 @@ public:
     /**
      * @return Number of labels in this reference.
      */
-    size_t num_labels() const {
+    std::size_t num_labels() const {
         return my_references.size();
     }
 
     /**
      * @return Number of profiles in this reference.
      */
-    size_t num_profiles() const {
-        size_t n = 0;
+    std::size_t num_profiles() const {
+        std::size_t n = 0;
         for (const auto& ref : my_references) {
             n += ref.ranked.size();
         }
@@ -177,6 +179,8 @@ public:
  * @tparam Index_ Integer type for the row/column indices of the matrix.
  * @tparam Label_ Integer type for the reference labels.
  * @tparam Float_ Floating-point type for the correlations and scores.
+ * @tparam Matrix_ Class of the input data for the neighbor search.
+ * This should satisfy the `knncolle::Matrix` interface.
  *
  * @param ref Matrix for the reference expression profiles.
  * Rows are genes while columns are profiles.
@@ -187,12 +191,12 @@ public:
  *
  * @return A pre-built classifier that can be used in `classify_single()` with a test dataset.
  */
-template<typename Value_, typename Index_, typename Label_, typename Float_>
+template<typename Value_, typename Index_, typename Label_, typename Float_, class Matrix_>
 TrainedSingle<Index_, Float_> train_single(
     const tatami::Matrix<Value_, Index_>& ref,
     const Label_* labels,
     Markers<Index_> markers,
-    const TrainSingleOptions<Index_, Float_>& options)
+    const TrainSingleOptions<Index_, Float_, Matrix_>& options)
 {
     auto subset = internal::subset_to_markers(markers, options.top);
     auto subref = internal::build_references(ref, labels, subset, options);
@@ -278,15 +282,15 @@ public:
     /**
      * @return Number of labels in this reference.
      */
-    size_t num_labels() const {
+    std::size_t num_labels() const {
         return my_references.size();
     }
 
     /**
      * @return Number of profiles in this reference.
      */
-    size_t num_profiles() const {
-        size_t n = 0;
+    std::size_t num_profiles() const {
+        std::size_t n = 0;
         for (const auto& ref : my_references) {
             n += ref.ranked.size();
         }
@@ -315,6 +319,8 @@ public:
  * @tparam Value_ Numeric type for the matrix values.
  * @tparam Label_ Integer type for the reference labels.
  * @tparam Float_ Floating-point type for the correlations and scores.
+ * @tparam Matrix_ Class of the input data for the neighbor search.
+ * This should satisfy the `knncolle::Matrix` interface.
  *
  * @param test_nrow Number of features in the test dataset.
  * @param intersection Vector defining the intersection of genes between the test and reference datasets.
@@ -348,13 +354,13 @@ TrainedSingleIntersect<Index_, Float_> train_single_intersect(
  * @cond
  */
 // For back-compatibility only.
-template<typename Index_, typename Value_, typename Label_, typename Float_>
+template<typename Index_, typename Value_, typename Label_, typename Float_, class Matrix_>
 TrainedSingleIntersect<Index_, Float_> train_single_intersect(
     const Intersection<Index_>& intersection,
     const tatami::Matrix<Value_, Index_>& ref, 
     const Label_* labels,
     Markers<Index_> markers,
-    const TrainSingleOptions<Index_, Float_>& options)
+    const TrainSingleOptions<Index_, Float_, Matrix_>& options)
 {
     return train_single_intersect<Index_, Value_, Label_, Float_>(-1, intersection, ref, labels, std::move(markers), options);
 }
@@ -374,6 +380,8 @@ TrainedSingleIntersect<Index_, Float_> train_single_intersect(
  * @tparam Value_ Numeric type for the matrix values.
  * @tparam Label_ Integer type for the reference labels.
  * @tparam Float_ Floating-point type for the correlations and scores.
+ * @tparam Matrix_ Class of the input data for the neighbor search.
+ * This should satisfy the `knncolle::Matrix` interface.
  *
  * @param test_nrow Number of rows (genes) in the test dataset.
  * @param[in] test_id Pointer to an array of length equal to `test_nrow`, containing a gene identifier for each row of the test dataset.
@@ -390,7 +398,7 @@ TrainedSingleIntersect<Index_, Float_> train_single_intersect(
  *
  * @return A pre-built classifier that can be used in `classify_single_intersect()`.
  */
-template<typename Index_, typename Id_, typename Value_, typename Label_, typename Float_>
+template<typename Index_, typename Id_, typename Value_, typename Label_, typename Float_, class Matrix_>
 TrainedSingleIntersect<Index_, Float_> train_single_intersect(
     Index_ test_nrow,
     const Id_* test_id, 
@@ -398,7 +406,7 @@ TrainedSingleIntersect<Index_, Float_> train_single_intersect(
     const Id_* ref_id, 
     const Label_* labels,
     Markers<Index_> markers,
-    const TrainSingleOptions<Index_, Float_>& options)
+    const TrainSingleOptions<Index_, Float_, Matrix_>& options)
 {
     auto intersection = intersect_genes(test_nrow, test_id, ref.nrow(), ref_id);
     return train_single_intersect(test_nrow, intersection, ref, labels, std::move(markers), options);

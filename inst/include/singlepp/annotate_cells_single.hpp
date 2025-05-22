@@ -4,6 +4,7 @@
 #include "defs.hpp"
 
 #include "tatami/tatami.hpp"
+#include "knncolle/knncolle.hpp"
 
 #include "Markers.hpp"
 #include "build_indices.hpp"
@@ -48,7 +49,6 @@ public:
     {
         auto candidate = fill_labels_in_use(scores, threshold, my_labels_in_use);
 
-
         // Use the input_size as a hint for the number of addressable genes.
         // This should be exact if subset_to_markers() was used on the input,
         // but the rest of the code is safe even if the hint isn't perfect.
@@ -73,15 +73,15 @@ public:
             scaled_ranks(my_input_sub, my_scaled_left.data());
             scores.clear();
 
-            size_t nlabels_used = my_labels_in_use.size();
-            for (size_t i = 0; i < nlabels_used; ++i) {
+            auto nlabels_used = my_labels_in_use.size();
+            for (decltype(nlabels_used) i = 0; i < nlabels_used; ++i) {
                 auto curlab = my_labels_in_use[i];
 
                 my_all_correlations.clear();
                 const auto& curref = ref[curlab];
-                size_t NC = curref.index->num_observations();
+                auto NC = curref.index->num_observations();
 
-                for (size_t c = 0; c < NC; ++c) {
+                for (decltype(NC) c = 0; c < NC; ++c) {
                     // Technically we could be faster if we remembered the
                     // subset from the previous fine-tuning iteration, but this
                     // requires us to (possibly) make a copy of the entire
@@ -119,11 +119,11 @@ void annotate_cells_single(
     int num_threads)
 {
     // Figuring out how many neighbors to keep and how to compute the quantiles.
-    const size_t num_labels = ref.size();
+    auto num_labels = ref.size();
     std::vector<Index_> search_k(num_labels);
     std::vector<std::pair<Float_, Float_> > coeffs(num_labels);
 
-    for (size_t r = 0; r < num_labels; ++r) {
+    for (decltype(num_labels) r = 0; r < num_labels; ++r) {
         Float_ denom = static_cast<Float_>(ref[r].index->num_observations()) - 1;
         Float_  prod = denom * (1 - quantile);
         auto k = std::ceil(prod) + 1;
@@ -144,14 +144,14 @@ void annotate_cells_single(
     tatami::parallelize([&](int, Index_ start, Index_ length) {
         auto ext = tatami::consecutive_extractor<false>(&test, false, start, length, subset_ptr);
 
-        size_t num_subset = subset.size();
+        auto num_subset = subset.size();
         std::vector<Value_> buffer(num_subset);
         RankedVector<Value_, Index_> vec;
         vec.reserve(num_subset);
 
-        std::vector<std::unique_ptr<knncolle::Searcher<Index_, Float_> > > searchers;
+        std::vector<std::unique_ptr<knncolle::Searcher<Index_, Float_, Float_> > > searchers;
         searchers.reserve(num_labels);
-        for (size_t r = 0; r < num_labels; ++r) {
+        for (decltype(num_labels) r = 0; r < num_labels; ++r) {
             searchers.emplace_back(ref[r].index->initialize());
         }
         std::vector<Float_> distances;
@@ -165,8 +165,11 @@ void annotate_cells_single(
             scaled_ranks(vec, buffer.data()); // 'buffer' can be re-used for output here, as all data is already extracted to 'vec'.
 
             curscores.resize(num_labels);
-            for (size_t r = 0; r < num_labels; ++r) {
-                size_t k = search_k[r];
+            for (decltype(num_labels) r = 0; r < num_labels; ++r) {
+                // No need to use knncolle::cap_k_query(), as our quantile
+                // calculations guarantee that 'k' is less than or equal to the
+                // number of observations in the reference.
+                auto k = search_k[r];
                 searchers[r]->search(buffer.data(), k, NULL, &(distances));
 
                 Float_ last = distances[k - 1];

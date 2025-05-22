@@ -20,16 +20,21 @@ namespace knncolle {
  * Users should ensure that a `Searcher` instance does not outlive the `Prebuilt` object used to generate it;
  * this allows developers of the former to hold references to the latter.
  *
- * @tparam Index_ Integer type for the indices.
- * For the output of `Builder::build`, this is set to `MockMatrix::index_type`.
- * @tparam Float_ Floating point type for the query data and output distances.
+ * @tparam Index_ Integer type for the observation indices.
+ * @tparam Data_ Numeric type for the query data.
+ * @tparam Distance_ Floating point type for the distances.
  */
-template<typename Index_, typename Float_>
+template<typename Index_, typename Data_, typename Distance_>
 class Searcher {
 public:
     /**
      * @cond
      */
+    Searcher() = default;
+    Searcher(Searcher&&) = default;
+    Searcher(const Searcher&) = default;
+    Searcher& operator=(Searcher&&) = default;
+    Searcher& operator=(const Searcher&) = default;
     virtual ~Searcher() = default;
     /**
      * @endcond
@@ -41,31 +46,36 @@ public:
      * @param i The index of the observation of interest.
      * This should be non-negative and less than the total number of observations in `Prebuilt::num_observations()`.
      * @param k The number of neighbors to identify.
-     * This should be a non-negative integer.
+     * This should be a non-negative integer that is less than the total number of observations in `Prebuilt::num_observations()`.
+     * (Except if `Prebuilt::num_observations() == 0`, in which case the only valid choice for `k` is also zero.)
+     * Users can call `cap_k()` to easily cap `k` based on `Prebuilt::num_observations()`.
      * @param[out] output_indices Pointer to a vector, to be filled with the identities of the nearest neighbors in order of increasing distance.
-     * Length of the vector on output is no more than `k`, but may be shorter if the total number of observations is less than `k + 1`.
+     * On output, the length of the vector should be equal to `k`.
+     * All entries should be unique and less than `Prebuilt::num_observations()`.
      * This vector is guaranteed to not contain `i` itself.
      * Optionally NULL, in which case no indices are returned.
      * @param[out] output_distances Pointer to a vector, to be filled with the distances of the nearest neighbors. 
      * This corresponds to the indices reported in `output_indices`.
      * Optionally NULL, in which case no distances are returned.
      */
-    virtual void search(Index_ i, Index_ k, std::vector<Index_>* output_indices, std::vector<Float_>* output_distances) = 0;
+    virtual void search(Index_ i, Index_ k, std::vector<Index_>* output_indices, std::vector<Distance_>* output_distances) = 0;
 
     /** 
      * Find the nearest neighbors of a new observation.
      *
      * @param query Pointer to an array of length equal to `Prebuilt::num_dimensions()`, containing the coordinates of the query point.
      * @param k The number of neighbors to identify.
-     * This should be a non-negative integer.
+     * This should be a non-negative integer that is no greater than the number of observations in `Prebuilt::num_observations()`.
+     * Users can call `cap_k_query()` to easily cap `k` based on `Prebuilt::num_observations()`.
      * @param[out] output_indices Pointer to a vector, to be filled with the identities of the nearest neighbors in order of increasing distance.
-     * Length of the vector on output is no more than `k`, but may be shorter if the total number of observations is less than `k + 1`.
+     * On output, the length of the vector should be equal to `k`.
+     * All entries should be unique and less than `Prebuilt::num_observations()`.
      * Optionally NULL, in which case no indices are returned.
      * @param[out] output_distances Pointer to a vector, to be filled with the distances of the nearest neighbors. 
      * This corresponds to the indices reported in `output_indices`.
      * Optionally NULL, in which case no distances are returned.
      */
-    virtual void search(const Float_* query, Index_ k, std::vector<Index_>* output_indices, std::vector<Float_>* output_distances) = 0;
+    virtual void search(const Data_* query, Index_ k, std::vector<Index_>* output_indices, std::vector<Distance_>* output_distances) = 0;
 
 public:
     /**
@@ -94,7 +104,7 @@ public:
      *
      * @return Number of neighbors within `distance` of `i`.
      */
-    virtual Index_ search_all([[maybe_unused]] Index_ i, [[maybe_unused]] Float_ distance, [[maybe_unused]] std::vector<Index_>* output_indices, [[maybe_unused]] std::vector<Float_>* output_distances) {
+    virtual Index_ search_all([[maybe_unused]] Index_ i, [[maybe_unused]] Distance_ distance, [[maybe_unused]] std::vector<Index_>* output_indices, [[maybe_unused]] std::vector<Distance_>* output_distances) {
         throw std::runtime_error("distance-based searches not supported");
         return 0;
     }
@@ -114,7 +124,7 @@ public:
      *
      * @return Number of neighbors within `distance` of `query`.
      */
-    virtual Index_ search_all([[maybe_unused]] const Float_* query, [[maybe_unused]] Float_ distance, [[maybe_unused]] std::vector<Index_>* output_indices, [[maybe_unused]] std::vector<Float_>* output_distances) {
+    virtual Index_ search_all([[maybe_unused]] const Data_* query, [[maybe_unused]] Distance_ distance, [[maybe_unused]] std::vector<Index_>* output_indices, [[maybe_unused]] std::vector<Distance_>* output_distances) {
         throw std::runtime_error("distance-based searches not supported");
         return 0;
     }

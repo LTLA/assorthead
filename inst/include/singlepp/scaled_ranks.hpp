@@ -18,7 +18,8 @@ void scaled_ranks(const RankedVector<Stat_, Index_>& collected, Output_* outgoin
     static_assert(std::is_floating_point<Output_>::value);
 
     // Computing tied ranks. 
-    size_t cur_rank = 0;
+    auto ncollected = collected.size();
+    decltype(ncollected) cur_rank = 0;
     auto cIt = collected.begin();
     auto cEnd = collected.end();
 
@@ -43,9 +44,8 @@ void scaled_ranks(const RankedVector<Stat_, Index_>& collected, Output_* outgoin
 
     // Mean-adjusting and converting to cosine values.
     Output_ sum_squares = 0;
-    size_t N = collected.size();
-    const Output_ center_rank = static_cast<Output_>(N - 1)/2; 
-    for (size_t i = 0 ; i < N; ++i) {
+    const Output_ center_rank = static_cast<Output_>(ncollected - 1)/2; 
+    for (decltype(ncollected) i = 0 ; i < ncollected; ++i) {
         auto& o = outgoing[i];
         o -= center_rank;
         sum_squares += o*o;
@@ -54,7 +54,7 @@ void scaled_ranks(const RankedVector<Stat_, Index_>& collected, Output_* outgoin
     // Special behaviour for no-variance cells; these are left as all-zero scaled ranks.
     sum_squares = std::max(sum_squares, 0.00000001);
     Output_ denom = std::sqrt(sum_squares) * 2;
-    for (size_t i = 0; i < N; ++i) {
+    for (decltype(ncollected) i = 0; i < ncollected; ++i) {
         outgoing[i] /= denom;
     }
 }

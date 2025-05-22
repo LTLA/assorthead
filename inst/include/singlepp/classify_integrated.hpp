@@ -9,6 +9,7 @@
 #include "train_integrated.hpp"
 
 #include <vector>
+#include <cstddef>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -157,9 +158,9 @@ struct ClassifyIntegratedResults {
     /**
      * @cond
      */
-    ClassifyIntegratedResults(size_t ncells, size_t nrefs) : best(ncells), delta(ncells) {
+    ClassifyIntegratedResults(std::size_t ncells, std::size_t nrefs) : best(ncells), delta(ncells) {
         scores.reserve(nrefs);
-        for (size_t r = 0; r < nrefs; ++r) {
+        for (decltype(nrefs) r = 0; r < nrefs; ++r) {
             scores.emplace_back(ncells);
         }
     }

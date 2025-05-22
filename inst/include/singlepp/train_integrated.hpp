@@ -84,7 +84,7 @@ TrainIntegratedInput<Value_, Index_, Label_> prepare_integrated_input(
 
     const auto& subset = trained.get_subset();
     const auto& old_markers = trained.get_markers();
-    size_t nlabels = old_markers.size();
+    auto nlabels = old_markers.size();
 
     // Adding the markers for each label, indexed according to their
     // position in the test matrix. This assumes that 'mat_subset' is
@@ -93,7 +93,7 @@ TrainIntegratedInput<Value_, Index_, Label_> prepare_integrated_input(
     new_markers.reserve(nlabels);
     std::unordered_set<Index_> unified;
 
-    for (size_t i = 0; i < nlabels; ++i) {
+    for (decltype(nlabels) i = 0; i < nlabels; ++i) {
         unified.clear();
         for (const auto& x : old_markers[i]) {
             unified.insert(x.begin(), x.end());
@@ -146,14 +146,14 @@ TrainIntegratedInput<Value_, Index_, Label_> prepare_integrated_input_intersect(
 
     // Updating the markers so that they point to rows of the test matrix.
     const auto& old_markers = trained.get_markers();
-    size_t nlabels = old_markers.size();
+    auto nlabels = old_markers.size();
     auto& new_markers = output.markers;
     new_markers.resize(nlabels);
 
     const auto& test_subset = trained.get_test_subset();
     std::unordered_set<Index_> unified;
 
-    for (size_t i = 0; i < nlabels; ++i) {
+    for (decltype(nlabels) i = 0; i < nlabels; ++i) {
         const auto& cur_old_markers = old_markers[i];
 
         unified.clear();
@@ -242,7 +242,7 @@ public:
     /**
      * @return Number of reference datasets.
      */
-    size_t num_references() const {
+    std::size_t num_references() const {
         return markers.size();
     }
 
@@ -250,7 +250,7 @@ public:
      * @param r Reference dataset of interest.
      * @return Number of labels in this reference.
      */
-    size_t num_labels(size_t r) const {
+    std::size_t num_labels(std::size_t r) const {
         return markers[r].size();
     }
 
@@ -258,8 +258,8 @@ public:
      * @param r Reference dataset of interest.
      * @return Number of profiles in this reference.
      */
-    size_t num_profiles(size_t r) const {
-        size_t n = 0;
+    std::size_t num_profiles(std::size_t r) const {
+        std::size_t n = 0;
         for (const auto& ref : ranked[r]) {
             n += ref.size();
         }
@@ -300,9 +300,9 @@ struct TrainIntegratedOptions {
  */
 namespace internal {
 
-template<typename Value_, typename Index_, typename Input_>
+template<typename Value_, typename RefLabel_, typename Input_, typename Index_>
 void train_integrated_per_reference(
-    size_t ref_i,
+    RefLabel_ ref_i,
     Input_& curinput,
     TrainedIntegrated<Index_>& output,
     const std::unordered_map<Index_, Index_> remap_to_universe,
@@ -328,7 +328,7 @@ void train_integrated_per_reference(
     auto& cur_ranked = output.ranked[ref_i];
     std::vector<Index_> positions;
     {
-        size_t nlabels = curmarkers.size();
+        auto nlabels = curmarkers.size();
         Index_ NC = ref.ncol();
         positions.reserve(NC);                
 
@@ -340,7 +340,7 @@ void train_integrated_per_reference(
         }
 
         cur_ranked.resize(nlabels);
-        for (size_t l = 0; l < nlabels; ++l) {
+        for (decltype(nlabels) l = 0; l < nlabels; ++l) {
             cur_ranked[l].resize(samples_per_label[l]);
         }
     }
@@ -410,7 +410,7 @@ void train_integrated_per_reference(
             tmp_ranked.reserve(to_extract.size());
             auto ext = tatami::consecutive_extractor<false>(&ref, false, start, len, to_extract_ptr);
 
-            for (size_t c = start, end = start + len; c < end; ++c) {
+            for (Index_ c = start, end = start + len; c < end; ++c) {
                 auto ptr = ext->fetch(buffer.data());
 
                 tmp_ranked.clear();
@@ -430,7 +430,7 @@ void train_integrated_per_reference(
 template<typename Value_, typename Index_, typename Inputs_>
 TrainedIntegrated<Index_> train_integrated(Inputs_& inputs, const TrainIntegratedOptions& options) {
     TrainedIntegrated<Index_> output;
-    size_t nrefs = inputs.size();
+    auto nrefs = inputs.size();
     output.check_availability.resize(nrefs);
     output.available.resize(nrefs);
     output.markers.resize(nrefs);
@@ -462,7 +462,7 @@ TrainedIntegrated<Index_> train_integrated(Inputs_& inputs, const TrainIntegrate
         remap_to_universe[output.universe[i]] = i;
     }
 
-    for (size_t r = 0; r < nrefs; ++r) {
+    for (decltype(nrefs) r = 0; r < nrefs; ++r) {
         train_integrated_per_reference<Value_>(r, inputs[r], output, remap_to_universe, options);
     }
 

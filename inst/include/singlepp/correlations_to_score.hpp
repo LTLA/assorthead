@@ -14,7 +14,7 @@ template<typename Float_>
 Float_ correlations_to_score(std::vector<Float_>& correlations, Float_ quantile) {
     static_assert(std::is_floating_point<Float_>::value);
 
-    const size_t ncells=correlations.size();
+    auto ncells = correlations.size();
     if (ncells == 0) {
         return std::numeric_limits<Float_>::quiet_NaN();
     }
@@ -25,8 +25,8 @@ Float_ correlations_to_score(std::vector<Float_>& correlations, Float_ quantile)
     
     const Float_ denom = ncells - 1; 
     const Float_ prod = denom * quantile;
-    const size_t left = std::floor(prod);
-    const size_t right = std::ceil(prod);
+    const decltype(ncells) left = std::floor(prod);
+    const decltype(ncells) right = std::ceil(prod);
 
     std::nth_element(correlations.begin(), correlations.begin() + right, correlations.end());
     const Float_ rightval = correlations[right];
@@ -53,10 +53,10 @@ Float_ correlations_to_score(std::vector<Float_>& correlations, Float_ quantile)
 template<typename Float_, typename Stat_>
 Float_ distance_to_correlation(const std::vector<Stat_>& p1, const std::vector<Stat_>& p2) {
     static_assert(std::is_floating_point<Float_>::value);
-    size_t n = p1.size();
+    auto n = p1.size();
 
     Float_ d2 = 0;
-    for (size_t i = 0; i < n; ++i) {
+    for (decltype(n) i = 0; i < n; ++i) {
         auto tmp = static_cast<Float_>(p1[i]) - static_cast<Float_>(p2[i]);
         d2 += tmp * tmp;
     }

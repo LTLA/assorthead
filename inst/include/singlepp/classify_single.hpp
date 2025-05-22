@@ -9,6 +9,7 @@
 #include "train_single.hpp"
 
 #include <vector> 
+#include <cstddef>
 #include <stdexcept>
 
 /**
@@ -203,9 +204,9 @@ struct ClassifySingleResults {
     /**
      * @cond
      */
-    ClassifySingleResults(size_t num_cells, size_t num_labels) : best(num_cells), delta(num_cells) {
+    ClassifySingleResults(std::size_t num_cells, std::size_t num_labels) : best(num_cells), delta(num_cells) {
         scores.reserve(num_labels);
-        for (size_t l = 0; l < num_labels; ++l) {
+        for (decltype(num_labels) l = 0; l < num_labels; ++l) {
             scores.emplace_back(num_cells);
         }
     }

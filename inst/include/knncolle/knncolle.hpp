@@ -3,14 +3,13 @@
 
 #include "Builder.hpp"
 #include "Prebuilt.hpp"
-#include "MockMatrix.hpp"
+#include "Matrix.hpp"
 
 #include "distances.hpp"
 #include "L2Normalized.hpp"
 
 #include "Bruteforce.hpp"
 #include "Vptree.hpp"
-#include "Kmknn.hpp"
 #include "find_nearest_neighbors.hpp"
 
 /**

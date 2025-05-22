@@ -12,40 +12,41 @@
 #include <vector>
 #include <memory>
 #include <algorithm>
+#include <cstddef> 
 
 namespace singlepp {
 
 namespace internal {
 
 template<typename Label_>
-size_t get_nlabels(size_t n, const Label_* labels) { 
+std::size_t get_nlabels(std::size_t n, const Label_* labels) { 
     if (n == 0) {
         throw std::runtime_error("reference dataset must have at least one column");
     }
-    return static_cast<size_t>(*std::max_element(labels, labels + n)) + 1;
+    return static_cast<std::size_t>(*std::max_element(labels, labels + n)) + 1;
 }
 
 template<typename Index_, typename Float_>
 struct PerLabelReference {
     std::vector<RankedVector<Index_, Index_> > ranked;
-    std::shared_ptr<knncolle::Prebuilt<Index_, Index_, Float_> > index;
+    std::shared_ptr<knncolle::Prebuilt<Index_, Float_, Float_> > index;
 };
 
-template<typename Value_, typename Index_, typename Label_, typename Float_>
+template<typename Value_, typename Index_, typename Label_, typename Float_, class Matrix_>
 std::vector<PerLabelReference<Index_, Float_> > build_indices(
     const tatami::Matrix<Value_, Index_>& ref,
     const Label_* labels,
     const std::vector<Index_>& subset,
-    const knncolle::Builder<knncolle::SimpleMatrix<Index_, Index_, Float_>, Float_>& builder,
+    const knncolle::Builder<Index_, Float_, Float_, Matrix_>& builder,
     int num_threads)
 {
-    size_t NR = subset.size();
-    size_t NC = ref.ncol();
-    size_t nlabels = get_nlabels(NC, labels);
+    std::size_t NR = subset.size();
+    auto NC = ref.ncol();
+    auto nlabels = get_nlabels(NC, labels);
 
-    std::vector<size_t> label_count(nlabels);
-    std::vector<size_t> label_offsets(NC);
-    for (size_t i = 0; i < NC; ++i) {
+    std::vector<Index_> label_count(nlabels);
+    std::vector<Index_> label_offsets(NC);
+    for (decltype(NC) i = 0; i < NC; ++i) {
         auto& lcount = label_count[labels[i]];
         label_offsets[i] = lcount;
         ++lcount;
@@ -53,12 +54,12 @@ std::vector<PerLabelReference<Index_, Float_> > build_indices(
 
     std::vector<PerLabelReference<Index_, Float_> > nnrefs(nlabels);
     std::vector<std::vector<Float_> > nndata(nlabels);
-    for (size_t l = 0; l < nlabels; ++l) {
+    for (decltype(nlabels) l = 0; l < nlabels; ++l) {
         if (label_count[l] == 0) {
             throw std::runtime_error(std::string("no entries for label ") + std::to_string(l));
         }
         nnrefs[l].ranked.resize(label_count[l]);
-        nndata[l].resize(label_count[l] * NR); // already size_t, no need to cast to avoid overflow.
+        nndata[l].resize(static_cast<std::size_t>(label_count[l]) * NR); // cast to size_t to avoid overflow issues.
     }
 
     SubsetSanitizer<Index_> subsorter(subset);
@@ -76,7 +77,7 @@ std::vector<PerLabelReference<Index_, Float_> > build_indices(
 
             auto curlab = labels[c];
             auto curoff = label_offsets[c];
-            auto scaled = nndata[curlab].data() + curoff * NR; // these are already size_t's, so no need to cast.
+            auto scaled = nndata[curlab].data() + static_cast<std::size_t>(curoff) * NR; // cast to overflow to avoid overflow.
             scaled_ranks(ranked, scaled); 
 
             // Storing as a pair of ints to save space; as long
@@ -87,9 +88,9 @@ std::vector<PerLabelReference<Index_, Float_> > build_indices(
         }
     }, ref.ncol(), num_threads);
 
-    tatami::parallelize([&](int, size_t start, size_t len) {
-        for (size_t l = start, end = start + len; l < end; ++l) {
-            nnrefs[l].index = builder.build_shared(knncolle::SimpleMatrix<Index_, Index_, Float_>(NR, label_count[l], nndata[l].data()));
+    tatami::parallelize([&](int, decltype(nlabels) start, decltype(nlabels) len) {
+        for (decltype(nlabels) l = start, end = start + len; l < end; ++l) {
+            nnrefs[l].index = builder.build_shared(knncolle::SimpleMatrix<Index_, Float_>(NR, label_count[l], nndata[l].data()));
 
             // Trying to free the memory as we go along, to offset the copying
             // of nndata into the memory store owned by the knncolle index.
