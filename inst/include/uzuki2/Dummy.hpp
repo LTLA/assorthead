@@ -8,81 +8,87 @@
 
 #include "interfaces.hpp"
 
+/**
+ * @file Dummy.hpp
+ * @brief Dummy classes for parsing without storing the results.
+ */
+
 namespace uzuki2 {
 
-/** Defining the simple vectors first. **/
+/**
+ * @cond
+ */
 
-struct DummyIntegerVector : public IntegerVector {
-    DummyIntegerVector(size_t l, bool, bool) : length(l) {}
-
-    size_t size() const { return length; }
-    size_t length;
-
+class DummyIntegerVector final : public IntegerVector {
+public:
+    DummyIntegerVector(size_t l, bool, bool) : my_length(l) {}
+    size_t size() const { return my_length; }
     void set(size_t, int32_t) {}
     void set_missing(size_t) {}
     void set_name(size_t, std::string) {}
+private:
+    size_t my_length;
 };
 
-struct DummyNumberVector : public NumberVector {
-    DummyNumberVector(size_t l, bool, bool) : length(l) {}
-
-    size_t size() const { return length; }
-    size_t length;
-
+class DummyNumberVector final : public NumberVector {
+public:
+    DummyNumberVector(size_t l, bool, bool) : my_length(l) {}
+    size_t size() const { return my_length; }
     void set(size_t, double) {}
     void set_missing(size_t) {}
     void set_name(size_t, std::string) {}
+private:
+    size_t my_length;
 };
 
-struct DummyStringVector : public StringVector {
-    DummyStringVector(size_t l, bool, bool, StringVector::Format) : length(l) {}
-
-    size_t size() const { return length; }
-    size_t length;
-
+class DummyStringVector final : public StringVector {
+public:
+    DummyStringVector(size_t l, bool, bool, StringVector::Format) : my_length(l) {}
+    size_t size() const { return my_length; }
     void set(size_t, std::string) {}
     void set_missing(size_t) {}
     void set_name(size_t, std::string) {}
+private:
+    size_t my_length;
 };
 
-struct DummyBooleanVector : public BooleanVector {
-    DummyBooleanVector(size_t l, bool, bool) : length(l) {}
-
-    size_t size() const { return length; }
-    size_t length;
-
+class DummyBooleanVector final : public BooleanVector {
+public:
+    DummyBooleanVector(size_t l, bool, bool) : my_length(l) {}
+    size_t size() const { return my_length; }
     void set(size_t, bool) {}
     void set_missing(size_t) {}
     void set_name(size_t, std::string) {}
+private:
+    size_t my_length;
 };
 
-struct DummyFactor : public Factor {
-    DummyFactor(size_t l, bool, bool, size_t, bool) : length(l) {}
-
-    size_t size() const { return length; }
-    size_t length;
-
+class DummyFactor final : public Factor {
+public:
+    DummyFactor(size_t l, bool, bool, size_t, bool) : my_length(l) {}
+    size_t size() const { return my_length; }
     void set(size_t, size_t) {}
     void set_missing(size_t) {}
     void set_name(size_t, std::string) {}
-
     void set_level(size_t, std::string) {}
+private:
+    size_t my_length;
 };
 
 /** Defining the structural elements. **/
 
-struct DummyNothing : public Nothing {};
+class DummyNothing final : public Nothing {};
 
-struct DummyExternal : public External {};
+class DummyExternal final : public External {};
 
-struct DummyList : public List {
-    DummyList(size_t n, bool) : length(n) {}
-
-    size_t size() const { return length; }
-    size_t length;
-
+class DummyList final : public List {
+public:
+    DummyList(size_t n, bool) : my_length(n) {}
+    size_t size() const { return my_length; }
     void set(size_t, std::shared_ptr<Base>) {}
     void set_name(size_t, std::string) {}
+private:
+    size_t my_length;
 };
 
 /** Dummy provisioner. **/
@@ -110,19 +116,40 @@ struct DummyProvisioner {
     template<class ... Args_>
     static Factor* new_Factor(Args_&& ... args) { return (new DummyFactor(std::forward<Args_>(args)...)); }
 };
+/**
+ * @endcond
+ */
 
-struct DummyExternals {
-    DummyExternals(size_t n) : number(n) {}
+/**
+ * @brief Dummy class satisfying the `Externals_` interface of `hdf5::parse()`.
+ *
+ * Users should only create an instance of this class with the default constructor.
+ * This can then be used as the `ext` argument in `json::parse()` and `hdf5::parse()`.
+ * Doing so will indicate that no external references are expected during parsing.
+ */
+class DummyExternals {
+public:
+    DummyExternals() : DummyExternals(0) {}
+
+private:
+    size_t my_number;
+
+public:
+    /**
+     * @cond
+     */
+    DummyExternals(size_t n) : my_number(n) {}
 
     void* get(size_t) const {
         return nullptr;
     }
 
     size_t size() const {
-        return number;
+        return my_number;
     }
-
-    size_t number;
+    /**
+     * @endcond
+     */
 };
 
 }

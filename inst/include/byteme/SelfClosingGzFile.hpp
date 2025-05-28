@@ -3,11 +3,14 @@
 
 #include <stdexcept>
 #include <string>
+#include <optional>
+
 #include "zlib.h"
 
 namespace byteme {
 
-struct SelfClosingGzFile {
+class SelfClosingGzFile {
+public:
     SelfClosingGzFile(const char* path, const char* mode) : handle(gzopen(path, mode)) {
         if (!handle) {
             throw std::runtime_error("failed to open file at '" + std::string(path) + "'");
@@ -41,6 +44,14 @@ public:
     bool closed = false;
     gzFile handle;
 };
+
+inline void set_optional_gzbuffer_size(SelfClosingGzFile& gzfile, const std::optional<unsigned>& gzbuffer_size) {
+    if (gzbuffer_size.has_value()) {
+        if (gzbuffer(gzfile.handle, *gzbuffer_size)) {
+            throw std::runtime_error("failed to modify the Gzip (de)compression buffer size");
+        }
+    }
+}
 
 }
 

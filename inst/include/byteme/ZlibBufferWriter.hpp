@@ -1,10 +1,14 @@
 #ifndef BYTEME_ZLIB_BUFFER_WRITER_HPP
 #define BYTEME_ZLIB_BUFFER_WRITER_HPP
 
-#include "zlib.h"
 #include <stdexcept>
 #include <vector>
+#include <cstddef>
+
+#include "zlib.h"
+
 #include "Writer.hpp"
+#include "check_buffer_size.hpp"
 
 /**
  * @file ZlibBufferWriter.hpp
@@ -15,11 +19,33 @@
 namespace byteme {
 
 /**
+ * @brief Options for the `ZlibBufferWriter` constructor.
+ */
+struct ZlibBufferWriterOptions {
+    /**
+     * Compression of the stream - DEFLATE (0), Zlib (1) or Gzip (2).
+     */
+    int mode = 2;
+
+    /**
+     * Compression level, from 1 to 9.
+     * Larger values improve compression at the cost of speed.
+     */
+    int compression_level = 6;
+
+    /**
+     * Size of the buffer to use when reading from disk.
+     * Larger values usually reduce computational time at the cost of increased memory usage.
+     */
+    std::size_t buffer_size = 65536;
+};
+
+/**
  * @brief Compress and write bytes to a Zlib-compressed buffer.
  *
  * This is basically a wrapper around Zlib's deflate method, with correct closing and error checking.
  */
-class ZlibBufferWriter : public Writer {
+class ZlibBufferWriter final : public Writer {
 private:
     /**
      * @cond
@@ -71,21 +97,31 @@ private:
 
 public:
     /**
-     * @param mode Compression mod of the stream - DEFLATE (0), Zlib (1) or Gzip (2).
-     * @param compression_level Compression level from 1 to 9.
-     * Larger values improve compression at the cost of speed.
-     * @param buffer_size Size of the compression buffer in bytes.
-     * Larger values improve speed at the cost of memory.
+     * @param options Further options.
      */
-    ZlibBufferWriter(int mode = 2, int compression_level = 6, size_t buffer_size = 65536) : my_zstr(mode, compression_level), my_holding(buffer_size) {}
+    ZlibBufferWriter(const ZlibBufferWriterOptions& options) : 
+        my_zstr(options.mode, options.compression_level),
+        my_holding(
+            check_buffer_size<decltype(decltype(ZStream::strm)::avail_out)>( // constrained for the z_stream interface.
+                check_buffer_size(options.buffer_size)
+            )
+        )
+    {}
 
 public:
     using Writer::write;
 
-    void write(const unsigned char* buffer, size_t n) {
-        my_zstr.strm.next_in = const_cast<unsigned char*>(buffer); // for C compatibility.
-        my_zstr.strm.avail_in = n;
-        dump(Z_NO_FLUSH);
+    void write(const unsigned char* buffer, std::size_t n) {
+        typedef decltype(decltype(ZStream::strm)::avail_in) Size; // constrained for the z_stream interface.
+        safe_write<Size, false>(
+            buffer,
+            n,
+            [&](const unsigned char* buffer0, Size n0) -> void {
+                my_zstr.strm.next_in = const_cast<unsigned char*>(buffer0); // for C compatibility.
+                my_zstr.strm.avail_in = n0;
+                dump(Z_NO_FLUSH);
+            }
+        );
     }
 
     void finish() {
@@ -103,7 +139,7 @@ private:
             my_zstr.strm.avail_out = my_holding.size();
             my_zstr.strm.next_out = my_holding.data();
             deflate(&(my_zstr.strm), flag); // no need to check, see https://zlib.net/zlib_how.html.
-            size_t compressed = my_holding.size() - my_zstr.strm.avail_out;
+            std::size_t compressed = my_holding.size() - my_zstr.strm.avail_out;
             output.insert(output.end(), my_holding.begin(), my_holding.begin() + compressed);
         } while (my_zstr.strm.avail_out == 0);
     }

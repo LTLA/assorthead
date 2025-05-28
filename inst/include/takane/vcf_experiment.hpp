@@ -32,38 +32,37 @@ namespace vcf_experiment {
 namespace internal {
 
 // Format specification taken from https://samtools.github.io/hts-specs/VCFv4.1.pdf.
-template<bool parallel_>
-std::pair<size_t, size_t> scan_vcf_dimensions(const std::filesystem::path& path, bool expanded) {
+inline std::pair<size_t, size_t> scan_vcf_dimensions(const std::filesystem::path& path, bool expanded, bool parallel) {
     internal_files::check_gzip_signature(path);
-    auto reader = internal_other::open_reader<byteme::GzipFileReader>(path);
-    typename std::conditional<parallel_, byteme::PerByteParallel<>, byteme::PerByte<> >::type pb(&reader);
+    auto reader = internal_other::open_reader<byteme::GzipFileReader>(path, byteme::GzipFileReaderOptions());
+    auto pb = internal_other::wrap_reader_for_bytes<char>(std::move(reader), parallel);
 
     // Checking the signature.
     {
         const std::string expected = "##fileformat=VCFv";
         const size_t len = expected.size();
-        bool okay = pb.valid();
+        bool okay = pb->valid();
 
         for (size_t i = 0; i < len; ++i) {
             if (!okay) {
                 throw std::runtime_error("incomplete VCF file signature");
             }
-            if (pb.get() != expected[i]) {
+            if (pb->get() != expected[i]) {
                 throw std::runtime_error("incorrect VCF file signature");
             }
-            okay = pb.advance();
+            okay = pb->advance();
         }
     }
 
     // Scanning until we find a line that doesn't start with '##'.
     while (true) {
-        if (pb.get() == '\n') {
+        if (pb->get() == '\n') {
             bool escape = false;
             for (int i = 0; i < 2; ++i) {
-                if (!pb.advance()) {
+                if (!pb->advance()) {
                     throw std::runtime_error("premature end to the VCF file");
                 }
-                if (pb.get() != '#') {
+                if (pb->get() != '#') {
                     escape = true;
                     break;
                 }
@@ -72,7 +71,7 @@ std::pair<size_t, size_t> scan_vcf_dimensions(const std::filesystem::path& path,
                 break;
             }
         }
-        if (!pb.advance()) {
+        if (!pb->advance()) {
             throw std::runtime_error("premature end to the VCF file");
         }
     }
@@ -82,14 +81,14 @@ std::pair<size_t, size_t> scan_vcf_dimensions(const std::filesystem::path& path,
     {
         size_t num_indents = 0;
         while (true) {
-            char current = pb.get();
+            char current = pb->get();
             if (current == '\t') {
                 ++num_indents;
             } else if (current == '\n') {
-                pb.advance(); // skip past the newline.
+                pb->advance(); // skip past the newline.
                 break;
             }
-            if (!pb.advance()) {
+            if (!pb->advance()) {
                 throw std::runtime_error("premature end to the VCF file");
             }
         }
@@ -102,18 +101,18 @@ std::pair<size_t, size_t> scan_vcf_dimensions(const std::filesystem::path& path,
 
     size_t expected_rows = 0;
     if (expanded) {
-        while (pb.valid()) {
+        while (pb->valid()) {
             ++expected_rows;
 
             // Scanning up to the ALT field, which is the 5th one. We need this to
             // find the number of alternative alleles (and thus the expansion of rows).
             size_t num_indents = 0;
             while (true) {
-                char current = pb.get();
+                char current = pb->get();
                 if (current == '\t') {
                     ++num_indents;
                     if (num_indents == 4) { 
-                        if (!pb.advance()) { // get past this indent.
+                        if (!pb->advance()) { // get past this indent.
                             throw std::runtime_error("premature end of line for VCF record");
                         }
                         break;
@@ -121,14 +120,14 @@ std::pair<size_t, size_t> scan_vcf_dimensions(const std::filesystem::path& path,
                 } else if (current == '\n') {
                     throw std::runtime_error("premature end of line for VCF record");
                 }
-                if (!pb.advance()) {
+                if (!pb->advance()) {
                     throw std::runtime_error("premature end of line for VCF record");
                 }
             }
 
             // Checking that we don't have any commas if it's expanded.
             while (true) {
-                char current = pb.get();
+                char current = pb->get();
                 if (current == ',') {
                     throw std::runtime_error("expected a 1:1 mapping of rows to alternative alleles when 'vcf_experiment.expanded = true'");
                 } else if (current == '\t') {
@@ -136,18 +135,18 @@ std::pair<size_t, size_t> scan_vcf_dimensions(const std::filesystem::path& path,
                 } else if (current == '\n') {
                     throw std::runtime_error("premature end of line for VCF record");
                 }
-                if (!pb.advance()) {
+                if (!pb->advance()) {
                     throw std::runtime_error("premature end of line for VCF record");
                 }
             }
 
             // Chomping the rest of the line; we assume all lines are newline-terminated.
             while (true) {
-                if (pb.get() == '\n') {
-                    pb.advance(); // skip past the newline.
+                if (pb->get() == '\n') {
+                    pb->advance(); // skip past the newline.
                     break;
                 } else {
-                    if (!pb.advance()) {
+                    if (!pb->advance()) {
                         throw std::runtime_error("premature end of line for VCF record");
                     }
                 }
@@ -155,15 +154,15 @@ std::pair<size_t, size_t> scan_vcf_dimensions(const std::filesystem::path& path,
         }
 
     } else {
-        if (pb.valid()) {
+        if (pb->valid()) {
             while (true) {
-                if (pb.get() == '\n') {
+                if (pb->get() == '\n') {
                     ++expected_rows; // assume all files are newline-terminated.
-                    if (!pb.advance()) {
+                    if (!pb->advance()) {
                         break;
                     }
                 } else {
-                    if (!pb.advance()) {
+                    if (!pb->advance()) {
                         throw std::runtime_error("premature end of line for VCF record");
                     }
                 }
@@ -208,17 +207,13 @@ inline void validate(const std::filesystem::path& path, const ObjectMetadata& me
         if (val->type() != millijson::BOOLEAN) {
             throw std::runtime_error("'vcf_experiment.expanded' property should be a JSON boolean");
         }
-        exp = reinterpret_cast<const millijson::Boolean*>(val.get())->value;
+        exp = reinterpret_cast<const millijson::Boolean*>(val.get())->value();
     }
 
     auto ipath = path / "file.vcf.gz";
     std::pair<size_t, size_t> obs_dims;
     try {
-        if (options.parallel_reads) {
-            obs_dims = internal::scan_vcf_dimensions<true>(ipath, exp);
-        } else {
-            obs_dims = internal::scan_vcf_dimensions<false>(ipath, exp);
-        }
+        obs_dims = internal::scan_vcf_dimensions(ipath, exp, options.parallel_reads);
     } catch (std::exception& e) {
         throw std::runtime_error("failed to parse '" + ipath.string() + "'; " + std::string(e.what()));
     }
@@ -238,8 +233,9 @@ inline void validate(const std::filesystem::path& path, const ObjectMetadata& me
  * @return Number of rows in the VCF experiment.
  */
 inline size_t height([[maybe_unused]] const std::filesystem::path& path, const ObjectMetadata& metadata, [[maybe_unused]] Options& options) {
-    const auto& vcfmap = internal_json::extract_typed_object_from_metadata(metadata.other, "vcf_experiment");
-    auto dims = internal_summarized_experiment::extract_dimensions_json(vcfmap, "vcf_experiment");
+    const std::string type_name = "vcf_experiment"; // use a separate variable to avoid dangling reference warnings from GCC.
+    const auto& vcfmap = internal_json::extract_typed_object_from_metadata(metadata.other, type_name);
+    auto dims = internal_summarized_experiment::extract_dimensions_json(vcfmap, type_name);
     return dims.first;
 }
 
@@ -250,8 +246,9 @@ inline size_t height([[maybe_unused]] const std::filesystem::path& path, const O
  * @return A vector of length 2 containing the dimensions of the VCF experiment.
  */
 inline std::vector<size_t> dimensions([[maybe_unused]] const std::filesystem::path& path, const ObjectMetadata& metadata, [[maybe_unused]] Options& options) {
-    const auto& vcfmap = internal_json::extract_typed_object_from_metadata(metadata.other, "vcf_experiment");
-    auto dims = internal_summarized_experiment::extract_dimensions_json(vcfmap, "vcf_experiment");
+    const std::string type_name = "vcf_experiment"; // use a separate variable to avoid dangling reference warnings from GCC.
+    const auto& vcfmap = internal_json::extract_typed_object_from_metadata(metadata.other, type_name);
+    auto dims = internal_summarized_experiment::extract_dimensions_json(vcfmap, type_name);
     return std::vector<size_t>{ dims.first, dims.second };
 }
 

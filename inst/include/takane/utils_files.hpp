@@ -14,10 +14,23 @@ namespace takane {
 
 namespace internal_files {
 
-template<class Reader_ = byteme::RawFileReader>
+template<class Reader_>
+auto set_buffer_options(size_t len) {
+    if constexpr(std::is_same<Reader_, byteme::RawFileReader>::value) {
+        byteme::RawFileReaderOptions opt;
+        opt.buffer_size = len;
+        return opt;
+    } else {
+        byteme::GzipFileReaderOptions opt;
+        opt.buffer_size = len;
+        return opt;
+    }
+}
+
+template<class Reader_>
 void check_signature(const std::filesystem::path& path, const char* expected, size_t len, const char* msg) {
-    auto reader = internal_other::open_reader<Reader_>(path, /* buffer_size = */ len);
-    byteme::PerByte<> pb(&reader);
+    auto reader = internal_other::open_reader<Reader_>(path, set_buffer_options<Reader_>(len));
+    byteme::PerByteSerial<char> pb(std::move(reader));
     bool okay = pb.valid();
     for (size_t i = 0; i < len; ++i) {
         if (!okay) {
@@ -30,10 +43,10 @@ void check_signature(const std::filesystem::path& path, const char* expected, si
     }
 }
 
-template<class Reader_ = byteme::RawFileReader>
+template<class Reader_>
 void check_signature(const std::filesystem::path& path, const unsigned char* expected, size_t len, const char* msg) {
-    auto reader = internal_other::open_reader<Reader_>(path, /* buffer_size = */ len);
-    byteme::PerByte<unsigned char> pb(&reader);
+    auto reader = internal_other::open_reader<Reader_>(path, set_buffer_options<Reader_>(len));
+    byteme::PerByteSerial<unsigned char> pb(std::move(reader));
     bool okay = pb.valid();
     for (size_t i = 0; i < len; ++i) {
         if (!okay) {
@@ -48,12 +61,12 @@ void check_signature(const std::filesystem::path& path, const unsigned char* exp
 
 inline void check_gzip_signature(const std::filesystem::path& path) {
     std::array<unsigned char, 2> gzmagic { 0x1f, 0x8b };
-    check_signature(path, gzmagic.data(), gzmagic.size(), "GZIP");
+    check_signature<byteme::RawFileReader>(path, gzmagic.data(), gzmagic.size(), "GZIP");
 }
 
 inline void extract_signature(const std::filesystem::path& path, unsigned char* store, size_t len) {
-    auto reader = internal_other::open_reader<byteme::RawFileReader>(path, /* buffer_size = */ len);
-    byteme::PerByte<unsigned char> pb(&reader);
+    auto reader = internal_other::open_reader<byteme::RawFileReader>(path, set_buffer_options<byteme::RawFileReader>(len));
+    byteme::PerByteSerial<unsigned char> pb(std::move(reader));
     bool okay = pb.valid();
     for (size_t i = 0; i < len; ++i) {
         if (!okay) {
@@ -75,7 +88,7 @@ inline bool is_indexed(const internal_json::JsonObjectMap& objmap) {
         throw std::runtime_error("property should be a JSON boolean");
     }
 
-    return reinterpret_cast<const millijson::Boolean*>(val.get())->value;
+    return reinterpret_cast<const millijson::Boolean*>(val.get())->value();
 }
 
 inline void check_sequence_type(const internal_json::JsonObjectMap& objmap, const char* msg) {
@@ -89,7 +102,7 @@ inline void check_sequence_type(const internal_json::JsonObjectMap& objmap, cons
         throw std::runtime_error("'" + std::string(msg) + ".sequence_type' property should be a JSON string");
     }
 
-    const auto& stype = reinterpret_cast<const millijson::String*>(val.get())->value;
+    const auto& stype = reinterpret_cast<const millijson::String*>(val.get())->value();
     if (stype != "RNA" && stype != "DNA" && stype != "AA" && stype != "custom") {
         throw std::runtime_error("unsupported value '" + stype + "' for the '" + std::string(msg) + ".sequence_type' property");
     }

@@ -47,11 +47,17 @@ inline bool is_vector(Type t) {
 /**
  * @brief Base interface for all R objects.
  */
-struct Base {
+class Base {
+public:
     /**
      * @cond
      */
-    virtual ~Base() {}
+    Base() = default;
+    Base(Base&&) = default;
+    Base(const Base&) = default;
+    Base& operator=(Base&&) = default;
+    Base& operator=(const Base&) = default;
+    virtual ~Base() = default;
     /**
      * @endcond
      */
@@ -65,7 +71,8 @@ struct Base {
 /**
  * @brief Interface for vector-like objects.
  */
-struct Vector : public Base {
+class Vector : public Base {
+public:
     /**
      * @return Length of the vector.
      */
@@ -73,7 +80,7 @@ struct Vector : public Base {
 
     /**
      * Set the name of a vector element.
-     * This method should only be called if the `Vector` instance was constructed with support for names.
+     * This method should only be called if the `Vector` instance was conclassed with support for names.
      *
      * @param i Index of a vector element.
      * @param n Name for the vector element.
@@ -91,7 +98,8 @@ struct Vector : public Base {
 /**
  * @brief Interface for integer vectors.
  */
-struct IntegerVector : public Vector {
+class IntegerVector : public Vector {
+public:
     Type type() const {
         return INTEGER;
     }
@@ -108,7 +116,8 @@ struct IntegerVector : public Vector {
 /**
  * @brief Interface for a double-precision vector.
  */
-struct NumberVector : public Vector {
+class NumberVector : public Vector {
+public:
     Type type() const {
         return NUMBER;
     }
@@ -125,7 +134,8 @@ struct NumberVector : public Vector {
 /**
  * @brief Interface for a string vector.
  */
-struct StringVector : public Vector {
+class StringVector : public Vector {
+public:
     Type type() const {
         return STRING;
     }
@@ -155,7 +165,8 @@ struct StringVector : public Vector {
 /**
  * @brief Interface for a boolean vector.
  */
-struct BooleanVector : public Vector {
+class BooleanVector : public Vector {
+public:
     Type type() const {
         return BOOLEAN;
     }
@@ -175,7 +186,8 @@ struct BooleanVector : public Vector {
  * This is considered a "vector" in terms of its indices, not its levels.
  * So, settings like `Vector::use_names()` and `Vector::is_scalar()` refer to the underlying integer indices.
  */
-struct Factor : public Vector {
+class Factor : public Vector {
+public:
     Type type() const {
         return FACTOR;
     }
@@ -200,7 +212,8 @@ struct Factor : public Vector {
 /**
  * @brief Representation of R's `NULL`.
  */
-struct Nothing : public Base {
+class Nothing : public Base {
+public:
     Type type() const {
         return NOTHING;
     }
@@ -211,7 +224,8 @@ struct Nothing : public Base {
  *
  * This usually captures links to external sources that can provide more details on the unsupported object.
  */
-struct External : public Base {
+class External : public Base {
+public:
     Type type() const {
         return EXTERNAL;
     }
@@ -220,7 +234,8 @@ struct External : public Base {
 /**
  * @brief Interface for lists.
  */
-struct List : public Base {
+class List : public Base {
+public:
     Type type() const {
         return LIST;
     }
@@ -240,7 +255,7 @@ struct List : public Base {
 
     /**
      * Set the name of an element of the list.
-     * This should only be called if this `List` instance was constructed with support for names.
+     * This should only be called if this `List` instance was conclassed with support for names.
      *
      * @param i Index of a list element.
      * @param n Name for the list element.

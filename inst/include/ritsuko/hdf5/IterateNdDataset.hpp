@@ -88,7 +88,7 @@ struct IterateNdDataset {
 public:
     /**
      * @return Whether the iteration is finished.
-     * All other getters should only be accessed if this is `true`.
+     * All other getters should only be accessed if this is `false`.
      */
     bool finished() const {
         return finished_internal;

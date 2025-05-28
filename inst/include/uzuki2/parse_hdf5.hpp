@@ -53,8 +53,8 @@ inline H5::DataSet check_scalar_dataset(const H5::Group& handle, const char* nam
     return dhandle;
 }
 
-template<class Host, class Function>
-void parse_integer_like(const H5::DataSet& handle, Host* ptr, bool is_scalar, Function check, const Version& version, hsize_t buffer_size) try {
+template<class Host_, class Function_>
+void parse_integer_like(const H5::DataSet& handle, Host_* ptr, bool is_scalar, Function_ check, const Version& version, hsize_t buffer_size) try {
     if (ritsuko::hdf5::exceeds_integer_limit(handle, 32, true)) {
         throw std::runtime_error("dataset cannot be represented by 32-bit signed integers");
     }
@@ -98,8 +98,8 @@ void parse_integer_like(const H5::DataSet& handle, Host* ptr, bool is_scalar, Fu
     throw std::runtime_error("failed to load integer dataset at '" + ritsuko::hdf5::get_name(handle) + "'; " + std::string(e.what()));
 }
 
-template<class Host, class Function>
-void parse_string_like(const H5::DataSet& handle, Host* ptr, bool is_scalar, Function check, hsize_t buffer_size) try {
+template<class Host_, class Function_>
+void parse_string_like(const H5::DataSet& handle, Host_* ptr, bool is_scalar, Function_ check, hsize_t buffer_size) try {
     if (!ritsuko::hdf5::is_utf8_string(handle)) {
         throw std::runtime_error("expected a datatype that can be represented by a UTF-8 encoded string");
     }
@@ -129,8 +129,8 @@ void parse_string_like(const H5::DataSet& handle, Host* ptr, bool is_scalar, Fun
     throw std::runtime_error("failed to load string dataset at '" + ritsuko::hdf5::get_name(handle) + "'; " + std::string(e.what()));
 }
 
-template<class Host, class Function>
-void parse_numbers(const H5::DataSet& handle, Host* ptr, bool is_scalar, Function check, const Version& version, hsize_t buffer_size) try {
+template<class Host_, class Function_>
+void parse_numbers(const H5::DataSet& handle, Host_* ptr, bool is_scalar, Function_ check, const Version& version, hsize_t buffer_size) try {
     if (version.lt(1, 3)) {
         if (handle.getTypeClass() != H5T_FLOAT) {
             throw std::runtime_error("expected a floating-point dataset");
@@ -193,8 +193,8 @@ void parse_numbers(const H5::DataSet& handle, Host* ptr, bool is_scalar, Functio
     throw std::runtime_error("failed to load floating-point dataset at '" + ritsuko::hdf5::get_name(handle) + "'; " + std::string(e.what()));
 }
 
-template<class Host>
-void extract_names(const H5::Group& handle, Host* ptr, hsize_t buffer_size) try {
+template<class Host_>
+void extract_names(const H5::Group& handle, Host_* ptr, hsize_t buffer_size) try {
     if (handle.childObjType("names") != H5O_TYPE_DATASET) {
         throw std::runtime_error("expected a dataset");
     }
@@ -218,8 +218,8 @@ void extract_names(const H5::Group& handle, Host* ptr, hsize_t buffer_size) try 
     throw std::runtime_error("failed to load names at '" + ritsuko::hdf5::get_name(handle) + "'; " + std::string(e.what()));
 }
 
-template<class Provisioner, class Externals>
-std::shared_ptr<Base> parse_inner(const H5::Group& handle, Externals& ext, const Version& version, hsize_t buffer_size) try {
+template<class Provisioner_, class Externals_>
+std::shared_ptr<Base> parse_inner(const H5::Group& handle, Externals_& ext, const Version& version, hsize_t buffer_size) try {
     // Deciding what type we're dealing with.
     auto object_type = ritsuko::hdf5::open_and_load_scalar_string_attribute(handle, "uzuki_object");
     std::shared_ptr<Base> output;
@@ -229,14 +229,14 @@ std::shared_ptr<Base> parse_inner(const H5::Group& handle, Externals& ext, const
         size_t len = dhandle.getNumObjs();
 
         bool named = handle.exists("names");
-        auto lptr = Provisioner::new_List(len, named);
+        auto lptr = Provisioner_::new_List(len, named);
         output.reset(lptr);
 
         try {
             for (size_t i = 0; i < len; ++i) {
                 auto istr = std::to_string(i);
                 auto lhandle = ritsuko::hdf5::open_group(dhandle, istr.c_str());
-                lptr->set(i, parse_inner<Provisioner>(lhandle, ext, version, buffer_size));
+                lptr->set(i, parse_inner<Provisioner_>(lhandle, ext, version, buffer_size));
             }
         } catch (std::exception& e) {
             throw std::runtime_error("failed to parse list contents in 'data'; " + std::string(e.what()));
@@ -259,7 +259,7 @@ std::shared_ptr<Base> parse_inner(const H5::Group& handle, Externals& ext, const
         bool named = handle.exists("names");
 
         if (vector_type == "integer") {
-            auto iptr = Provisioner::new_Integer(len, named, is_scalar);
+            auto iptr = Provisioner_::new_Integer(len, named, is_scalar);
             output.reset(iptr);
             parse_integer_like(
                 dhandle,
@@ -271,7 +271,7 @@ std::shared_ptr<Base> parse_inner(const H5::Group& handle, Externals& ext, const
             );
 
         } else if (vector_type == "boolean") {
-            auto bptr = Provisioner::new_Boolean(len, named, is_scalar);
+            auto bptr = Provisioner_::new_Boolean(len, named, is_scalar);
             output.reset(bptr);
             parse_integer_like(
                 dhandle,
@@ -306,7 +306,7 @@ std::shared_ptr<Base> parse_inner(const H5::Group& handle, Externals& ext, const
                 ordered = tmp_ordered > 0;
             }
 
-            auto fptr = Provisioner::new_Factor(len, named, is_scalar, levlen, ordered);
+            auto fptr = Provisioner_::new_Factor(len, named, is_scalar, levlen, ordered);
             output.reset(fptr);
             parse_integer_like(
                 dhandle,
@@ -337,7 +337,7 @@ std::shared_ptr<Base> parse_inner(const H5::Group& handle, Externals& ext, const
             auto hhandle = ritsuko::hdf5::vls::open_heap(handle, "heap");
             auto missingness = ritsuko::hdf5::open_and_load_optional_string_missing_placeholder(dhandle, "missing-value-placeholder");
 
-            auto ptr = Provisioner::new_String(len, named, is_scalar, StringVector::NONE);
+            auto ptr = Provisioner_::new_String(len, named, is_scalar, StringVector::NONE);
             output.reset(ptr);
 
             if (is_scalar) {
@@ -398,7 +398,7 @@ std::shared_ptr<Base> parse_inner(const H5::Group& handle, Externals& ext, const
                 }
             }
 
-            auto sptr = Provisioner::new_String(len, named, is_scalar, format);
+            auto sptr = Provisioner_::new_String(len, named, is_scalar, format);
             output.reset(sptr);
             if (format == StringVector::NONE) {
                 parse_string_like(
@@ -437,7 +437,7 @@ std::shared_ptr<Base> parse_inner(const H5::Group& handle, Externals& ext, const
             }
 
         } else if (vector_type == "number") {
-            auto dptr = Provisioner::new_Number(len, named, is_scalar);
+            auto dptr = Provisioner_::new_Number(len, named, is_scalar);
             output.reset(dptr);
             parse_numbers(
                 dhandle,
@@ -458,7 +458,7 @@ std::shared_ptr<Base> parse_inner(const H5::Group& handle, Externals& ext, const
         }
 
     } else if (object_type == "nothing") {
-        output.reset(Provisioner::new_Nothing());
+        output.reset(Provisioner_::new_Nothing());
 
     } else if (object_type == "external") {
         auto ihandle = ritsuko::hdf5::open_dataset(handle, "index");
@@ -478,7 +478,7 @@ std::shared_ptr<Base> parse_inner(const H5::Group& handle, Externals& ext, const
             throw std::runtime_error("external index out of range at 'index'");
         }
 
-        output.reset(Provisioner::new_External(ext.get(idx)));
+        output.reset(Provisioner_::new_External(ext.get(idx)));
 
     } else {
         throw std::runtime_error("unknown uzuki2 object type '" + object_type + "'");
@@ -487,6 +487,7 @@ std::shared_ptr<Base> parse_inner(const H5::Group& handle, Externals& ext, const
     return output;
 } catch (std::exception& e) {
     throw std::runtime_error("failed to load object at '" + ritsuko::hdf5::get_name(handle) + "'; " + std::string(e.what()));
+    return nullptr; // for consistency.
 }
 /**
  * @endcond
@@ -508,20 +509,20 @@ struct Options {
 };
 
 /**
- * @tparam Provisioner A class namespace defining static methods for creating new `Base` objects.
- * @tparam Externals Class describing how to resolve external references for type `EXTERNAL`.
+ * @tparam Provisioner_ A class namespace defining static methods for creating new `Base` objects.
+ * @tparam Externals_ Class describing how to resolve external references for type `EXTERNAL`.
  *
  * @param handle Handle for a HDF5 group corresponding to the list.
  * @param ext Instance of an external reference resolver class.
  * @param options Optional parameters.
  *
  * @return A `ParsedList` containing a pointer to the root `Base` object.
- * Depending on `Provisioner`, this may contain references to all nested objects. 
+ * Depending on `Provisioner_`, this may contain references to all nested objects. 
  * 
  * Any invalid representations in `contents` will cause an error to be thrown.
  *
  * @section provisioner-contract Provisioner requirements
- * The `Provisioner` class is expected to provide the following static methods:
+ * The `Provisioner_` class is expected to provide the following static methods:
  *
  * - `Nothing* new_Nothing()`, which returns a new instance of a `Nothing` subclass.
  * - `Other* new_Other(void* p)`, which returns a new instance of a `Other` subclass.
@@ -546,14 +547,14 @@ struct Options {
  *   If `o = true`, the levels should be assumed to be sorted.
  *
  * @section external-contract Externals requirements
- * The `Externals` class is expected to provide the following `const` methods:
+ * The `Externals_` class is expected to provide the following `const` methods:
  *
  * - `void* get(size_t i) const`, which returns a pointer to an "external" object, given the index of that object.
- *   This will be stored in the corresponding `Other` subclass generated by `Provisioner::new_Other`.
+ *   This will be stored in the corresponding `Other` subclass generated by `Provisioner_::new_External`.
  * - `size_t size()`, which returns the number of available external references.
  */
-template<class Provisioner, class Externals>
-ParsedList parse(const H5::Group& handle, Externals ext, Options options = Options()) {
+template<class Provisioner_, class Externals_>
+ParsedList parse(const H5::Group& handle, Externals_ ext, const Options& options) {
     Version version;
     if (handle.attrExists("uzuki_version")) {
         auto ver_str = ritsuko::hdf5::open_and_load_scalar_string_attribute(handle, "uzuki_version");
@@ -563,7 +564,7 @@ ParsedList parse(const H5::Group& handle, Externals ext, Options options = Optio
     }
 
     ExternalTracker etrack(std::move(ext));
-    auto ptr = parse_inner<Provisioner>(handle, etrack, version, options.buffer_size);
+    auto ptr = parse_inner<Provisioner_>(handle, etrack, version, options.buffer_size);
 
     if (options.strict_list && ptr->type() != LIST) {
         throw std::runtime_error("top-level object should represent an R list");
@@ -574,29 +575,10 @@ ParsedList parse(const H5::Group& handle, Externals ext, Options options = Optio
 }
 
 /**
- * Parse HDF5 file contents using the **uzuki2** specification, given the group handle.
- * It is assumed that there are no external references.
- *
- * @tparam Provisioner A class namespace defining static methods for creating new `Base` objects.
- *
- * @param handle Handle for a HDF5 group corresponding to the list.
- * @param options Optional parameters.
- *
- * @return A `ParsedList` containing a pointer to the root `Base` object.
- * Depending on `Provisioner`, this may contain references to all nested objects. 
- * 
- * Any invalid representations in `contents` will cause an error to be thrown.
- */
-template<class Provisioner>
-ParsedList parse(const H5::Group& handle, Options options = Options()) {
-    return parse<Provisioner>(handle, uzuki2::DummyExternals(0), std::move(options));
-}
-
-/**
  * Parse HDF5 file contents using the **uzuki2** specification, given the file path.
  *
- * @tparam Provisioner A class namespace defining static methods for creating new `Base` objects.
- * @tparam Externals Class describing how to resolve external references for type `EXTERNAL`.
+ * @tparam Provisioner_ A class namespace defining static methods for creating new `Base` objects.
+ * @tparam Externals_ Class describing how to resolve external references for type `EXTERNAL`.
  *
  * @param file Path to a HDF5 file.
  * @param name Name of the HDF5 group containing the list in `file`.
@@ -604,35 +586,14 @@ ParsedList parse(const H5::Group& handle, Options options = Options()) {
  * @param options Optional parameters.
  *
  * @return A `ParsedList` containing a pointer to the root `Base` object.
- * Depending on `Provisioner`, this may contain references to all nested objects. 
+ * Depending on `Provisioner_`, this may contain references to all nested objects. 
  * 
  * Any invalid representations in `contents` will cause an error to be thrown.
  */
-template<class Provisioner, class Externals>
-ParsedList parse(const std::string& file, const std::string& name, Externals ext, Options options = Options()) {
+template<class Provisioner_, class Externals_>
+ParsedList parse(const std::string& file, const std::string& name, Externals_ ext, Options options = Options()) {
     H5::H5File handle(file, H5F_ACC_RDONLY);
-    return parse<Provisioner>(ritsuko::hdf5::open_group(handle, name.c_str()), std::move(ext), std::move(options));
-}
-
-/**
- * Parse HDF5 file contents using the **uzuki2** specification, given the file path.
- * It is assumed that there are no external references.
- *
- * @tparam Provisioner A class namespace defining static methods for creating new `Base` objects.
- *
- * @param file Path to a HDF5 file.
- * @param name Name of the HDF5 group containing the list in `file`.
- * @param options Optional parameters.
- *
- * @return A `ParsedList` containing a pointer to the root `Base` object.
- * Depending on `Provisioner`, this may contain references to all nested objects. 
- * 
- * Any invalid representations in `contents` will cause an error to be thrown.
- */
-template<class Provisioner>
-ParsedList parse(const std::string& file, const std::string& name, Options options = Options()) {
-    H5::H5File handle(file, H5F_ACC_RDONLY);
-    return parse<Provisioner>(ritsuko::hdf5::open_group(handle, name.c_str()), uzuki2::DummyExternals(0), std::move(options));
+    return parse<Provisioner_>(ritsuko::hdf5::open_group(handle, name.c_str()), std::move(ext), options);
 }
 
 /**
@@ -643,10 +604,8 @@ ParsedList parse(const std::string& file, const std::string& name, Options optio
  * @param num_external Expected number of external references. 
  * @param options Optional parameters.
  */
-inline void validate(const H5::Group& handle, int num_external = 0, Options options = Options()) {
-    DummyExternals ext(num_external);
-    parse<DummyProvisioner>(handle, ext, std::move(options));
-    return;
+inline void validate(const H5::Group& handle, int num_external, const Options& options) {
+    parse<DummyProvisioner>(handle, DummyExternals(num_external), options);
 }
 
 /**
@@ -658,10 +617,8 @@ inline void validate(const H5::Group& handle, int num_external = 0, Options opti
  * @param num_external Expected number of external references. 
  * @param options Optional parameters.
  */
-inline void validate(const std::string& file, const std::string& name, int num_external = 0, Options options = Options()) {
-    DummyExternals ext(num_external);
-    parse<DummyProvisioner>(file, name, ext, std::move(options));
-    return;
+inline void validate(const std::string& file, const std::string& name, int num_external, const Options& options) {
+    parse<DummyProvisioner>(file, name, DummyExternals(num_external), options);
 }
 
 }

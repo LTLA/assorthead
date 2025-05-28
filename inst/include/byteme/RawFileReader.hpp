@@ -3,10 +3,13 @@
 
 #include <vector>
 #include <stdexcept>
-#include <string>
 #include <cstdio>
+#include <cstddef>
+#include <optional>
+
 #include "Reader.hpp"
 #include "SelfClosingFILE.hpp"
+#include "check_buffer_size.hpp"
 
 /**
  * @file RawFileReader.hpp
@@ -17,24 +20,41 @@
 namespace byteme {
 
 /**
+ * @brief Options for the `RawFileReader` constructor.
+ */
+struct RawFileReaderOptions {
+    /**
+     * Size of the buffer in which to store the loaded file contents.
+     * Larger values usually reduce computational time at the cost of increased memory usage.
+     */
+    std::size_t buffer_size = 65536;
+
+    /**
+     * Size of the internal buffer used by `setvbuf()`.
+     * Larger values usually reduce computational time at the cost of increased memory usage.
+     * If no value is supplied, the default buffer size is not changed.
+     */
+    std::optional<unsigned> bufsiz;
+};
+
+/**
  * @brief Read bytes from a file, usually text.
  *
  * This is basically a simple wrapper around `FILE` structures, with correct closing and error checking.
  * Mostly provided because I always forget how to interact with `ifstream` objects when I want a sequence of bytes.
  */
-class RawFileReader : public Reader {
+class RawFileReader final : public Reader {
 public:
     /**
      * @param path Path to the file.
-     * @param buffer_size Size of the buffer to use for reading.
+     * @param options Further options.
      */
-    RawFileReader(const char* path, size_t buffer_size = 65536) : my_file(path, "rb"), my_buffer(buffer_size) {}
-
-    /**
-     * @param path Path to the file.
-     * @param buffer_size Size of the buffer to use for reading.
-     */
-    RawFileReader(const std::string& path, size_t buffer_size = 65536) : RawFileReader(path.c_str(), buffer_size) {}
+    RawFileReader(const char* path, const RawFileReaderOptions& options) :
+        my_file(path, "rb"),
+        my_buffer(check_buffer_size(options.buffer_size))
+    {
+        set_optional_bufsiz(my_file, options.bufsiz);
+    }
 
 public:
     bool load() {
@@ -60,14 +80,14 @@ public:
         return my_buffer.data();
     }
 
-    size_t available() const {
+    std::size_t available() const {
         return my_read;
     }
 
 private:
     SelfClosingFILE my_file;
     std::vector<unsigned char> my_buffer;
-    size_t my_read = 0;
+    std::size_t my_read = 0;
     bool my_okay = true;
 };
 

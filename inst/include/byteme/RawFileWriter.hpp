@@ -3,8 +3,10 @@
 
 #include <vector>
 #include <stdexcept>
-#include <string>
 #include <cstdio>
+#include <cstddef>
+#include <optional>
+
 #include "Writer.hpp"
 #include "SelfClosingFILE.hpp"
 
@@ -17,34 +19,38 @@
 namespace byteme {
 
 /**
+ * @brief Options for the `RawFileWriter` constructor.
+ */
+struct RawFileWriterOptions {
+    /**
+     * Size of the internal buffer used by `setvbuf()`.
+     * Larger values usually reduce computational time at the cost of increased memory usage.
+     * If no value is supplied, the default buffer size is not changed.
+     */
+    std::optional<std::size_t> bufsiz;
+};
+
+/**
  * @brief Write bytes to a file.
  *
  * This class will write bytes to a file without any further transformations.
  * It is basically a simple wrapper around `FILE` structures, with correct closing and error checking.
  */
-class RawFileWriter : public Writer {
+class RawFileWriter final : public Writer {
 public:
     /**
      * @param path Path to the file.
-     * @param buffer_size Size of the buffer to use for writing.
+     * @param options Further options.
      */
-    RawFileWriter(const char* path, size_t buffer_size = 65536) : my_file(path, "wb") {
-        if (std::setvbuf(my_file.handle, nullptr, _IOFBF, buffer_size)) {
-            throw std::runtime_error("failed to set a buffer size for file writing");
-        }
+    RawFileWriter(const char* path, const RawFileWriterOptions& options) : my_file(path, "wb") {
+        set_optional_bufsiz(my_file, options.bufsiz);
     }
-
-    /**
-     * @param path Path to the file.
-     * @param buffer_size Size of the buffer to use for writing.
-     */
-    RawFileWriter(const std::string& path, size_t buffer_size = 65536) : RawFileWriter(path.c_str(), buffer_size) {}
 
 public:
     using Writer::write;
 
-    void write(const unsigned char* buffer, size_t n) {
-        size_t ok = std::fwrite(buffer, sizeof(unsigned char), n, my_file.handle);
+    void write(const unsigned char* buffer, std::size_t n) {
+        std::size_t ok = std::fwrite(buffer, sizeof(unsigned char), n, my_file.handle);
         if (ok < n) {
             throw std::runtime_error("failed to write raw binary file (fwrite error " + std::to_string(std::ferror(my_file.handle)) + ")");
         }

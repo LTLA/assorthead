@@ -42,7 +42,7 @@ void validate_indices(const H5::DataSet& ihandle, const std::vector<uint64_t>& i
         }
 
         // Checking for sortedness and good things.
-        Index_ previous;
+        Index_ previous = 0;
         for (auto x = start; x < end; ++x, stream.next()) {
             auto i = stream.get();
             if (i < 0) {

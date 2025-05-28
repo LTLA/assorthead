@@ -1,10 +1,13 @@
 #ifndef BYTEME_ISTREAM_READER_HPP
 #define BYTEME_ISTREAM_READER_HPP
 
-#include <istream>
 #include <vector>
 #include <stdexcept>
+#include <memory>
+#include <cstddef>
+
 #include "Reader.hpp"
+#include "check_buffer_size.hpp"
 
 /**
  * @file IstreamReader.hpp
@@ -15,22 +18,43 @@
 namespace byteme {
 
 /**
+ * @brief Options for `IstreamReader` construction.
+ */
+struct IstreamReaderOptions {
+    /**
+     * Size of the internal buffer to fill from the stream.
+     * Larger values usually reduce computational time at the cost of increased memory usage.
+     */
+    std::size_t buffer_size = 65536;
+};
+
+/**
  * @brief Read bytes from a `std::istream`.
  *
- * @tparam Pointer_ A (possibly smart) pointer to an `std::istream` object.
+ * @tparam Pointer_ Pointer to a class providing an input stream of bytes, satisfying the `std::istream` interface.
+ * This is most typically a `std::unique_ptr<std::istream> >` but a concrete subclass may also be used to encourage compiler devirtualization.
+ * Either a raw or smart pointer may be used depending on how the lifetime of the pointed-to object is managed.
  *
  * This is just a wrapper around `std::istream::read`,
  * mostly to avoid having to remember the correct way to check for end of file.
  */
-template<class Pointer_ = std::istream*>
-class IstreamReader : public Reader {
+template<class Pointer_>
+class IstreamReader final : public Reader {
 public:
     /**
      * @param input Pointer to an input stream.
-     * @param buffer_size Size of the buffer to use for reading.
+     * @param options Further options.
      */
-    IstreamReader(Pointer_ input, size_t buffer_size = 65536) : my_input(std::move(input)), my_buffer(buffer_size) {}
+    IstreamReader(Pointer_ input, const IstreamReaderOptions& options) : 
+        my_input(std::move(input)),
+        my_buffer(
+            check_buffer_size<std::streamsize>( // for istream::read().
+                check_buffer_size(options.buffer_size)
+            )
+        )
+    {}
 
+public:
     bool load() {
         if (!my_okay) {
             return false;
@@ -54,14 +78,14 @@ public:
         return my_buffer.data();
     }
 
-    size_t available() const {
+    std::size_t available() const {
         return my_read;
     }
 
 private:
     Pointer_ my_input;
     std::vector<unsigned char> my_buffer;
-    size_t my_read = 0;
+    std::size_t my_read = 0;
     bool my_okay = true;
 };
 

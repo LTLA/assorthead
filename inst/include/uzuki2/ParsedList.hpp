@@ -15,11 +15,9 @@ namespace uzuki2 {
 
 /**
  * @brief Results of parsing a list from file.
- *
- * This wraps a pointer to `Base` and is equivalent to `shared_ptr<Base>` for most applications.
- * It contains some extra metadata to hold the version information. 
  */
 struct ParsedList {
+public:
     /**
      * @cond
      */
@@ -27,44 +25,6 @@ struct ParsedList {
     /**
      * @endcond
      */
-
-    /**
-     * @return Pointer to `Base`.
-     */
-    Base* get() const {
-        return ptr.get();
-    }
-
-    /**
-     * @return Reference to `Base`.
-     */
-    Base& operator*() const {
-        return *ptr;
-    }
-
-    /**
-     * @return Pointer to `Base`.
-     */
-    Base* operator->() const {
-        return ptr.operator->();
-    }
-
-    /**
-     * @return Whether this stores a non-null pointer.
-     */
-    operator bool() const {
-        return ptr.operator bool();
-    }
-
-    /**
-     * Calls the corresponding method for `ptr`.
-     * @tparam Args_ Assorted arguments.
-     * @param args Arguments forwarded to the corresponding method for `ptr`.
-     */
-    template<typename ...Args_>
-    void reset(Args_&& ... args) const {
-        ptr.reset(std::forward<Args_>(args)...);
-    }
 
     /**
      * Version of the **uzuki2** specification.
@@ -75,6 +35,35 @@ struct ParsedList {
      * Pointer to the `Base` object.
      */
     std::shared_ptr<Base> ptr;
+
+public:
+    /**
+     * @cond
+     */
+    // Provided for back-compatibility only.
+    Base* get() const {
+        return ptr.get();
+    }
+
+    Base& operator*() const {
+        return *ptr;
+    }
+
+    Base* operator->() const {
+        return ptr.operator->();
+    }
+
+    operator bool() const {
+        return ptr.operator bool();
+    }
+
+    template<typename ...Args_>
+    void reset(Args_&& ... args) const {
+        ptr.reset(std::forward<Args_>(args)...);
+    }
+    /**
+     * @endcond
+     */
 };
 
 }
