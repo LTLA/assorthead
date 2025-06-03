@@ -6,6 +6,7 @@
 #include <utility>
 #include <stdexcept>
 #include <memory>
+
 #include "tatami/tatami.hpp"
 
 namespace tatami_r { 
@@ -27,6 +28,15 @@ inline Rcpp::RObject get_class_object(const Rcpp::RObject& incoming) {
 
 inline std::string get_class_name(const Rcpp::RObject& incoming) {
     return make_to_string(get_class_object(incoming));
+}
+
+template<typename Index_>
+Rcpp::IntegerVector increment_indices(const std::vector<Index_>& indices) {
+    Rcpp::IntegerVector output(indices.begin(), indices.end());
+    for (auto& x : output) {
+        ++x;
+    }
+    return output;
 }
 
 }

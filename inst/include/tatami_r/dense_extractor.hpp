@@ -4,6 +4,9 @@
 #include "Rcpp.h"
 #include "tatami/tatami.hpp"
 #include "tatami_chunked/tatami_chunked.hpp"
+
+#include "utils.hpp"
+#include "parallelize.hpp"
 #include "dense_matrix.hpp"
 
 #include <vector>
@@ -67,9 +70,9 @@ public:
         my_extract_args[static_cast<int>(!my_row)] = Rcpp::IntegerVector::create(i + 1);
         auto obj = my_dense_extractor(my_matrix, my_extract_args);
         if (my_row) {
-            parse_dense_matrix(obj, true, buffer, 0, 0, 1, my_non_target_length);
+            parse_dense_matrix(obj, 0, 0, true, buffer, 1, my_non_target_length);
         } else {
-            parse_dense_matrix(obj, false, buffer, 0, 0, my_non_target_length, 1);
+            parse_dense_matrix(obj, 0, 0, false, buffer, my_non_target_length, 1);
         }
 
 #ifdef TATAMI_R_PARALLELIZE_UNKNOWN 
@@ -128,7 +131,7 @@ public:
             [&]() -> Slab {
                 return my_factory.create();
             },
-            [&](Index_ id, Slab& cache) {
+            [&](Index_ id, Slab& cache) -> void {
 #ifdef TATAMI_R_PARALLELIZE_UNKNOWN 
                 // This involves some Rcpp initializations, so we lock it just in case.
                 auto& mexec = executor();
@@ -143,9 +146,9 @@ public:
 
                 auto obj = my_dense_extractor(my_matrix, my_extract_args);
                 if (my_row) {
-                    parse_dense_matrix(obj, true, cache.data, 0, 0, chunk_len, my_non_target_length);
+                    parse_dense_matrix(obj, 0, 0, true, cache.data, chunk_len, my_non_target_length);
                 } else {
-                    parse_dense_matrix(obj, false, cache.data, 0, 0, my_non_target_length, chunk_len);
+                    parse_dense_matrix(obj, 0, 0, false, cache.data, my_non_target_length, chunk_len);
                 }
 
 #ifdef TATAMI_R_PARALLELIZE_UNKNOWN 
@@ -210,10 +213,13 @@ public:
             [&]() -> Slab {
                 return my_factory.create();
             },
-            [&](std::vector<std::pair<Index_, Slab*> >& to_populate) {
+            [&](std::vector<std::pair<Index_, Slab*> >& to_populate) -> void {
                 // Sorting them so that the indices are in order.
-                if (!std::is_sorted(to_populate.begin(), to_populate.end(), [&](const std::pair<Index_, Slab*>& left, const std::pair<Index_, Slab*> right) { return left.first < right.first; })) {
-                    std::sort(to_populate.begin(), to_populate.end(), [&](const std::pair<Index_, Slab*>& left, const std::pair<Index_, Slab*> right) { return left.first < right.first; });
+                auto cmp = [](const std::pair<Index_, Slab*>& left, const std::pair<Index_, Slab*> right) -> bool {
+                    return left.first < right.first; 
+                };
+                if (!std::is_sorted(to_populate.begin(), to_populate.end(), cmp)) {
+                    std::sort(to_populate.begin(), to_populate.end(), cmp);
                 }
 
                 Index_ total_len = 0;
@@ -245,9 +251,9 @@ public:
                     auto chunk_start = my_chunk_ticks[p.first];
                     Index_ chunk_len = my_chunk_ticks[p.first + 1] - chunk_start;
                     if (my_row) {
-                        parse_dense_matrix(obj, true, p.second->data, current, 0, chunk_len, my_non_target_length);
+                        parse_dense_matrix(obj, current, 0, true, p.second->data, chunk_len, my_non_target_length);
                     } else {
-                        parse_dense_matrix(obj, false, p.second->data, 0, current, my_non_target_length, chunk_len);
+                        parse_dense_matrix(obj, 0, current, false, p.second->data, my_non_target_length, chunk_len);
                     }
                     current += chunk_len;
                 }
@@ -293,7 +299,7 @@ public:
             dense_extractor,
             row,
             std::move(oracle),
-            [&]() {
+            [&]{
                 Rcpp::IntegerVector output(non_target_dim);
                 std::iota(output.begin(), output.end(), 1);
                 return output;
@@ -332,7 +338,7 @@ public:
             dense_extractor,
             row,
             std::move(oracle),
-            [&]() {
+            [&]{
                 Rcpp::IntegerVector output(block_length);
                 std::iota(output.begin(), output.end(), block_start + 1);
                 return output;
@@ -370,13 +376,7 @@ public:
             dense_extractor,
             row,
             std::move(oracle),
-            [&]() {
-                Rcpp::IntegerVector output(indices_ptr->begin(), indices_ptr->end());
-                for (auto& i : output) {
-                    ++i;
-                }
-                return output;
-            }(),
+            increment_indices(*indices_ptr),
             ticks,
             map,
             stats

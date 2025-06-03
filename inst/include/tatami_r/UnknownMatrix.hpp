@@ -3,6 +3,8 @@
 
 #include "Rcpp.h"
 #include "tatami/tatami.hpp"
+
+#include "parallelize.hpp"
 #include "dense_extractor.hpp"
 #include "sparse_extractor.hpp"
 

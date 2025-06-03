@@ -144,49 +144,52 @@ void parse_sparse_matrix(
     bool needs_value = !value_ptrs.empty();
     bool needs_index = !index_ptrs.empty();
 
-    parse_SVT_SparseMatrix(matrix, [&](int c, const auto& curindices, bool all_ones, const auto& curvalues) {
-        size_t nnz = curindices.size();
+    parse_SVT_SparseMatrix(
+        matrix,
+        [&](int c, const auto& curindices, bool all_ones, const auto& curvalues) -> void {
+            size_t nnz = curindices.size();
 
-        // Note that non-empty value_ptrs and index_ptrs may be longer than the
-        // number of rows/columns in the SVT matrix, due to the reuse of slabs.
-        if (row) {
-            if (needs_value) {
-                if (all_ones) {
-                    for (size_t i = 0; i < nnz; ++i) {
-                        auto ix = curindices[i];
-                        value_ptrs[ix][counts[ix]] = 1;
-                    }
-                } else {
-                    for (size_t i = 0; i < nnz; ++i) {
-                        auto ix = curindices[i];
-                        value_ptrs[ix][counts[ix]] = curvalues[i];
+            // Note that non-empty value_ptrs and index_ptrs may be longer than the
+            // number of rows/columns in the SVT matrix, due to the reuse of slabs.
+            if (row) {
+                if (needs_value) {
+                    if (all_ones) {
+                        for (size_t i = 0; i < nnz; ++i) {
+                            auto ix = curindices[i];
+                            value_ptrs[ix][counts[ix]] = 1;
+                        }
+                    } else {
+                        for (size_t i = 0; i < nnz; ++i) {
+                            auto ix = curindices[i];
+                            value_ptrs[ix][counts[ix]] = curvalues[i];
+                        }
                     }
                 }
-            }
-            if (needs_index) {
+                if (needs_index) {
+                    for (size_t i = 0; i < nnz; ++i) {
+                        auto ix = curindices[i];
+                        index_ptrs[ix][counts[ix]] = c;
+                    }
+                }
                 for (size_t i = 0; i < nnz; ++i) {
-                    auto ix = curindices[i];
-                    index_ptrs[ix][counts[ix]] = c;
+                    ++(counts[curindices[i]]);
                 }
-            }
-            for (size_t i = 0; i < nnz; ++i) {
-                ++(counts[curindices[i]]);
-            }
 
-        } else {
-            if (needs_value) {
-                if (all_ones) {
-                    std::fill_n(value_ptrs[c], nnz, 1);
-                } else {
-                    std::copy(curvalues.begin(), curvalues.end(), value_ptrs[c]);
+            } else {
+                if (needs_value) {
+                    if (all_ones) {
+                        std::fill_n(value_ptrs[c], nnz, 1);
+                    } else {
+                        std::copy(curvalues.begin(), curvalues.end(), value_ptrs[c]);
+                    }
                 }
+                if (needs_index) {
+                    std::copy(curindices.begin(), curindices.end(), index_ptrs[c]);
+                }
+                counts[c] = nnz;
             }
-            if (needs_index) {
-                std::copy(curindices.begin(), curindices.end(), index_ptrs[c]);
-            }
-            counts[c] = nnz;
         }
-    });
+    );
 }
 /**
  * @endcond
