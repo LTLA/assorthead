@@ -3,13 +3,14 @@
 
 #include <vector>
 #include <string>
-#include <cstring>
 #include <complex>
 #include <type_traits>
+#include <stdexcept>
 #include <memory>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <limits>
 
 #include "byteme/RawBufferReader.hpp"
 #include "byteme/PerByte.hpp"
@@ -219,16 +220,49 @@ inline std::size_t count_newlines(const std::vector<char>& buffer) {
  * @endcond
  */
 
-/* GENERAL COMMENTS:
- * - This sticks to the specification described at https://math.nist.gov/MatrixMarket/reports/MMformat.ps.gz
- * - We will allow both tabs and whitespaces when considering a 'blank' character.
- * - We must consider the possibility that the final line of the file is not newline terminated.
- */
-
 /**
  * @brief Parse a matrix from a Matrix Market file.
  *
  * @tparam Input_ Class for the source of input bytes, satisfying the `byteme::PerByteInterface` instance.
+ *
+ * This parses a Matrix Market file according to the specification described at https://math.nist.gov/MatrixMarket/reports/MMformat.ps.gz.
+ * It is expected that users call `scan_preamble()` to determine the field type (see `eminem::Field` for supported values),
+ * after which they may call one of `scan_integer()`, `scan_real()`, etc. to parse the rest of the file.
+ * An error will be thrown upon detecting a non-compliant file.
+ *
+ * As the Matrix Market specification is somewhat vague in parts, we apply the following refinements:
+ *
+ * - We define a "blank" character as a horizontal tab, a space (ASCII 32) or a carriage return.
+ *   A new line is only defined by the line feed character (ASCII 10).
+ *   The carriage return is only considered as a blank for compatibility with systems that use CRLF to define new lines,
+ *   and we do not check for whether the carriage return is followed by a line feed.
+ * - The final line of the file may or may not be newline terminated.
+ * - Integer values for the row/column indices, number of rows/columns and number of lines should be a sequence of one or more digits.
+ *   Leading zeros are ignored and will not be interpreted as octal.
+ *   An error is thrown if overflow of the `Index` type occurs in `scan_preamble()`.
+ *   An error is also thrown if the row/column indices in any data line exceed the number of rows/columns in the preamble,
+ *   or if the observed number of data lines exceeds the expected number for coordinate matrices/vectors.
+ * - Integer data values should be a sequence of one or more digits, optionally preceded by a `+` or `-` sign.
+ *   Leading zeros are ignored and will not be interpreted as octal.
+ *   An error is thrown if overflow of the `Type_` type occurs in `scan_integer()`.
+ *
+ * Real data values should follow one of the following formats:
+ *
+ * - `(sign)[digit sequence](exponent)`
+ * - `(sign)[digit sequence].(exponent)`
+ * - `(sign).[digit sequence](exponent)`
+ * - `(sign)[digit sequence].[digit sequence](exponent)`
+ *
+ * The digit sequence should contain one or mor digits, possibly containing leading zeros that will be ignored.
+ * The sign is optional and should be either `+` or `-`.
+ * The exponent is optional should have the form `e(sign)[digit sequence]` or `E(sign)[digit sequence]`, where the sign is again optional.
+ * We also support case-insensitive matches to `inf`, `infinity` or `nan`.
+ * This will be converted to their corresponding IEEE special values if they are available for the provided `Type_` in `scan_real()`, otherwise an error is thrown.
+ * For non-special values, no additional checks for overflow are applied. 
+ * If IEEE arithmetic is available, overflow will manifest as infinities, otherwise they will be undefined behavior.
+ * 
+ * No validation is performed to determine whether coordinates are consistent with non-general symmetries.
+ * Similarly, we do not check for the existence of multiple lines with the same row/column indices in coordinate matrices/vectors.
  */
 template<class Input_>
 class Parser {
@@ -255,7 +289,7 @@ private:
     static bool chomp(Input2_& input) {
         while (1) {
             char x = input.get();
-            if (x != ' ' && x != '\t') {
+            if (x != ' ' && x != '\t' && x != '\r') {
                 return true;
             }
             if (!(input.advance())) {
@@ -315,7 +349,7 @@ private:
         }
 
         char next = my_input->get();
-        if (next == ' ' || next == '\t') {
+        if (next == ' ' || next == '\t' || next == '\r') {
             if (!advance_and_chomp(*my_input)) { // gobble up all of the remaining horizontal space.
                 return ExpectedMatch(true, false, false);
             }
@@ -513,14 +547,15 @@ private:
         my_passed_banner = true;
 
         // Ignoring all other fields until the newline. We can use a do/while
-        // to skip a comparison because we know that the current character
-        // cannot be a newline if eol = false.
+        // to skip the initial comparison because we know that the current
+        // character cannot be a newline if eol = false.
         if (!eol) {
             do {
                 if (!(my_input->advance())) {
                     throw std::runtime_error("end of file reached before the end of the banner line");
                 }
             } while (my_input->get() != '\n'); 
+            my_input->advance(); // move past the newline.
         }
 
         ++my_current_line;
@@ -569,13 +604,24 @@ private:
             }
         };
 
+        constexpr Index max_limit = std::numeric_limits<Index>::max();
+        constexpr Index max_limit_before_mult = max_limit / 10; 
+        constexpr Index max_limit_mod = max_limit % 10; 
+
         while (1) {
             char x = input.get();
             switch(x) {
                 case '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case '9':
+                    { 
+                        Index delta = x - '0';
+                        // Structuring the conditionals so that it's most likely to short-circuit after only testing the first one.
+                        if (output.index >= max_limit_before_mult && !(output.index == max_limit_before_mult && delta <= max_limit_mod)) {
+                            throw std::runtime_error("integer overflow in " + what() + " field on line " + std::to_string(overall_line_count + 1));
+                        }
+                        output.index *= 10;
+                        output.index += delta;
+                    }
                     found = true;
-                    output.index *= 10;
-                    output.index += x - '0';
                     break;
                 case '\n':
                     // This check only needs to be put here, as all blanks should be chomped before calling
@@ -591,7 +637,7 @@ private:
                         return output;
                     }
                     throw std::runtime_error("unexpected newline when parsing " + what() + " field on line " + std::to_string(overall_line_count + 1));
-                case ' ': case '\t':
+                case ' ': case '\t': case '\r':
                     if (!advance_and_chomp(input)) { // skipping the current and subsequent blanks.
                         if constexpr(last_) {
                             return output;
@@ -685,6 +731,7 @@ private:
             my_ncols = 1;
         }
 
+        ++my_current_line;
         my_passed_size = true;
     }
 
@@ -745,6 +792,8 @@ public:
 private:
     template<typename Type_>
     struct ParseInfo {
+        ParseInfo() = default;
+        ParseInfo(Type_ value, bool remaining) : value(value), remaining(remaining) {}
         Type_ value;
         bool remaining;
     };
@@ -1358,41 +1407,55 @@ private:
     public:
         template<class Input2_>
         ParseInfo<Type_> operator()(Input2_& input, Index overall_line_count) {
-            bool negative = (input.get() == '-');
-            if (negative) {
+            char firstchar = input.get();
+            bool negative = (firstchar == '-');
+            if (negative || firstchar == '+') {
                 if (!(input.advance())) {
                     throw std::runtime_error("premature termination of an integer on line " + std::to_string(overall_line_count + 1));
                 }
             }
 
-            Type_ val = 0;
-            auto finish = [&](bool valid) -> ParseInfo<Type_> {
-                ParseInfo<Type_> output;
-                output.remaining = valid;
-                if (negative) {
-                    val *= -1;
-                }
-                output.value = val;
-                return output;
-            };
+            constexpr Type_ upper_limit = std::numeric_limits<Type_>::max();
+            constexpr Type_ upper_limit_before_mult = upper_limit / 10;
+            constexpr Type_ upper_limit_mod = upper_limit % 10;
+            constexpr Type_ lower_limit = std::numeric_limits<Type_>::lowest();
+            constexpr Type_ lower_limit_before_mult = lower_limit / 10;
+            constexpr Type_ lower_limit_mod = -(lower_limit % 10);
 
+            Type_ val = 0;
             bool found = false;
             while (1) {
                 char x = input.get();
                 switch (x) {
                     case '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case '9':
-                        val *= 10;
-                        val += x - '0';
+                        {
+                            Type_ delta = x - '0';
+                            // We have to handle negative and positive cases separately as they overflow at different thresholds.
+                            if (negative) {
+                                // Structuring the conditionals so that it's most likely to short-circuit after only testing the first one.
+                                if (val <= lower_limit_before_mult && !(val == lower_limit_before_mult && delta <= lower_limit_mod)) {
+                                    throw std::runtime_error("integer underflow on line " + std::to_string(overall_line_count + 1));
+                                }
+                                val *= 10;
+                                val -= delta;
+                            } else {
+                                if (val >= upper_limit_before_mult && !(val == upper_limit_before_mult && delta <= upper_limit_mod)) {
+                                    throw std::runtime_error("integer overflow on line " + std::to_string(overall_line_count + 1));
+                                }
+                                val *= 10;
+                                val += delta;
+                            }
+                        }
                         found = true;
                         break;
-                    case ' ': case '\t':
+                    case ' ': case '\t': case '\r':
                         if (!advance_and_chomp(input)) { // skipping past the current position before chomping.
-                            return finish(false);
+                            return ParseInfo<Type_>(val, false);
                         }
                         if (input.get() != '\n') {
                             throw std::runtime_error("more fields than expected on line " + std::to_string(overall_line_count + 1));
                         }
-                        return finish(input.advance()); // move past the newline.
+                        return ParseInfo<Type_>(val, input.advance()); // move past the newline.
                     case '\n':
                         // This check only needs to be put here, as all blanks should be chomped before calling
                         // this function; so we must start on a non-blank character. This starting character is either:
@@ -1402,7 +1465,7 @@ private:
                         if (!found) {
                             throw std::runtime_error("empty integer field on line " + std::to_string(overall_line_count + 1));
                         }
-                        return finish(input.advance()); // move past the newline.
+                        return ParseInfo<Type_>(val, input.advance()); // move past the newline.
                     default:
                         throw std::runtime_error("expected an integer value on line " + std::to_string(overall_line_count + 1));
                 }
@@ -1412,7 +1475,7 @@ private:
                 }
             }
 
-            return finish(false);
+            return ParseInfo<Type_>(val, false);
         }
     };
 
@@ -1459,28 +1522,324 @@ public:
     }
 
 private:
-    template<typename Type_>
-    static Type_ convert_to_real(const std::string& temporary, Index overall_line_count) {
-        Type_ output;
-        std::size_t n = 0;
-
-        try {
-            if constexpr(std::is_same<Type_, float>::value) {
-                output = std::stof(temporary, &n);
-            } else if constexpr(std::is_same<Type_, long double>::value) {
-                output = std::stold(temporary, &n);
+    template<bool last_, typename Type_, typename Input2_>
+    static typename std::conditional<last_, ParseInfo<Type_>, Type_>::type parse_special(Input2_& input, bool negative, bool check_inf, Index overall_line_count) {
+        auto what = [&]() -> std::string {
+            if (check_inf) {
+                return std::string("infinity");
             } else {
-                output = std::stod(temporary, &n);
+                return std::string("NaN");
             }
-        } catch (std::invalid_argument& e) {
-            throw std::runtime_error("failed to convert value to a real number on line " + std::to_string(overall_line_count + 1));
+        };
+
+        auto check = [&](char lower, char upper) -> void {
+            if (!input.advance()) {
+                throw std::runtime_error("unexpected termination of " + what() + " on line " + std::to_string(overall_line_count + 1));
+            }
+            char current = input.get();
+            if (current != lower && current != upper) {
+                throw std::runtime_error("unexpected character when parsing " + what() + " on line " + std::to_string(overall_line_count + 1));
+            }
+        };
+
+        bool remaining = true;
+        if (check_inf) {
+            // We already know that we're starting with 'i', so we can proceed to the remaining two letters.
+            check('n', 'N');
+            check('f', 'F');
+
+            // Checking if there's any more letters.
+            remaining = input.advance();
+            if (remaining) {
+                char current = input.get();
+                if (current != '\n' && current != ' ' && current != '\t' && current != '\r') {
+                    if (current != 'i' && current != 'I') {
+                        throw std::runtime_error("unexpected character when parsing " + what() + " on line " + std::to_string(overall_line_count + 1));
+                    }
+                    check('n', 'N');
+                    check('i', 'I');
+                    check('t', 'T');
+                    check('y', 'Y');
+                    remaining = input.advance();
+                }
+            }
+        } else {
+            // We already know that we're starting with 'n', so we can proceed to the remaining two letters.
+            check('a', 'A');
+            check('n', 'N');
+            remaining = input.advance();
         }
 
-        if (n != temporary.size()) {
-            throw std::runtime_error("failed to convert value to a real number on line " + std::to_string(overall_line_count + 1));
+        if (remaining) {
+            // Using a switch for consistency with parse_real().
+            switch(input.get()) {
+                case ' ': case '\t': case '\r':
+                    if (!advance_and_chomp(input)) {
+                        if constexpr(last_) {
+                            remaining = false;
+                            break;
+                        }
+                        throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
+                    }
+                    if constexpr(last_) {
+                        if (input.get() != '\n') {
+                            throw std::runtime_error("more fields than expected on line " + std::to_string(overall_line_count + 1));
+                        }
+                        remaining = input.advance(); // advance past the newline
+                    }
+                    break;
+                case '\n':
+                    if constexpr(last_) {
+                        remaining = input.advance(); // advance past the newline.
+                        break;
+                    }
+                    throw std::runtime_error("unexpected newline on line " + std::to_string(overall_line_count + 1));
+                default:
+                    throw std::runtime_error("unexpected character when parsing " + what() + " on line " + std::to_string(overall_line_count + 1));
+            }
+        } else {
+            if constexpr(!last_) {
+                throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
+            }
         }
 
-        return output;
+        Type_ value;
+        if (check_inf) {
+            if constexpr(!std::numeric_limits<Type_>::has_infinity) {
+                throw std::runtime_error("requested type does not support " + what());
+            }
+            value = std::numeric_limits<Type_>::infinity();
+        } else {
+            if constexpr(!std::numeric_limits<Type_>::has_quiet_NaN) {
+                throw std::runtime_error("requested type does not support " + what());
+            }
+            value = std::numeric_limits<Type_>::quiet_NaN();
+        }
+        if (negative) {
+            value *= -1;
+        }
+
+        if constexpr(last_) {
+            ParseInfo<Type_> output;
+            output.value = value;
+            output.remaining = remaining;
+            return output;
+        } else {
+            return value;
+        }
+    }
+
+    template<bool last_, typename Type_, typename Input2_>
+    static typename std::conditional<last_, ParseInfo<Type_>, Type_>::type parse_real(Input2_& input, Index overall_line_count) {
+        char firstchar = input.get();
+        bool negative = (firstchar == '-');
+        if (negative || firstchar == '+') {
+            if (!(input.advance())) {
+                throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
+            }
+        }
+
+        // Check for specials.
+        switch (input.get()) {
+            case 'i': case 'I':
+                return parse_special<last_, Type_>(input, negative, true, overall_line_count);
+            case 'n': case 'N':
+                return parse_special<last_, Type_>(input, negative, false, overall_line_count);
+        };
+
+        // Processing the integer component.
+        Type_ value = 0;
+        bool found = false;
+        bool remaining = true;
+
+        while (1) {
+            char val = input.get();
+            switch(val) {
+                case '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case '9':
+                    value *= 10;
+                    value += val - '0';
+                    found = true;
+                    break;
+                case ' ': case '\t': case '\r':
+                    if (!advance_and_chomp(input)) {
+                        if constexpr(last_) {
+                            remaining = false;
+                            goto final_processing;
+                        }
+                        throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
+                    }
+                    if constexpr(last_) {
+                        if (input.get() != '\n') {
+                            throw std::runtime_error("more fields than expected on line " + std::to_string(overall_line_count + 1));
+                        }
+                        remaining = input.advance(); // advance past the newline
+                    }
+                    goto final_processing; 
+                case '\n':
+                    if constexpr(last_) {
+                        remaining = input.advance(); // advance past the newline
+                        goto final_processing;
+                    }
+                    throw std::runtime_error("unexpected newline on line " + std::to_string(overall_line_count + 1));
+               case '.':
+                    if (!input.advance()) {
+                        if constexpr(last_) {
+                            remaining = false;
+                            goto final_processing;
+                        }
+                        throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
+                    }
+                    goto decimal_processing;
+                case 'e': case 'E':
+                    if (!input.advance()) {
+                        throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
+                    }
+                    goto exponent_processing;
+                default:
+                    throw std::runtime_error("unrecognized character in real number on line " + std::to_string(overall_line_count + 1));
+            }
+
+            if (!(input.advance())) {
+                if constexpr(last_) {
+                    remaining = input.advance();
+                    goto final_processing;
+                }
+                throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
+            }
+        }
+
+        // Processing the decimal component.
+decimal_processing:
+        {
+            Type_ multiplier = 1; 
+            while (1) {
+                char val = input.get();
+                switch(val) {
+                    case '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case '9':
+                        multiplier *= 10;
+                        value += (val - '0') / multiplier;
+                        found = true;
+                        break;
+                    case ' ': case '\t': case '\r':
+                        if (!advance_and_chomp(input)) {
+                            if constexpr(last_) {
+                                remaining = false;
+                                goto final_processing;
+                            }
+                            throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
+                        }
+                        if constexpr(last_) {
+                            if (input.get() != '\n') {
+                                throw std::runtime_error("more fields than expected on line " + std::to_string(overall_line_count + 1));
+                            }
+                            remaining = input.advance(); // advance past the newline
+                        }
+                        goto final_processing; 
+                    case '\n':
+                        if constexpr(last_) {
+                            remaining = input.advance(); // advance past the newline
+                            goto final_processing;
+                        }
+                        throw std::runtime_error("unexpected newline on line " + std::to_string(overall_line_count + 1));
+                    case 'e': case 'E':
+                        if (!input.advance()) {
+                            throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
+                        }
+                        goto exponent_processing;
+                    default:
+                        throw std::runtime_error("unrecognized character in real number on line " + std::to_string(overall_line_count + 1));
+                }
+
+                if (!(input.advance())) {
+                    if constexpr(last_) {
+                        remaining = input.advance();
+                        goto final_processing;
+                    }
+                    throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
+                }
+            }
+        }
+
+        // Processing the exponent.
+exponent_processing:
+        {
+            bool expnegative = (input.get() == '-');
+            if (expnegative || input.get() == '+') {
+                if (!(input.advance())) {
+                    throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
+                }
+            }
+
+            Type_ exponent = 0;
+            bool expfound = false;
+            while (1) {
+                char val = input.get();
+                switch(val) {
+                    case '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case '9':
+                        exponent *= 10;
+                        exponent += (val - '0');
+                        expfound = true;
+                        break;
+                    case ' ': case '\t': case '\r':
+                        if (!advance_and_chomp(input)) {
+                            if constexpr(last_) {
+                                remaining = false;
+                                goto exponent_processing_finish;
+                            }
+                            throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
+                        }
+                        if constexpr(last_) {
+                            if (input.get() != '\n') {
+                                throw std::runtime_error("more fields than expected on line " + std::to_string(overall_line_count + 1));
+                            }
+                            remaining = input.advance(); // advance past the newline
+                        }
+                        goto exponent_processing_finish; 
+                    case '\n':
+                        if constexpr(last_) {
+                            remaining = input.advance(); // advance past the newline
+                            goto exponent_processing_finish;
+                        }
+                        throw std::runtime_error("unexpected newline on line " + std::to_string(overall_line_count + 1));
+                    default:
+                        throw std::runtime_error("unrecognized character in real number on line " + std::to_string(overall_line_count + 1));
+                }
+
+                if (!(input.advance())) {
+                    if constexpr(last_) {
+                        remaining = input.advance();
+                        goto exponent_processing_finish;
+                    }
+                    throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
+                }
+            }
+
+exponent_processing_finish:
+            if (!expfound) {
+                throw std::runtime_error("no digits in the decimal exponent on line " + std::to_string(overall_line_count + 1));
+            }
+            if (expnegative) {
+                exponent *= -1;
+            }
+            value *= std::pow(10.0, exponent);
+        }
+
+final_processing:
+        if (!found) {
+            throw std::runtime_error("no digits in real number on line " + std::to_string(overall_line_count + 1));
+        }
+        if (negative) {
+            value *= -1;
+        }
+
+        if constexpr(last_) {
+            ParseInfo<Type_> output;
+            output.value = value;
+            output.remaining = remaining;
+            return output;
+        } else {
+            return value;
+        }
     }
 
     template<typename Type_>
@@ -1488,47 +1847,8 @@ private:
     public:
         template<class Input2_>
         ParseInfo<Type_> operator()(Input2_& input, Index overall_line_count) {
-            ParseInfo<Type_> output;
-            output.remaining = true;
-
-            temporary.clear();
-            char x = input.get();
-            while (1) {
-                if (x == '\n') {
-                    if (temporary.empty()) {
-                        // This is the only place we need to check as temporary is extended immediately after this.
-                        throw std::runtime_error("empty number field on line " + std::to_string(overall_line_count + 1));
-                    }
-                    output.remaining = input.advance(); // move past the newline.
-                    break;
-                }
-                temporary += x;
-                if (!(input.advance())) {
-                    output.remaining = false;
-                    break;
-                }
-                x = input.get();
-                // We shift the blank space check here, as 'store()' is always called after chomping leading blanks;
-                // so there wouldn't be any point doing this check at the start of the first loop iteration.
-                if (x == ' ' || x == '\t') {
-                    if (!advance_and_chomp(input)) { // skipping past the current position before chomping.
-                        output.remaining = false;
-                        break;
-                    }
-                    if (input.get() != '\n') {
-                        throw std::runtime_error("more fields than expected on line " + std::to_string(overall_line_count + 1));
-                    }
-                    output.remaining = input.advance(); // move past the newline.
-                    break;
-                }
-            }
-
-            output.value = convert_to_real<Type_>(temporary, overall_line_count);
-            return output;
+            return parse_real<true, Type_>(input, overall_line_count);
         }
-
-    private:
-        std::string temporary;
     };
 
 public:
@@ -1598,83 +1918,14 @@ private:
     public:
         template<typename Input2_>
         ParseInfo<std::complex<InnerType_> > operator()(Input2_& input, Index overall_line_count) {
+            auto first = parse_real<false, InnerType_>(input, overall_line_count);
+            auto second = parse_real<true, InnerType_>(input, overall_line_count);
             ParseInfo<std::complex<InnerType_> > output;
-            output.remaining = true;
-            std::complex<InnerType_> holding;
-
-            // Pulling out the real part first.
-            temporary.clear();
-            char x = input.get();
-            while (1) {
-                if (x == '\n') {
-                    if (temporary.empty()) {
-                        // This is the only place we need to check this error, as temporary is filled up immediately after this clause.
-                        throw std::runtime_error("empty real field on line " + std::to_string(overall_line_count + 1));
-                    } else {
-                        throw std::runtime_error("missing the imaginary part on line " + std::to_string(overall_line_count + 1));
-                    }
-                }
-
-                temporary += x;
-                if (!(input.advance())) {
-                    throw std::runtime_error("missing the imaginary part on line " + std::to_string(overall_line_count + 1));
-                }
-                x = input.get();
-
-                // We shift the blank space check here, as 'store()' is always called after chomping leading blanks;
-                // so there wouldn't be any point putting this check at the start of the first loop iteration.
-                if (x == ' ' || x == '\t') {
-                    if (!advance_and_chomp(input)) { // skipping past the current position before chomping.
-                        throw std::runtime_error("missing the imaginary part on line " + std::to_string(overall_line_count + 1));
-                    }
-                    if (input.get() == '\n') {
-                        throw std::runtime_error("missing the imaginary part on line " + std::to_string(overall_line_count + 1));
-                    }
-                    break;
-                }
-            }
-            holding.real(convert_to_real<InnerType_>(temporary, overall_line_count));
-
-            // Now pulling out the imaginary part.
-            temporary.clear();
-            x = input.get();
-            while (1) {
-                temporary += x;
-                if (!(input.advance())) {
-                    output.remaining = false;
-                    break;
-                }
-                x = input.get();
-
-                // Moving the newline check here, as the previous loop to parse the real part already precludes
-                // the presence of a newline character before any other characters. 
-                if (x == '\n') {
-                    output.remaining = input.advance(); // skipping past the newline.
-                    break;
-                }
-
-                // Also moving the blank space check here, as the scan for the imaginary component has already chomped
-                // leading blanks; the first iteration of this loop cannot have any blanks before other characters.
-                if (x == ' ' || x == '\t') {
-                    if (!advance_and_chomp(input)) { // skipping past the current position before chomping.
-                        output.remaining = false;
-                        break;
-                    }
-                    if (input.get() != '\n') {
-                        throw std::runtime_error("more fields than expected on line " + std::to_string(overall_line_count + 1));
-                    }
-                    output.remaining = input.advance(); // skipping past the newline.
-                    break;
-                }
-            }
-            holding.imag(convert_to_real<InnerType_>(temporary, overall_line_count));
-
-            output.value = holding;
+            output.value.real(first);
+            output.value.imag(second.value);
+            output.remaining = second.remaining;
             return output;
         }
-
-    private:
-        std::string temporary;
     };
 
 public:
