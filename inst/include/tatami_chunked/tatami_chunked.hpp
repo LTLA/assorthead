@@ -15,8 +15,6 @@
 #include "DenseSlabFactory.hpp"
 #include "SparseSlabFactory.hpp"
 
-#include "mock_dense_chunk.hpp"
-#include "mock_sparse_chunk.hpp"
 #include "CustomDenseChunkedMatrix.hpp"
 #include "CustomSparseChunkedMatrix.hpp"
 

@@ -6,11 +6,16 @@
  * @brief Default locking for serial access.
  */
 
+
 #ifndef TATAMI_HDF5_PARALLEL_LOCK
 #include "subpar/subpar.hpp"
 #ifndef SUBPAR_USES_OPENMP_RANGE
 #include <mutex>
 #include <thread>
+
+/**
+ * @cond
+ */
 namespace tatami_hdf5 {
 // We put this in a separate function instead of a static function variable
 // inside serialize(), as we would get a different mutex for each instance 
@@ -20,6 +25,9 @@ inline auto& get_default_hdf5_lock() {
     return hdf5_lock;
 }
 }
+/**
+ * @endcond
+ */
 #endif
 #endif
 

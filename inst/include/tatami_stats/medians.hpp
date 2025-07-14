@@ -1,14 +1,15 @@
 #ifndef TATAMI_STATS__MEDIANS_HPP
 #define TATAMI_STATS__MEDIANS_HPP
 
-#include "tatami/tatami.hpp"
 #include "utils.hpp"
 
 #include <cmath>
 #include <vector>
 #include <algorithm>
 #include <limits>
-#include <iostream>
+
+#include "tatami/tatami.hpp"
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file medians.hpp
@@ -82,19 +83,19 @@ template<typename Output_ = double, typename Value_, typename Index_>
 Output_ direct(Value_* ptr, Index_ num, bool skip_nan) {
     ::tatami_stats::internal::nanable_ifelse<Value_>(
         skip_nan,
-        [&]() {
+        [&]() -> void {
             auto lost = internal::translocate_nans(ptr, num);
             ptr += lost;
             num -= lost;
         },
-        [&]() {}
+        []() -> void {}
     );
 
     if (num == 0) {
         return std::numeric_limits<Output_>::quiet_NaN();
     }
 
-    size_t halfway = num / 2;
+    Index_ halfway = num / 2;
     bool is_even = (num % 2 == 0);
 
     std::nth_element(ptr, ptr + halfway, ptr + num);
@@ -145,13 +146,13 @@ Output_ direct(Value_* value, Index_ num_nonzero, Index_ num_all, bool skip_nan)
 
     ::tatami_stats::internal::nanable_ifelse<Value_>(
         skip_nan,
-        [&]() {
+        [&]() -> void {
             auto lost = internal::translocate_nans(value, num_nonzero);
             value += lost;
             num_nonzero -= lost;
             num_all -= lost;
         },
-        [&]() {}
+        []() -> void {}
     );
 
     // Is the number of non-zeros less than the number of zeros?
@@ -161,11 +162,11 @@ Output_ direct(Value_* value, Index_ num_nonzero, Index_ num_all, bool skip_nan)
         return 0;
     } 
     
-    size_t halfway = num_all / 2;
+    Index_ halfway = num_all / 2;
     bool is_even = (num_all % 2 == 0);
 
-    size_t num_zero = num_all - num_nonzero;
-    size_t num_negative = 0;
+    Index_ num_zero = num_all - num_nonzero;
+    Index_ num_negative = 0;
     for (Index_ i = 0; i < num_nonzero; ++i) {
         num_negative += (value[i] < 0);
     }
@@ -176,7 +177,7 @@ Output_ direct(Value_* value, Index_ num_nonzero, Index_ num_all, bool skip_nan)
             return value[halfway];
 
         } else if (halfway >= num_negative + num_zero) {
-            size_t skip_zeros = halfway - num_zero;
+            Index_ skip_zeros = halfway - num_zero;
             std::nth_element(value, value + skip_zeros, value + num_nonzero);
             return value[skip_zeros];
 
@@ -192,7 +193,7 @@ Output_ direct(Value_* value, Index_ num_nonzero, Index_ num_all, bool skip_nan)
         other = *(std::max_element(value, value + halfway)); // max_element gets the sorted value at halfway - 1, see explanation for the dense case.
 
     } else if (num_negative == halfway) { // the upper half is guaranteed to be zero.
-        size_t below_halfway = halfway - 1;
+        Index_ below_halfway = halfway - 1;
         std::nth_element(value, value + below_halfway, value + num_nonzero);
         other = value[below_halfway]; // set to other so that addition/subtraction of a zero baseline has no effect on precision. 
 
@@ -200,12 +201,12 @@ Output_ direct(Value_* value, Index_ num_nonzero, Index_ num_all, bool skip_nan)
         ;
 
     } else if (num_negative + num_zero == halfway) { // the lower half is guaranteed to be zero.
-        size_t skip_zeros = halfway - num_zero;
+        Index_ skip_zeros = halfway - num_zero;
         std::nth_element(value, value + skip_zeros, value + num_nonzero);
         other = value[skip_zeros]; // set to other so that addition/subtraction of a zero baseline has no effect on precision. 
 
     } else { // both halves of the median are non-negative.
-        size_t skip_zeros = halfway - num_zero;
+        Index_ skip_zeros = halfway - num_zero;
         std::nth_element(value, value + skip_zeros, value + num_nonzero);
         baseline = value[skip_zeros];
         other = *(std::max_element(value, value + skip_zeros)); // max_element gets the sorted value at skip_zeros - 1, see explanation for the dense case.
@@ -228,24 +229,24 @@ Output_ direct(Value_* value, Index_ num_nonzero, Index_ num_all, bool skip_nan)
  *
  * @param row Whether to compute the median for each row.
  * If false, the median is computed for each column instead.
- * @param p Pointer to a `tatami::Matrix`.
+ * @param mat Instance of a `tatami::Matrix`.
  * @param[out] output Pointer to an array of length equal to the number of rows (if `row = true`) or columns (otherwise).
  * On output, this will contain the row/column medians.
  * @param mopt Median calculation options.
  */
 template<typename Value_, typename Index_, typename Output_>
-void apply(bool row, const tatami::Matrix<Value_, Index_>* p, Output_* output, const medians::Options& mopt) {
-    auto dim = (row ? p->nrow() : p->ncol());
-    auto otherdim = (row ? p->ncol() : p->nrow());
+void apply(bool row, const tatami::Matrix<Value_, Index_>& mat, Output_* output, const medians::Options& mopt) {
+    auto dim = (row ? mat.nrow() : mat.ncol());
+    auto otherdim = (row ? mat.ncol() : mat.nrow());
 
-    if (p->sparse()) {
+    if (mat.sparse()) {
         tatami::Options opt;
         opt.sparse_extract_index = false;
         opt.sparse_ordered_index = false; // we'll be sorting by value anyway.
 
         tatami::parallelize([&](int, Index_ s, Index_ l) -> void {
-            auto ext = tatami::consecutive_extractor<true>(p, row, s, l, opt);
-            std::vector<Value_> buffer(otherdim);
+            auto ext = tatami::consecutive_extractor<true>(mat, row, s, l, opt);
+            auto buffer = tatami::create_container_of_Index_size<std::vector<Value_> >(otherdim);
             auto vbuffer = buffer.data();
             for (Index_ x = 0; x < l; ++x) {
                 auto range = ext->fetch(vbuffer, NULL);
@@ -256,8 +257,8 @@ void apply(bool row, const tatami::Matrix<Value_, Index_>* p, Output_* output, c
 
     } else {
         tatami::parallelize([&](int, Index_ s, Index_ l) -> void {
-            std::vector<Value_> buffer(otherdim);
-            auto ext = tatami::consecutive_extractor<false>(p, row, s, l);
+            auto buffer = tatami::create_container_of_Index_size<std::vector<Value_> >(otherdim);
+            auto ext = tatami::consecutive_extractor<false>(mat, row, s, l);
             for (Index_ x = 0; x < l; ++x) {
                 auto ptr = ext->fetch(buffer.data());
                 tatami::copy_n(ptr, otherdim, buffer.data());
@@ -268,6 +269,18 @@ void apply(bool row, const tatami::Matrix<Value_, Index_>* p, Output_* output, c
 }
 
 /**
+ * @cond
+ */
+// Back-compatibility.
+template<typename Value_, typename Index_, typename Output_>
+void apply(bool row, const tatami::Matrix<Value_, Index_>* p, Output_* output, const medians::Options& mopt) {
+    apply(row, *p, output, mopt);
+}
+/**
+ * @endcond
+ */
+
+/**
  * Wrapper around `apply()` for column medians.
  *
  * @tparam Output_ Type of the output.
@@ -275,34 +288,39 @@ void apply(bool row, const tatami::Matrix<Value_, Index_>* p, Output_* output, c
  * @tparam Value_ Type of the matrix value.
  * @tparam Index_ Type of the row/column indices.
  *
- * @param p Pointer to a `tatami::Matrix`.
+ * @param mat Instance of a `tatami::Matrix`.
  * @param mopt Median calculation options.
  *
  * @return A vector of length equal to the number of columns, containing the column medians.
  */
 template<typename Output_ = double, typename Value_, typename Index_>
-std::vector<Output_> by_column(const tatami::Matrix<Value_, Index_>* p, const Options& mopt) {
-    std::vector<Output_> output(p->ncol());
-    apply(false, p, output.data(), mopt);
+std::vector<Output_> by_column(const tatami::Matrix<Value_, Index_>& mat, const Options& mopt) {
+    auto output = tatami::create_container_of_Index_size<std::vector<Output_> >(mat.ncol());
+    apply(false, mat, output.data(), mopt);
     return output;
 }
 
 /**
- * Overload with default options.
- *
- * @tparam Output_ Type of the output.
- * This should be floating-point to store potential averages.
- * @tparam Value_ Type of the matrix value.
- * @tparam Index_ Type of the row/column indices.
- *
- * @param p Pointer to a `tatami::Matrix`.
- *
- * @return A vector of length equal to the number of columns, containing the column medians.
+ * @cond
  */
+// Back-compatibility.
+template<typename Output_ = double, typename Value_, typename Index_>
+std::vector<Output_> by_column(const tatami::Matrix<Value_, Index_>* p, const Options& mopt) {
+    return by_column<Output_>(*p, mopt);
+}
+
+template<typename Output_ = double, typename Value_, typename Index_>
+std::vector<Output_> by_column(const tatami::Matrix<Value_, Index_>& mat) {
+    return by_column<Output_>(mat, Options());
+}
+
 template<typename Output_ = double, typename Value_, typename Index_>
 std::vector<Output_> by_column(const tatami::Matrix<Value_, Index_>* p) {
-    return by_column(p, Options());
+    return by_column<Output_>(*p);
 }
+/**
+ * @endcond
+ */
 
 /**
  * Wrapper around `apply()` for row medians.
@@ -312,34 +330,39 @@ std::vector<Output_> by_column(const tatami::Matrix<Value_, Index_>* p) {
  * @tparam Value_ Type of the matrix value.
  * @tparam Index_ Type of the row/column indices.
  *
- * @param p Pointer to a `tatami::Matrix`.
+ * @param mat Instance of a `tatami::Matrix`.
  * @param mopt Median calculation options.
  *
  * @return A vector of length equal to the number of rows, containing the row medians.
  */
 template<typename Output_ = double, typename Value_, typename Index_>
-std::vector<Output_> by_row(const tatami::Matrix<Value_, Index_>* p, const Options& mopt) {
-    std::vector<Output_> output(p->nrow());
-    apply(true, p, output.data(), mopt);
+std::vector<Output_> by_row(const tatami::Matrix<Value_, Index_>& mat, const Options& mopt) {
+    auto output = tatami::create_container_of_Index_size<std::vector<Output_> >(mat.nrow());
+    apply(true, mat, output.data(), mopt);
     return output;
 }
 
 /**
- * Overload with default options.
- *
- * @tparam Output_ Type of the output.
- * This should be floating-point to store potential averages.
- * @tparam Value_ Type of the matrix value.
- * @tparam Index_ Type of the row/column indices.
- *
- * @param p Pointer to a `tatami::Matrix`.
- *
- * @return A vector of length equal to the number of rows, containing the row medians.
+ * @cond
  */
+// Back-compatibility.
+template<typename Output_ = double, typename Value_, typename Index_>
+std::vector<Output_> by_row(const tatami::Matrix<Value_, Index_>* p, const Options& mopt) {
+    return by_row<Output_>(*p, mopt);
+}
+
+template<typename Output_ = double, typename Value_, typename Index_>
+std::vector<Output_> by_row(const tatami::Matrix<Value_, Index_>& mat) {
+    return by_row<Output_>(mat, Options());
+}
+
 template<typename Output_ = double, typename Value_, typename Index_>
 std::vector<Output_> by_row(const tatami::Matrix<Value_, Index_>* p) {
-    return by_row(p, Options());
+    return by_row<Output_>(*p);
 }
+/**
+ * @endcond
+ */
 
 }
 

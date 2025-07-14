@@ -147,31 +147,31 @@ void parse_sparse_matrix(
     parse_SVT_SparseMatrix(
         matrix,
         [&](int c, const auto& curindices, bool all_ones, const auto& curvalues) -> void {
-            size_t nnz = curindices.size();
+            auto nnz = curindices.size();
 
             // Note that non-empty value_ptrs and index_ptrs may be longer than the
             // number of rows/columns in the SVT matrix, due to the reuse of slabs.
             if (row) {
                 if (needs_value) {
                     if (all_ones) {
-                        for (size_t i = 0; i < nnz; ++i) {
+                        for (decltype(nnz) i = 0; i < nnz; ++i) {
                             auto ix = curindices[i];
                             value_ptrs[ix][counts[ix]] = 1;
                         }
                     } else {
-                        for (size_t i = 0; i < nnz; ++i) {
+                        for (decltype(nnz) i = 0; i < nnz; ++i) {
                             auto ix = curindices[i];
                             value_ptrs[ix][counts[ix]] = curvalues[i];
                         }
                     }
                 }
                 if (needs_index) {
-                    for (size_t i = 0; i < nnz; ++i) {
+                    for (decltype(nnz) i = 0; i < nnz; ++i) {
                         auto ix = curindices[i];
                         index_ptrs[ix][counts[ix]] = c;
                     }
                 }
-                for (size_t i = 0; i < nnz; ++i) {
+                for (decltype(nnz) i = 0; i < nnz; ++i) {
                     ++(counts[curindices[i]]);
                 }
 

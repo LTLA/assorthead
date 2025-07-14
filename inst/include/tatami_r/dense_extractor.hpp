@@ -4,6 +4,7 @@
 #include "Rcpp.h"
 #include "tatami/tatami.hpp"
 #include "tatami_chunked/tatami_chunked.hpp"
+#include "sanisizer/sanisizer.hpp"
 
 #include "utils.hpp"
 #include "parallelize.hpp"
@@ -16,6 +17,13 @@
 namespace tatami_r {
 
 namespace UnknownMatrix_internal {
+
+// GENERAL COMMENTS:
+//
+// - No need to protect against overflows when incrementing to get to 1-based indexing.
+//   This is because the value being incremented is less than the dimension extent, which is known to fit into an Index_.
+// - No need to protect against overflows when creating IntegerVectors from dimension extents.
+//   We already know that the dimension extent can be safely converted to/from an int, based on checks in the UnknownMatrix constructor.
 
 /********************
  *** Core classes ***
@@ -32,7 +40,7 @@ public:
         Rcpp::IntegerVector non_target_extract, 
         [[maybe_unused]] const std::vector<Index_>& ticks, // provided here for compatibility with the other Dense*Core classes.
         [[maybe_unused]] const std::vector<Index_>& map,
-        [[maybe_unused]] const tatami_chunked::SlabCacheStats& stats) :
+        [[maybe_unused]] const tatami_chunked::SlabCacheStats<Index_>& stats) :
         my_matrix(matrix),
         my_dense_extractor(dense_extractor),
         my_extract_args(2),
@@ -49,10 +57,10 @@ private:
     Rcpp::List my_extract_args;
 
     bool my_row;
-    size_t my_non_target_length;
+    Index_ my_non_target_length;
 
     tatami::MaybeOracle<oracle_, Index_> my_oracle;
-    typename std::conditional<oracle_, size_t, bool>::type my_counter = 0;
+    typename std::conditional<oracle_, tatami::PredictionIndex, bool>::type my_counter = 0;
 
 public:
     template<typename Value_>
@@ -70,9 +78,9 @@ public:
         my_extract_args[static_cast<int>(!my_row)] = Rcpp::IntegerVector::create(i + 1);
         auto obj = my_dense_extractor(my_matrix, my_extract_args);
         if (my_row) {
-            parse_dense_matrix(obj, 0, 0, true, buffer, 1, my_non_target_length);
+            parse_dense_matrix<Index_>(obj, 0, 0, true, buffer, 1, my_non_target_length);
         } else {
-            parse_dense_matrix(obj, 0, 0, false, buffer, my_non_target_length, 1);
+            parse_dense_matrix<Index_>(obj, 0, 0, false, buffer, my_non_target_length, 1);
         }
 
 #ifdef TATAMI_R_PARALLELIZE_UNKNOWN 
@@ -92,7 +100,7 @@ public:
         Rcpp::IntegerVector non_target_extract, 
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats& stats) :
+        const tatami_chunked::SlabCacheStats<Index_>& stats) :
         my_matrix(matrix),
         my_dense_extractor(dense_extractor),
         my_extract_args(2),
@@ -112,7 +120,7 @@ private:
     Rcpp::List my_extract_args;
 
     bool my_row;
-    size_t my_non_target_length;
+    Index_ my_non_target_length;
 
     const std::vector<Index_>& my_chunk_ticks;
     const std::vector<Index_>& my_chunk_map;
@@ -139,16 +147,16 @@ public:
 #endif
 
                 auto chunk_start = my_chunk_ticks[id];
-                size_t chunk_len = my_chunk_ticks[id + 1] - chunk_start;
+                Index_ chunk_len = my_chunk_ticks[id + 1] - chunk_start;
                 Rcpp::IntegerVector primary_extract(chunk_len);
                 std::iota(primary_extract.begin(), primary_extract.end(), chunk_start + 1);
                 my_extract_args[static_cast<int>(!my_row)] = primary_extract;
 
                 auto obj = my_dense_extractor(my_matrix, my_extract_args);
                 if (my_row) {
-                    parse_dense_matrix(obj, 0, 0, true, cache.data, chunk_len, my_non_target_length);
+                    parse_dense_matrix<Index_>(obj, 0, 0, true, cache.data, chunk_len, my_non_target_length);
                 } else {
-                    parse_dense_matrix(obj, 0, 0, false, cache.data, my_non_target_length, chunk_len);
+                    parse_dense_matrix<Index_>(obj, 0, 0, false, cache.data, my_non_target_length, chunk_len);
                 }
 
 #ifdef TATAMI_R_PARALLELIZE_UNKNOWN 
@@ -157,8 +165,8 @@ public:
             }
         );
 
-        auto src = slab.data + static_cast<size_t>(i - my_chunk_ticks[chosen]) * my_non_target_length;
-        std::copy_n(src, my_non_target_length, buffer);
+        auto shift = sanisizer::product_unsafe<std::size_t>(i - my_chunk_ticks[chosen], my_non_target_length);
+        std::copy_n(slab.data + shift, my_non_target_length, buffer);
     }
 };
 
@@ -173,7 +181,7 @@ public:
         Rcpp::IntegerVector non_target_extract, 
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats& stats) :
+        const tatami_chunked::SlabCacheStats<Index_>& stats) :
         my_matrix(matrix),
         my_dense_extractor(dense_extractor),
         my_extract_args(2),
@@ -193,7 +201,7 @@ private:
     Rcpp::List my_extract_args;
 
     bool my_row;
-    size_t my_non_target_length;
+    Index_ my_non_target_length;
 
     const std::vector<Index_>& my_chunk_ticks;
     const std::vector<Index_>& my_chunk_map;
@@ -251,9 +259,9 @@ public:
                     auto chunk_start = my_chunk_ticks[p.first];
                     Index_ chunk_len = my_chunk_ticks[p.first + 1] - chunk_start;
                     if (my_row) {
-                        parse_dense_matrix(obj, current, 0, true, p.second->data, chunk_len, my_non_target_length);
+                        parse_dense_matrix<Index_>(obj, current, 0, true, p.second->data, chunk_len, my_non_target_length);
                     } else {
-                        parse_dense_matrix(obj, 0, current, false, p.second->data, my_non_target_length, chunk_len);
+                        parse_dense_matrix<Index_>(obj, 0, current, false, p.second->data, my_non_target_length, chunk_len);
                     }
                     current += chunk_len;
                 }
@@ -264,7 +272,7 @@ public:
             }
         );
 
-        size_t shift = my_non_target_length * static_cast<size_t>(res.second); // cast to size_t to avoid overflow.
+        auto shift = sanisizer::product_unsafe<std::size_t>(my_non_target_length, res.second);
         std::copy_n(res.first->data + shift, my_non_target_length, buffer);
     }
 };
@@ -293,7 +301,7 @@ public:
         Index_ non_target_dim,
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats& stats) :
+        const tatami_chunked::SlabCacheStats<Index_>& stats) :
         my_core(
             matrix,
             dense_extractor,
@@ -332,7 +340,7 @@ public:
         Index_ block_length,
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats& stats) :
+        const tatami_chunked::SlabCacheStats<Index_>& stats) :
         my_core(
             matrix,
             dense_extractor,
@@ -370,7 +378,7 @@ public:
         tatami::VectorPtr<Index_> indices_ptr,
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats& stats) :
+        const tatami_chunked::SlabCacheStats<Index_>& stats) :
         my_core(
             matrix,
             dense_extractor,

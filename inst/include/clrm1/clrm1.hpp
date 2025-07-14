@@ -33,6 +33,9 @@ struct Options {
 };
 
 /**
+ * Compute CLRm1 size factors for each cell in an ADT count matrix.
+ * Note that the output size factors are not centered; this should be done by the caller if the scale of the counts is to be preserved during normalization.
+ *
  * @tparam Value_ Type of the matrix value.
  * @tparam Index_ Integer type for the row/column indices.
  * @tparam Output_ Floating-point type for the output size factors.
@@ -67,10 +70,10 @@ void compute(const tatami::Matrix<Value_, Index_>& matrix, const Options& option
 
     tatami_stats::sums::Options sopt;
     sopt.num_threads = options.num_threads;
-    auto logmat = tatami::make_DelayedUnaryIsometricOperation<Output_>(std::move(ptr), tatami::DelayedUnaryIsometricLog1p<Value_, Output_>());
-    tatami_stats::sums::apply(false, logmat.get(), output, sopt);
+    tatami::DelayedUnaryIsometricOperation<Output_, Value_, Index_> logmat(std::move(ptr), std::make_shared<tatami::DelayedUnaryIsometricLog1p<Value_, Output_, Index_> >());
+    tatami_stats::sums::apply(false, logmat, output, sopt);
 
-    Output_ denom = 1.0/(logmat->nrow());
+    Output_ denom = 1.0/(logmat.nrow());
     Index_ NC = matrix.ncol();
     for (Index_ c = 0; c < NC; ++c) {
         output[c] = std::expm1(output[c] * denom);

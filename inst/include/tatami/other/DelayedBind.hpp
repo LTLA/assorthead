@@ -7,12 +7,14 @@
 #include "../utils/FixedOracle.hpp"
 #include "../utils/PseudoOracularExtractor.hpp"
 #include "../utils/copy.hpp"
+#include "../utils/Index_to_container.hpp"
 
 #include <numeric>
 #include <algorithm>
 #include <memory>
 #include <array>
 #include <type_traits>
+#include <cstddef>
 
 /**
  * @file DelayedBind.hpp
@@ -49,7 +51,8 @@ Index_ initialize_parallel_block(
     Index_ actual_start = block_start - cumulative[start_index];
     Index_ block_end = block_start + block_length;
 
-    for (Index_ index = start_index, nmats = cumulative.size() - 1; index < nmats; ++index) {
+    Index_ nmats = cumulative.size() - 1; // Number of matrices is guaranteed to fit in Index_, see reasoning in the DelayedBind constructor.
+    for (Index_ index = start_index; index < nmats; ++index) {
         Index_ submat_end = cumulative[index + 1]; 
         bool not_final = (block_end > submat_end);
         Index_ actual_end = (not_final ? submat_end : block_end) - cumulative[index];
@@ -91,7 +94,7 @@ void initialize_parallel_index(
 }
 
 template<bool oracle_, typename Value_, typename Index_>
-class  ParallelDense : public DenseExtractor<oracle_, Value_, Index_> {
+class  ParallelDense final : public DenseExtractor<oracle_, Value_, Index_> {
 public:
     ParallelDense(
         const std::vector<Index_>&, // Not used, just provided for consistency with other constructors.
@@ -126,7 +129,7 @@ public:
             mapping,
             block_start, 
             block_length,
-            [&](Index_ i, Index_ sub_block_start, Index_ sub_block_length) {
+            [&](Index_ i, Index_ sub_block_start, Index_ sub_block_length) -> void {
                 my_count.emplace_back(sub_block_length);
                 my_exts.emplace_back(new_extractor<false, oracle_>(matrices[i].get(), row, oracle, sub_block_start, sub_block_length, opt));
             }
@@ -148,7 +151,7 @@ public:
             cumulative, 
             mapping,
             *indices_ptr,
-            [&](Index_ i, VectorPtr<Index_> sub_indices_ptr) {
+            [&](Index_ i, VectorPtr<Index_> sub_indices_ptr) -> void {
                 my_count.emplace_back(sub_indices_ptr->size());
                 my_exts.emplace_back(new_extractor<false, oracle_>(matrices[i].get(), row, oracle, std::move(sub_indices_ptr), opt));
             }
@@ -177,7 +180,7 @@ private:
  ***********************/
 
 template<bool oracle_, typename Value_, typename Index_>
-class ParallelFullSparse : public SparseExtractor<oracle_, Value_, Index_> {
+class ParallelFullSparse final : public SparseExtractor<oracle_, Value_, Index_> {
 public:
     ParallelFullSparse(
         const std::vector<Index_>& cumulative, 
@@ -201,7 +204,7 @@ public:
         auto icopy = index_buffer;
         Index_ accumulated = 0;
 
-        for (Index_ x = 0, end = my_cumulative.size() - 1; x < end; ++x) {
+        for (decltype(my_exts.size()) x = 0, end = my_exts.size(); x < end; ++x) {
             auto range = my_exts[x]->fetch(i, vcopy, icopy); 
             accumulated += range.number;
             if (my_needs_value) {
@@ -227,7 +230,7 @@ private:
 };
 
 template<bool oracle_, typename Value_, typename Index_>
-class ParallelBlockSparse : public SparseExtractor<oracle_, Value_, Index_> {
+class ParallelBlockSparse final : public SparseExtractor<oracle_, Value_, Index_> {
 public:
     ParallelBlockSparse(
         const std::vector<Index_>& cumulative, 
@@ -248,7 +251,7 @@ public:
             mapping,
             block_start, 
             block_length,
-            [&](Index_ i, Index_ sub_block_start, Index_ sub_block_length) {
+            [&](Index_ i, Index_ sub_block_start, Index_ sub_block_length) -> void {
                 my_exts.emplace_back(new_extractor<true, oracle_>(matrices[i].get(), row, oracle, sub_block_start, sub_block_length, opt));
             }
         );
@@ -286,7 +289,7 @@ private:
 };
 
 template<bool oracle_, typename Value_, typename Index_>
-class ParallelIndexSparse : public SparseExtractor<oracle_, Value_, Index_> {
+class ParallelIndexSparse final : public SparseExtractor<oracle_, Value_, Index_> {
 public:
     ParallelIndexSparse(
         const std::vector<Index_>& cumulative, 
@@ -306,7 +309,7 @@ public:
             my_cumulative, 
             mapping,
             *indices_ptr,
-            [&](Index_ i, VectorPtr<Index_> sub_indices_ptr) {
+            [&](Index_ i, VectorPtr<Index_> sub_indices_ptr) -> void {
                 my_which_matrix.emplace_back(i);
                 my_exts.emplace_back(new_extractor<true, oracle_>(matrices[i].get(), row, oracle, std::move(sub_indices_ptr), opt));
             }
@@ -350,7 +353,7 @@ private:
  *********************/
 
 template<typename Value_, typename Index_>
-class MyopicPerpendicularDense : public MyopicDenseExtractor<Value_, Index_> {
+class MyopicPerpendicularDense final : public MyopicDenseExtractor<Value_, Index_> {
 public:
     template<typename ... Args_>
     MyopicPerpendicularDense(
@@ -380,7 +383,7 @@ private:
 };
 
 template<typename Value_, typename Index_>
-class MyopicPerpendicularSparse : public MyopicSparseExtractor<Value_, Index_> {
+class MyopicPerpendicularSparse final : public MyopicSparseExtractor<Value_, Index_> {
 public:
     template<typename ... Args_>
     MyopicPerpendicularSparse(
@@ -417,7 +420,7 @@ void initialize_perp_oracular(
     std::vector<Index_>& chosen, 
     Initialize_ init) 
 {
-    size_t ntotal = oracle->total();
+    auto ntotal = oracle->total();
     chosen.reserve(ntotal);
 
     struct Predictions {
@@ -438,7 +441,7 @@ void initialize_perp_oracular(
                     return;
                 }
                 consecutive = false;
-                predictions.resize(number);
+                resize_container_to_Index_size(predictions, number);
                 std::iota(predictions.begin(), predictions.end(), start);
             }
 
@@ -446,16 +449,16 @@ void initialize_perp_oracular(
         }
     };
 
-    Index_ nmats = cumulative.size() - 1;
-    std::vector<Predictions> predictions(nmats);
-    for (size_t i = 0; i < ntotal; ++i) {
+    auto nmats = cumulative.size() - 1;
+    auto predictions = create_container_of_Index_size<std::vector<Predictions> >(nmats); // nmats should fit in an Index_, so this call is legal.
+    for (decltype(ntotal) i = 0; i < ntotal; ++i) {
         auto prediction = oracle->get(i);
         Index_ choice = mapping[prediction];
         chosen.push_back(choice);
         predictions[choice].add(prediction - cumulative[choice]);
     }
 
-    for (Index_ x = 0; x < nmats; ++x) {
+    for (decltype(nmats) x = 0; x < nmats; ++x) {
         auto& current = predictions[x];
         if (current.consecutive) {
             if (current.number) {
@@ -470,7 +473,7 @@ void initialize_perp_oracular(
 }
 
 template<typename Value_, typename Index_>
-class OracularPerpendicularDense : public OracularDenseExtractor<Value_, Index_> {
+class OracularPerpendicularDense final : public OracularDenseExtractor<Value_, Index_> {
 public:
     template<typename ... Args_>
     OracularPerpendicularDense(
@@ -481,33 +484,33 @@ public:
         std::shared_ptr<const Oracle<Index_> > ora, 
         const Args_& ... args)
     {
-        my_exts.resize(matrices.size());
+        resize_container_to_Index_size(my_exts, matrices.size()); // number of matrices should fit in an I ndex_, so this call is allowed.
         initialize_perp_oracular(
             cumulative,
             mapping,
             ora.get(),
-            segments,
-            [&](Index_ x, std::shared_ptr<const Oracle<Index_> > subora) {
+            my_segments,
+            [&](Index_ x, std::shared_ptr<const Oracle<Index_> > subora) -> void {
                 my_exts[x] = matrices[x]->dense(row, std::move(subora), args...);
             }
         );
     }
 
     const Value_* fetch(Index_ i, Value_* buffer) {
-        auto chosen = segments[used];
+        auto chosen = my_segments[my_used];
         auto output = my_exts[chosen]->fetch(i, buffer);
-        ++used;
+        ++my_used;
         return output;
     }
 
 private:
-    std::vector<Index_> segments;
+    std::vector<Index_> my_segments;
     std::vector<std::unique_ptr<OracularDenseExtractor<Value_, Index_> > > my_exts;
-    size_t used = 0;
+    PredictionIndex my_used = 0;
 };
 
 template<typename Value_, typename Index_>
-class OracularPerpendicularSparse : public OracularSparseExtractor<Value_, Index_> {
+class OracularPerpendicularSparse final : public OracularSparseExtractor<Value_, Index_> {
 public:
     template<typename ... Args_>
     OracularPerpendicularSparse(
@@ -518,29 +521,29 @@ public:
         std::shared_ptr<const Oracle<Index_> > ora, 
         const Args_& ... args)
     {
-        my_exts.resize(matrices.size());
+        resize_container_to_Index_size(my_exts, matrices.size()); // number of matrices should fit in an Index_, so this call is legal.
         initialize_perp_oracular(
             cumulative,
             mapping,
             ora.get(),
-            segments,
-            [&](Index_ x, std::shared_ptr<const Oracle<Index_> > subora) {
+            my_segments,
+            [&](Index_ x, std::shared_ptr<const Oracle<Index_> > subora) -> void {
                 my_exts[x] = matrices[x]->sparse(row, std::move(subora), args...);
             }
         );
     }
 
     SparseRange<Value_, Index_> fetch(Index_ i, Value_* vbuffer, Index_* ibuffer) {
-        auto chosen = segments[used];
+        auto chosen = my_segments[my_used];
         auto output = my_exts[chosen]->fetch(i, vbuffer, ibuffer);
-        ++used;
+        ++my_used;
         return output;
     }
 
 private:
-    std::vector<Index_> segments;
+    std::vector<Index_> my_segments;
     std::vector<std::unique_ptr<OracularSparseExtractor<Value_, Index_> > > my_exts;
-    size_t used = 0;
+    PredictionIndex my_used = 0;
 };
 
 }
@@ -558,7 +561,7 @@ private:
  * @tparam Index_ Type of index value.
  */
 template<typename Value_, typename Index_>
-class DelayedBind : public Matrix<Value_, Index_> {
+class DelayedBind final : public Matrix<Value_, Index_> {
 public:
     /**
      * @param matrices Pointers to the matrices to be combined.
@@ -566,11 +569,13 @@ public:
      * @param by_row Whether to combine matrices by the rows (i.e., the output matrix has number of rows equal to the sum of the number of rows in `matrices`).
      * If false, combining is applied by the columns.
      */
-    DelayedBind(std::vector<std::shared_ptr<const Matrix<Value_, Index_> > > matrices, bool by_row) : 
-        my_matrices(std::move(matrices)), my_by_row(by_row), my_cumulative(my_matrices.size()+1) 
-    {
-        size_t sofar = 0;
-        for (size_t i = 0, nmats = my_matrices.size(); i < nmats; ++i) {
+    DelayedBind(std::vector<std::shared_ptr<const Matrix<Value_, Index_> > > matrices, bool by_row) : my_matrices(std::move(matrices)), my_by_row(by_row) {
+        auto nmats = my_matrices.size();
+        my_cumulative.reserve(sanisizer::sum<decltype(my_cumulative.size())>(nmats, 1));
+        decltype(nmats) sofar = 0;
+        my_cumulative.push_back(0);
+
+        for (decltype(nmats) i = 0; i < nmats; ++i) {
             auto& current = my_matrices[i];
             Index_ primary, secondary;
             if (my_by_row) {
@@ -593,20 +598,20 @@ public:
                 if (sofar != i) {
                     my_matrices[sofar] = std::move(current);
                 }
-                my_cumulative[sofar + 1] = my_cumulative[sofar] + primary;
+                my_cumulative.push_back(sanisizer::sum<Index_>(my_cumulative.back(), primary));
                 ++sofar;
             }
         }
 
-        my_cumulative.resize(sofar + 1);
         my_matrices.resize(sofar);
+        nmats = sofar;
 
         // At this point, the number of matrices must be no greater than the
         // number of rows/columns of the combined matrix (as we've removed all
         // non-contributing submatrices) and thus should fit into 'Index_';
         // hence, using Index_ for the mapping should not overflow.
         my_mapping.reserve(my_cumulative.back());
-        for (Index_ i = 0, nmats = my_matrices.size(); i < nmats; ++i) {
+        for (decltype(nmats) i = 0; i < nmats; ++i) {
             my_mapping.insert(my_mapping.end(), (my_by_row ? my_matrices[i]->nrow() : my_matrices[i]->ncol()), i);
         }
 
@@ -844,37 +849,19 @@ private:
 };
 
 /**
- * A `make_*` helper function to enable partial template deduction of supplied types.
- *
- * @tparam Value_ Type of matrix value.
- * @tparam Index_ Type of index value.
- *
- * @param matrices Pointers to `Matrix` objects.
- * @param row Whether to combine matrices by the rows (i.e., the output matrix has number of rows equal to the sum of the number of rows in `matrices`).
- * If false, combining is applied by the columns.
- *
- * @return A pointer to a `DelayedBind` instance.
+ * @cond
  */
+// These methods are soft-deprecated: kept around for back-compatibility only.
 template<typename Value_, typename Index_>
 std::shared_ptr<Matrix<Value_, Index_> > make_DelayedBind(std::vector<std::shared_ptr<const Matrix<Value_, Index_> > > matrices, bool row) {
     return std::shared_ptr<Matrix<Value_, Index_> >(new DelayedBind<Value_, Index_>(std::move(matrices), row));
 }
 
-/**
- * @cond
- */
 template<typename Value_, typename Index_>
 std::shared_ptr<Matrix<Value_, Index_> > make_DelayedBind(std::vector<std::shared_ptr<Matrix<Value_, Index_> > > matrices, bool row) {
     return std::shared_ptr<Matrix<Value_, Index_> >(new DelayedBind<Value_, Index_>(std::move(matrices), row));
 }
-/**
- * @endcond
- */
 
-/**
- * @cond
- */
-// Back-compatibility.
 template<int margin_, typename Value_, typename Index_>
 std::shared_ptr<Matrix<Value_, Index_> > make_DelayedBind(std::vector<std::shared_ptr<const Matrix<Value_, Index_> > > matrices) {
     return make_DelayedBind(std::move(matrices), margin_ == 0);

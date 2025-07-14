@@ -3,10 +3,12 @@
 
 #include "../base/Matrix.hpp"
 #include "../utils/new_extractor.hpp"
+#include "../utils/Index_to_container.hpp"
 
 #include <memory>
 #include <type_traits>
 #include <algorithm>
+#include <cstddef>
 
 /**
  * @file DelayedCast.hpp
@@ -22,15 +24,15 @@ namespace tatami {
 namespace DelayedCast_internal {
 
 template<typename IndexIn_, typename IndexOut_>
-class CastOracle : public Oracle<IndexIn_> {
+class CastOracle final : public Oracle<IndexIn_> {
 public:
     CastOracle(std::shared_ptr<const Oracle<IndexOut_> > oracle) : my_oracle(std::move(oracle)) {}
 
-    IndexIn_ get(size_t i) const {
+    IndexIn_ get(PredictionIndex i) const {
         return my_oracle->get(i);
     }
 
-    size_t total() const {
+    PredictionIndex total() const {
         return my_oracle->total();
     }
 
@@ -59,7 +61,7 @@ VectorPtr<IndexIn_> convert(VectorPtr<IndexOut_> indices_ptr) {
 }
 
 template<bool oracle_, typename ValueOut_, typename IndexOut_, typename ValueIn_, typename IndexIn_>
-class Dense : public DenseExtractor<oracle_, ValueOut_, IndexOut_> {
+class Dense final : public DenseExtractor<oracle_, ValueOut_, IndexOut_> {
 public:
     Dense(const Matrix<ValueIn_, IndexIn_>* matrix, bool row, MaybeOracle<oracle_, IndexOut_> oracle, const Options& opt) {
         allocate(row ? matrix->ncol() : matrix->nrow());
@@ -77,9 +79,9 @@ public:
     }
 
 private:
-    void allocate(size_t n) {
+    void allocate(IndexIn_ n) {
         if constexpr(!no_op) {
-            my_buffer.resize(n);
+            resize_container_to_Index_size(my_buffer, n);
         }
     }
 
@@ -101,7 +103,7 @@ private:
 };
 
 template<bool oracle_, typename ValueOut_, typename IndexOut_, typename ValueIn_, typename IndexIn_>
-class Sparse : public SparseExtractor<oracle_, ValueOut_, IndexOut_> {
+class Sparse final : public SparseExtractor<oracle_, ValueOut_, IndexOut_> {
 public:
     Sparse(const Matrix<ValueIn_, IndexIn_>* matrix, bool row, MaybeOracle<oracle_, IndexOut_> oracle, const Options& opt) {
         allocate(row ? matrix->ncol() : matrix->nrow(), opt);
@@ -119,22 +121,22 @@ public:
     }
 
 private:
-    void allocate(size_t n, const Options& opt) {
+    void allocate(IndexIn_ n, const Options& opt) {
         if constexpr(!no_op_value) {
             if (opt.sparse_extract_value) {
-                my_vbuffer.resize(n);
+                resize_container_to_Index_size(my_vbuffer, n);
             }
         }
         if constexpr(!no_op_index) {
             if (opt.sparse_extract_index) {
-                my_ibuffer.resize(n);
+                resize_container_to_Index_size(my_ibuffer, n);
             }
         }
     }
 
 public:
     SparseRange<ValueOut_, IndexOut_> fetch(IndexOut_ i, ValueOut_* value_buffer, IndexOut_* index_buffer) {
-        IndexIn_* iptr = [&]() {
+        IndexIn_* iptr = [&]{
             if constexpr(no_op_index) {
                 return index_buffer;
             } else {
@@ -142,7 +144,7 @@ public:
             }
         }();
 
-        ValueIn_* vptr = [&]() {
+        ValueIn_* vptr = [&]{
             if constexpr(no_op_value) {
                 return value_buffer;
             } else {
@@ -197,7 +199,7 @@ private:
  * @tparam IndexIn_ Index type to cast from.
  */
 template<typename ValueOut_, typename IndexOut_, typename ValueIn_, typename IndexIn_>
-class DelayedCast : public Matrix<ValueOut_, IndexOut_> {
+class DelayedCast final : public Matrix<ValueOut_, IndexOut_> {
 public:
     /**
      * @param matrix Pointer to the `Matrix` instance to cast from.

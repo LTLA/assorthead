@@ -96,12 +96,9 @@ std::shared_ptr<tatami::Matrix<OutputValue_, Index_> > normalize_counts(
         throw std::runtime_error("length of 'size_factors' should be equal to the number of columns of 'counts'");
     }
 
-    auto div = tatami::make_DelayedUnaryIsometricOperation<OutputValue_>(
+    auto div = std::make_shared<tatami::DelayedUnaryIsometricOperation<OutputValue_, InputValue_, Index_> >(
         std::move(counts), 
-        tatami::make_DelayedUnaryIsometricDivideVector<true, InputValue_, SizeFactors_>(
-            std::move(size_factors), 
-            false
-        )
+        std::make_shared<tatami::DelayedUnaryIsometricDivideVectorHelper<true, OutputValue_, InputValue_, Index_, SizeFactors_> >(std::move(size_factors), false)
     );
 
     if (!options.log) {
@@ -109,18 +106,18 @@ std::shared_ptr<tatami::Matrix<OutputValue_, Index_> > normalize_counts(
     }
 
     if (current_pseudo == 1) {
-        return tatami::make_DelayedUnaryIsometricOperation<OutputValue_>(
+        return std::make_shared<tatami::DelayedUnaryIsometricOperation<OutputValue_, OutputValue_, Index_> >(
             std::move(div), 
-            tatami::DelayedUnaryIsometricLog1p<OutputValue_, OutputValue_>(options.log_base)
+            std::make_shared<tatami::DelayedUnaryIsometricLog1pHelper<OutputValue_, OutputValue_, Index_, OutputValue_> >(options.log_base)
         );
     } else {
-        auto add = tatami::make_DelayedUnaryIsometricOperation<OutputValue_>(
+        auto add = std::make_shared<tatami::DelayedUnaryIsometricOperation<OutputValue_, OutputValue_, Index_> >(
             std::move(div), 
-            tatami::make_DelayedUnaryIsometricAddScalar<OutputValue_>(current_pseudo)
+            std::make_shared<tatami::DelayedUnaryIsometricAddScalarHelper<OutputValue_, OutputValue_, Index_, OutputValue_> >(current_pseudo)
         );
-        return tatami::make_DelayedUnaryIsometricOperation<OutputValue_>(
+        return std::make_shared<tatami::DelayedUnaryIsometricOperation<OutputValue_, OutputValue_, Index_> >(
             std::move(add), 
-            tatami::DelayedUnaryIsometricLog<OutputValue_, OutputValue_>(options.log_base)
+            std::make_shared<tatami::DelayedUnaryIsometricLogHelper<OutputValue_, OutputValue_, Index_, OutputValue_> >(options.log_base)
         );
     }
 };

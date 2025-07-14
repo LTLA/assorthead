@@ -12,6 +12,7 @@
 #include <memory>
 #include <utility>
 #include <stdexcept>
+#include <cstddef>
 
 /**
  * @file FragmentedSparseMatrix.hpp
@@ -31,7 +32,7 @@ namespace FragmentedSparseMatrix_internal {
  ********************/
 
 template<typename Value_, typename Index_, class ValueVectorStorage_, class IndexVectorStorage_>
-class PrimaryMyopicFullDense : public MyopicDenseExtractor<Value_, Index_> {
+class PrimaryMyopicFullDense final : public MyopicDenseExtractor<Value_, Index_> {
 public:
     PrimaryMyopicFullDense(const ValueVectorStorage_& values, const IndexVectorStorage_& indices, Index_ secondary) :
         my_values(values), my_indices(indices), my_secondary(secondary) {} 
@@ -41,8 +42,7 @@ public:
         const auto& curi = my_indices[i];
 
         std::fill_n(buffer, my_secondary, static_cast<Value_>(0));
-        size_t end = curv.size();
-        for (size_t x = 0; x < end; ++x) {
+        for (decltype(curv.size()) x = 0, end = curv.size(); x < end; ++x) {
             buffer[curi[x]] = curv[x];
         }
         return buffer;
@@ -55,7 +55,7 @@ private:
 };
 
 template<typename Value_, typename Index_, class ValueVectorStorage_, class IndexVectorStorage_>
-class PrimaryMyopicFullSparse : public MyopicSparseExtractor<Value_, Index_> {
+class PrimaryMyopicFullSparse final : public MyopicSparseExtractor<Value_, Index_> {
 public:
     PrimaryMyopicFullSparse(const ValueVectorStorage_& values, const IndexVectorStorage_& indices, [[maybe_unused]] Index_ secondary /* for consistency only */, const Options& opt) :
         my_values(values), my_indices(indices), my_needs_value(opt.sparse_extract_value), my_needs_index(opt.sparse_extract_index) {} 
@@ -66,10 +66,10 @@ public:
 
         SparseRange<Value_, Index_> output(curv.size(), NULL, NULL);
         if (my_needs_value) {
-            output.value = sparse_utils::extract_primary_vector(curv, static_cast<size_t>(0), curv.size(), vbuffer);
+            output.value = sparse_utils::extract_primary_vector(curv, static_cast<decltype(curv.size())>(0), curv.size(), vbuffer);
         }
         if (my_needs_index) {
-            output.index = sparse_utils::extract_primary_vector(curi, static_cast<size_t>(0), curi.size(), index_buffer);
+            output.index = sparse_utils::extract_primary_vector(curi, static_cast<decltype(curi.size())>(0), curi.size(), index_buffer);
         }
         return output;
     }
@@ -85,7 +85,7 @@ private:
  *********************/
 
 template<typename Value_, typename Index_, class ValueVectorStorage_, class IndexVectorStorage_>
-class PrimaryMyopicBlockDense : public MyopicDenseExtractor<Value_, Index_> {
+class PrimaryMyopicBlockDense final : public MyopicDenseExtractor<Value_, Index_> {
 public:
     PrimaryMyopicBlockDense(const ValueVectorStorage_& values, const IndexVectorStorage_& indices, Index_ secondary, Index_ block_start, Index_ block_length) :
         my_values(values), my_indices(indices), my_secondary(secondary), my_block_start(block_start), my_block_length(block_length) {} 
@@ -97,13 +97,12 @@ public:
         auto iStart = curi.begin();
         auto iEnd = curi.end();
         sparse_utils::refine_primary_block_limits(iStart, iEnd, my_secondary, my_block_start, my_block_length);
-        size_t offset = (iStart - curi.begin());
-        size_t number = iEnd - iStart;
+        auto start_pos = (iStart - curi.begin());
+        auto end_pos = (iEnd - curi.begin());
 
         std::fill_n(buffer, my_block_length, static_cast<Value_>(0));
-        for (size_t i = 0; i < number; ++i) {
-            auto cur_offset = offset + i;
-            buffer[curi[cur_offset] - my_block_start] = curv[cur_offset];
+        for (auto x = start_pos; x < end_pos; ++x) {
+            buffer[curi[x] - my_block_start] = curv[x];
         }
         return buffer;
     }
@@ -116,7 +115,7 @@ private:
 };
 
 template<typename Value_, typename Index_, class ValueVectorStorage_, class IndexVectorStorage_>
-class PrimaryMyopicBlockSparse : public MyopicSparseExtractor<Value_, Index_> {
+class PrimaryMyopicBlockSparse final : public MyopicSparseExtractor<Value_, Index_> {
 public:
     PrimaryMyopicBlockSparse(const ValueVectorStorage_& values, const IndexVectorStorage_& indices, Index_ secondary, Index_ block_start, Index_ block_length, const Options& opt) :
         my_values(values),
@@ -133,8 +132,8 @@ public:
         auto iStart = curi.begin();
         auto iEnd = curi.end();
         sparse_utils::refine_primary_block_limits(iStart, iEnd, my_secondary, my_block_start, my_block_length);
-        size_t offset = iStart - curi.begin();
-        size_t delta = iEnd - iStart;
+        auto offset = iStart - curi.begin();
+        auto delta = iEnd - iStart;
 
         SparseRange<Value_, Index_> output(delta, NULL, NULL);
         if (my_needs_value) {
@@ -159,7 +158,7 @@ private:
  ***********************/
 
 template<typename Value_, typename Index_, class ValueVectorStorage_, class IndexVectorStorage_>
-class PrimaryMyopicIndexDense : public MyopicDenseExtractor<Value_, Index_> {
+class PrimaryMyopicIndexDense final : public MyopicDenseExtractor<Value_, Index_> {
 public:
     PrimaryMyopicIndexDense(const ValueVectorStorage_& values, const IndexVectorStorage_& indices, Index_ secondary, VectorPtr<Index_> indices_ptr) :
         my_values(values), my_indices(indices), my_retriever(*indices_ptr, secondary), my_num_indices(indices_ptr->size()) {} 
@@ -171,7 +170,7 @@ public:
         my_retriever.populate(
             curi.begin(),
             curi.end(),
-            [&](size_t s, size_t offset) {
+            [&](auto s, auto offset) -> void {
                 buffer[s] = curv[offset];
             }
         );
@@ -182,11 +181,11 @@ private:
     const ValueVectorStorage_& my_values;
     const IndexVectorStorage_& my_indices;
     sparse_utils::RetrievePrimarySubsetDense<Index_> my_retriever;
-    size_t my_num_indices;
+    std::size_t my_num_indices;
 };
 
 template<typename Value_, typename Index_, class ValueVectorStorage_, class IndexVectorStorage_>
-class PrimaryMyopicIndexSparse : public MyopicSparseExtractor<Value_, Index_> {
+class PrimaryMyopicIndexSparse final : public MyopicSparseExtractor<Value_, Index_> {
 public:
     PrimaryMyopicIndexSparse(const ValueVectorStorage_& values, const IndexVectorStorage_& indices, Index_ secondary, VectorPtr<Index_> indices_ptr, const Options& opt) :
         my_values(values), my_indices(indices), my_retriever(*indices_ptr, secondary), my_needs_value(opt.sparse_extract_value), my_needs_index(opt.sparse_extract_index) {} 
@@ -201,7 +200,7 @@ public:
         my_retriever.populate(
             curi.begin(),
             curi.end(),
-            [&](size_t offset, Index_ ix) {
+            [&](auto offset, auto ix) -> void {
                 ++count;
                 if (my_needs_value) {
                     *vcopy = curv[offset];
@@ -237,7 +236,7 @@ private:
     const IndexVectorStorage_& my_indices;
 
 public:
-    typedef size_t pointer_type;
+    typedef decltype(std::declval<IndexVectorStorage_>()[0].size()) pointer_type;
 
     pointer_type start_offset(Index_) const {
         return 0;
@@ -258,16 +257,19 @@ auto make_ServeIndices(const IndexVectorStorage_& i) {
 }
 
 template<typename Value_, typename Index_, class ValueVectorStorage_, class IndexVectorStorage_> 
-class SecondaryMyopicFullDense : public MyopicDenseExtractor<Value_, Index_> {
+class SecondaryMyopicFullDense final : public MyopicDenseExtractor<Value_, Index_> {
 public:
     SecondaryMyopicFullDense(const ValueVectorStorage_& values, const IndexVectorStorage_& indices, Index_ secondary) :
         my_values(values), my_cache(make_ServeIndices<Index_>(indices), secondary, indices.size()) {} 
 
     const Value_* fetch(Index_ i, Value_* buffer) {
         std::fill_n(buffer, my_cache.size(), static_cast<Value_>(0));
-        my_cache.search(i, [&](Index_ primary, Index_ index_primary, size_t ptr) {
-            buffer[index_primary] = my_values[primary][ptr];
-        });
+        my_cache.search(
+            i, 
+            [&](Index_ primary, Index_ index_primary, auto ptr) -> void {
+                buffer[index_primary] = my_values[primary][ptr];
+            }
+        );
         return buffer;
     }
 
@@ -277,22 +279,25 @@ private:
 };
 
 template<typename Value_, typename Index_, class ValueVectorStorage_, class IndexVectorStorage_>
-class SecondaryMyopicFullSparse : public MyopicSparseExtractor<Value_, Index_> {
+class SecondaryMyopicFullSparse final : public MyopicSparseExtractor<Value_, Index_> {
 public:
     SecondaryMyopicFullSparse(const ValueVectorStorage_& values, const IndexVectorStorage_& indices, Index_ secondary, const Options& opt) :
         my_values(values), my_cache(make_ServeIndices<Index_>(indices), secondary, indices.size()), my_needs_value(opt.sparse_extract_value), my_needs_index(opt.sparse_extract_index) {} 
 
     SparseRange<Value_, Index_> fetch(Index_ i, Value_* value_buffer, Index_* index_buffer) {
         Index_ count = 0;
-        my_cache.search(i, [&](Index_ primary, Index_, size_t ptr) {
-            if (my_needs_value) {
-                value_buffer[count] = my_values[primary][ptr];
+        my_cache.search(
+            i,
+            [&](Index_ primary, Index_, auto ptr) -> void {
+                if (my_needs_value) {
+                    value_buffer[count] = my_values[primary][ptr];
+                }
+                if (my_needs_index) {
+                    index_buffer[count] = primary;
+                }
+                ++count;
             }
-            if (my_needs_index) {
-                index_buffer[count] = primary;
-            }
-            ++count;
-        });
+        );
         return SparseRange<Value_, Index_>(count, my_needs_value ? value_buffer : NULL, my_needs_index ? index_buffer : NULL);
     }
 
@@ -307,16 +312,19 @@ private:
  ***********************/
 
 template<typename Value_, typename Index_, class ValueVectorStorage_, class IndexVectorStorage_>
-class SecondaryMyopicBlockDense : public MyopicDenseExtractor<Value_, Index_> {
+class SecondaryMyopicBlockDense final : public MyopicDenseExtractor<Value_, Index_> {
 public:
     SecondaryMyopicBlockDense(const ValueVectorStorage_& values, const IndexVectorStorage_& indices, Index_ secondary, Index_ block_start, Index_ block_length) :
         my_values(values), my_cache(make_ServeIndices<Index_>(indices), secondary, block_start, block_length) {}
 
     const Value_* fetch(Index_ i, Value_* buffer) {
         std::fill_n(buffer, my_cache.size(), static_cast<Value_>(0));
-        my_cache.search(i, [&](Index_ primary, Index_ index_primary, size_t ptr) {
-            buffer[index_primary] = my_values[primary][ptr];
-        });
+        my_cache.search(
+            i,
+            [&](Index_ primary, Index_ index_primary, auto ptr) -> void {
+                buffer[index_primary] = my_values[primary][ptr];
+            }
+        );
         return buffer;
     }
 
@@ -326,22 +334,25 @@ private:
 };
 
 template<typename Value_, typename Index_, class ValueVectorStorage_, class IndexVectorStorage_>
-class SecondaryMyopicBlockSparse : public MyopicSparseExtractor<Value_, Index_> {
+class SecondaryMyopicBlockSparse final : public MyopicSparseExtractor<Value_, Index_> {
 public:
     SecondaryMyopicBlockSparse(const ValueVectorStorage_& values, const IndexVectorStorage_& indices, Index_ secondary, Index_ block_start, Index_ block_length, const Options& opt) :
         my_values(values), my_cache(make_ServeIndices<Index_>(indices), secondary, block_start, block_length), my_needs_value(opt.sparse_extract_value), my_needs_index(opt.sparse_extract_index) {} 
 
     SparseRange<Value_, Index_> fetch(Index_ i, Value_* value_buffer, Index_* index_buffer) {
         Index_ count = 0;
-        my_cache.search(i, [&](Index_ primary, Index_, size_t ptr) {
-            if (my_needs_value) {
-                value_buffer[count] = my_values[primary][ptr];
+        my_cache.search(
+            i, 
+            [&](Index_ primary, Index_, auto ptr) -> void {
+                if (my_needs_value) {
+                    value_buffer[count] = my_values[primary][ptr];
+                }
+                if (my_needs_index) {
+                    index_buffer[count] = primary;
+                }
+                ++count;
             }
-            if (my_needs_index) {
-                index_buffer[count] = primary;
-            }
-            ++count;
-        });
+        );
         return SparseRange<Value_, Index_>(count, my_needs_value ? value_buffer : NULL, my_needs_index ? index_buffer : NULL);
     }
 
@@ -356,16 +367,19 @@ private:
  ***********************/
 
 template<typename Value_, typename Index_, class ValueVectorStorage_, class IndexVectorStorage_>
-class SecondaryMyopicIndexDense : public MyopicDenseExtractor<Value_, Index_> {
+class SecondaryMyopicIndexDense final : public MyopicDenseExtractor<Value_, Index_> {
 public:
     SecondaryMyopicIndexDense(const ValueVectorStorage_& values, const IndexVectorStorage_& indices, Index_ secondary, VectorPtr<Index_> indices_ptr) :
         my_values(values), my_cache(make_ServeIndices<Index_>(indices), secondary, std::move(indices_ptr)) {}
 
     const Value_* fetch(Index_ i, Value_* buffer) {
         std::fill_n(buffer, my_cache.size(), static_cast<Value_>(0));
-        my_cache.search(i, [&](Index_ primary, Index_ index_primary, size_t ptr) {
-            buffer[index_primary] = my_values[primary][ptr];
-        });
+        my_cache.search(
+            i,
+            [&](Index_ primary, Index_ index_primary, auto ptr) -> void {
+                buffer[index_primary] = my_values[primary][ptr];
+            }
+        );
         return buffer;
     }
 
@@ -375,22 +389,25 @@ private:
 };
 
 template<typename Value_, typename Index_, class ValueVectorStorage_, class IndexVectorStorage_>
-class SecondaryMyopicIndexSparse : public MyopicSparseExtractor<Value_, Index_> {
+class SecondaryMyopicIndexSparse final : public MyopicSparseExtractor<Value_, Index_> {
 public:
     SecondaryMyopicIndexSparse(const ValueVectorStorage_& values, const IndexVectorStorage_& indices, Index_ secondary, VectorPtr<Index_> indices_ptr, const Options& opt) :
         my_values(values), my_cache(make_ServeIndices<Index_>(indices), secondary, std::move(indices_ptr)), my_needs_value(opt.sparse_extract_value), my_needs_index(opt.sparse_extract_index) {} 
 
     SparseRange<Value_, Index_> fetch(Index_ i, Value_* vbuffer, Index_* index_buffer) {
         Index_ count = 0;
-        my_cache.search(i, [&](Index_ primary, Index_, size_t ptr) {
-            if (my_needs_value) {
-                vbuffer[count] = my_values[primary][ptr];
+        my_cache.search(
+            i,
+            [&](Index_ primary, Index_, auto ptr) -> void {
+                if (my_needs_value) {
+                    vbuffer[count] = my_values[primary][ptr];
+                }
+                if (my_needs_index) {
+                    index_buffer[count] = primary;
+                }
+                ++count;
             }
-            if (my_needs_index) {
-                index_buffer[count] = primary;
-            }
-            ++count;
-        });
+        );
         return SparseRange<Value_, Index_>(count, my_needs_value ? vbuffer : NULL, my_needs_index ? index_buffer : NULL);
     }
 
@@ -404,6 +421,23 @@ private:
 /**
  * @endcond
  */
+
+/**
+ * @brief Options for `FragmentedSparseMatrix()`.
+ */
+struct FragmentedSparseMatrixOptions {
+    /**
+     * Should the input vectors be checked for validity in the `FragmentedSparseMatrix` constructor?
+     * If true, the constructor will check that:
+     *
+     * - `values` and `indices` have the same length that is equal to the number of rows (for `row_sparse = true`) or columns (otherwise).
+     * - corresponding elements of `values` and `indices` have the same length.
+     * - each element of `indices` is ordered and contains non-negative values less than `ncol` (for `row_sparse = true`) or `nrow` (otherwise).
+     *
+     * This can be disabled for faster construction if the caller knows that the input vectors are valid.
+     */
+    bool check = true;
+};
 
 /**
  * @brief Fragmented sparse matrix representation.
@@ -426,12 +460,7 @@ private:
  * If a method is available for `data()` that returns a `const Index*`, it will also be used.
  * The inner vector does not necessarily have to contain `Index_`, as long as the type is convertible to `Index_`.
  */
-template<
-    typename Value_, 
-    typename Index_,
-    class ValueVectorStorage_ = std::vector<std::vector<Value_> >,
-    class IndexVectorStorage_ = std::vector<std::vector<Index_> >
->
+template<typename Value_, typename Index_, class ValueVectorStorage_, class IndexVectorStorage_>
 class FragmentedSparseMatrix : public Matrix<Value_, Index_> {
 public:
     /**
@@ -441,35 +470,31 @@ public:
      * @param indices Vector of vectors of row indices (if `row_sparse = false`) or column indices (if `row_sparse = true`) for the non-zero elements.
      * @param row_sparse Whether this is a row sparse representation.
      * If `false`, a column sparse representation is assumed instead.
-     * @param check Should the input vectors be checked for validity?
-     *
-     * If `check=true`, the constructor will check that `values` and `indices` have the same length that is equal to the number of rows (for `row_sparse = true`) or columns (otherwise);
-     * that corresponding elements of `values` and `indices` also have the same length;
-     * and that each element of `indices` is ordered and contains non-negative values less than `ncol` (for `row_sparse = true`) or `nrow` (otherwise).
+     * @param options Further options.
      */
-    FragmentedSparseMatrix(Index_ nrow, Index_ ncol, ValueVectorStorage_ values, IndexVectorStorage_ indices, bool row_sparse, bool check = true) : 
+    FragmentedSparseMatrix(Index_ nrow, Index_ ncol, ValueVectorStorage_ values, IndexVectorStorage_ indices, bool row_sparse, const FragmentedSparseMatrixOptions& options) : 
         my_nrow(nrow), my_ncol(ncol), my_values(std::move(values)), my_indices(std::move(indices)), my_row_sparse(row_sparse)
     {
-        if (check) {
+        if (options.check) {
             if (my_values.size() != my_indices.size()) {
                 throw std::runtime_error("'values' and 'indices' should be of the same length");
             }
 
             if (my_row_sparse) {
-                if (my_indices.size() != static_cast<size_t>(my_nrow)) {
+                if (!safe_non_negative_equal(my_indices.size(), my_nrow)) {
                     throw std::runtime_error("length of 'indices' should be equal to number of rows'");
                 }
             } else {
-                if (my_indices.size() != static_cast<size_t>(my_ncol)) {
+                if (!safe_non_negative_equal(my_indices.size(), my_ncol)) {
                     throw std::runtime_error("length of 'indices' should be equal to number of columns");
                 }
             }
 
             ElementType<ElementType<IndexVectorStorage_> > max_index = (my_row_sparse ? my_ncol : my_nrow);
-            for (size_t i = 0, end = my_indices.size(); i < end; ++i) {
+            for (decltype(my_indices.size()) i = 0, end = my_indices.size(); i < end; ++i) {
                 const auto& curv = my_values[i];
                 const auto& curi = my_indices[i];
-                if (curv.size() != curi.size()) {
+                if (!safe_non_negative_equal(curv.size(), curi.size())) {
                     throw std::runtime_error("corresponding elements of 'values' and 'indices' should have the same length");
                 }
 
@@ -479,7 +504,7 @@ public:
                     }
                 }
 
-                for (size_t j = 1, jend = curi.size(); j < jend; ++j) {
+                for (decltype(curi.size()) j = 1, jend = curi.size(); j < jend; ++j) {
                     if (curi[j] <= curi[j - 1]) {
                         throw std::runtime_error("my_indices should be strictly increasing within each element of 'indices'");
                     }
@@ -487,6 +512,28 @@ public:
             }
         }
     }
+
+    /**
+     * @cond
+     */
+    // Back-compatibility only.
+    FragmentedSparseMatrix(Index_ nrow, Index_ ncol, ValueVectorStorage_ values, IndexVectorStorage_ indices, bool row_sparse, bool check = true) :
+        FragmentedSparseMatrix(
+            nrow,
+            ncol,
+            std::move(values),
+            std::move(indices),
+            row_sparse,
+            [&]{
+                FragmentedSparseMatrixOptions fopt;
+                fopt.check = check;
+                return fopt;
+            }()
+        )
+    {}
+    /**
+     * @endcond
+     */
 
 private:
     Index_ my_nrow, my_ncol;
@@ -641,7 +688,7 @@ public:
  * See `tatami::FragmentedSparseMatrix` for details on the template parameters.
  */
 template<typename Value_, typename Index_, class ValueVectorStorage_ = std::vector<std::vector<Value_> >, class IndexVectorStorage_ = std::vector<std::vector<Index_> > >
-class FragmentedSparseColumnMatrix : public FragmentedSparseMatrix<Value_, Index_, ValueVectorStorage_, IndexVectorStorage_> {
+class FragmentedSparseColumnMatrix final : public FragmentedSparseMatrix<Value_, Index_, ValueVectorStorage_, IndexVectorStorage_> {
 public:
     /**
      * @param nrow Number of rows.
@@ -660,7 +707,7 @@ public:
  * See `tatami::FragmentedSparseMatrix` for details on the template parameters.
  */
 template<typename Value_, typename Index_, class ValueVectorStorage_ = std::vector<std::vector<Value_> >, class IndexVectorStorage_ = std::vector<std::vector<Index_> > >
-class FragmentedSparseRowMatrix : public FragmentedSparseMatrix<Value_, Index_, ValueVectorStorage_, IndexVectorStorage_> {
+class FragmentedSparseRowMatrix final : public FragmentedSparseMatrix<Value_, Index_, ValueVectorStorage_, IndexVectorStorage_> {
 public:
     /**
      * @param nrow Number of rows.

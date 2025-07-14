@@ -2,7 +2,11 @@
 #define TATAMI_FIXED_ORACLE_HPP
 
 #include "../base/Oracle.hpp"
-#include <numeric>
+
+#include <vector>
+#include <cstddef>
+
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file FixedOracle.hpp
@@ -18,26 +22,28 @@ namespace tatami {
  * @brief Predict future accesses from a view on a fixed sequence.
  */
 template<typename Index_>
-class FixedViewOracle : public Oracle<Index_> {
+class FixedViewOracle final : public Oracle<Index_> {
 public:
     /**
      * @param ptr Pointer to a constant array of indices on the target dimension.
      * The underlying array should be valid for the lifetime of this `FixedViewOracle` instance.
      * @param number Length of the array at `ptr`.
      */
-    FixedViewOracle(const Index_* ptr, size_t number) : my_reference(ptr), my_length(number) {}
+    FixedViewOracle(const Index_* ptr, PredictionIndex number) : my_reference(ptr), my_length(number) {
+        sanisizer::can_cast<std::size_t>(number); // make sure that array is addressable by all [0, number).
+    }
 
-    size_t total() const {
+    PredictionIndex total() const {
         return my_length;
     }
 
-    Index_ get(size_t i) const {
+    Index_ get(PredictionIndex i) const {
         return my_reference[i];
     }
 
 private:
     const Index_* my_reference;
-    size_t my_length;
+    PredictionIndex my_length;
 };
 
 /**
@@ -46,18 +52,20 @@ private:
  * @brief Predict future accesses from a vector containing a fixed sequence.
  */
 template<typename Index_>
-class FixedVectorOracle : public Oracle<Index_> {
+class FixedVectorOracle final : public Oracle<Index_> {
 public:
     /**
      * @param vector Vector containing a fixed sequence of indices on the target dimension.
      */
-    FixedVectorOracle(std::vector<Index_> vector) : my_sequence(std::move(vector)) {}
+    FixedVectorOracle(std::vector<Index_> vector) : my_sequence(std::move(vector)) {
+        sanisizer::can_cast<PredictionIndex>(my_sequence.size()); // make sure that total() will return a sensible value.
+    }
 
-    size_t total() const {
+    PredictionIndex total() const {
         return my_sequence.size();
     }
 
-    Index_ get(size_t i) const {
+    Index_ get(PredictionIndex i) const {
         return my_sequence[i];
     }
 

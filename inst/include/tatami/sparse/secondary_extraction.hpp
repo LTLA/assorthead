@@ -1,11 +1,12 @@
 #ifndef TATAMI_SPARSE_SECONDARY_EXTRACTOR_CORE_HPP
 #define TATAMI_SPARSE_SECONDARY_EXTRACTOR_CORE_HPP
 
+#include "../base/Matrix.hpp"
+#include "../utils/Index_to_container.hpp"
+
 #include <vector>
 #include <type_traits>
 #include <algorithm>
-
-#include "../base/Matrix.hpp"
 
 namespace tatami {
 
@@ -20,11 +21,11 @@ private:
 
     Index_ my_max_index;
 
-    typedef typename IndexServer_::pointer_type Pointer_;
+    typedef typename IndexServer_::pointer_type Pointer;
 
     // The cached position of the pointer at each primary element.
     // Specifically, 'my_indices[i][my_cached_pointers[i]]' is the lower bound for 'my_last_request' in the primary element 'i'.
-    std::vector<Pointer_> my_cached_pointers; 
+    std::vector<Pointer> my_cached_pointers; 
 
     // This vector contains the cached index being pointed to by 'my_cached_pointers'.
     // We store this here as it is more cache-friendly than doing a look-up to 'my_indices' every time.
@@ -54,7 +55,10 @@ private:
 public:
     template<class PrimaryFunction_>
     SecondaryExtractionCache(IndexServer_ index_server, Index_ max_index, Index_ primary_length, PrimaryFunction_ to_primary) :
-        my_indices_server(std::move(index_server)), my_max_index(max_index), my_cached_pointers(primary_length), my_cached_indices(primary_length) 
+        my_indices_server(std::move(index_server)),
+        my_max_index(max_index),
+        my_cached_pointers(cast_Index_to_container_size<decltype(my_cached_pointers)>(primary_length)),
+        my_cached_indices(cast_Index_to_container_size<decltype(my_cached_indices)>(primary_length))
     {
         for (Index_ p = 0; p < primary_length; ++p) {
             auto primary = to_primary(p);
@@ -67,7 +71,7 @@ public:
         }
     }
 
-    size_t size() const {
+    auto size() const {
         return my_cached_indices.size();
     }
 
@@ -297,7 +301,7 @@ public:
         return my_cache.search(secondary, [](Index_ ip) -> Index_ { return ip; }, std::move(store));
     }
 
-    size_t size() const {
+    auto size() const {
         return my_cache.size();
     }
 
@@ -316,7 +320,7 @@ public:
         return my_cache.search(secondary, Helper(my_block_start), std::move(store));
     }
 
-    size_t size() const {
+    auto size() const {
         return my_cache.size();
     }
 
@@ -347,7 +351,7 @@ public:
         return my_cache.search(secondary, Helper(*my_indices_ptr), std::move(store));
     }
 
-    size_t size() const {
+    auto size() const {
         return my_cache.size();
     }
 

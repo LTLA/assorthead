@@ -4,11 +4,15 @@
 #include "../base/Matrix.hpp"
 #include "SparsifiedWrapper.hpp"
 #include "../utils/has_data.hpp"
+#include "../utils/Index_to_container.hpp"
 #include "../utils/PseudoOracularExtractor.hpp"
 
 #include <vector>
 #include <algorithm>
 #include <stdexcept>
+#include <utility>
+
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file DenseMatrix.hpp
@@ -26,12 +30,12 @@ namespace tatami {
 namespace DenseMatrix_internals {
 
 template<typename Value_, typename Index_, class Storage_>
-class PrimaryMyopicFullDense : public MyopicDenseExtractor<Value_, Index_> {
+class PrimaryMyopicFullDense final : public MyopicDenseExtractor<Value_, Index_> {
 public:
-    PrimaryMyopicFullDense(const Storage_& storage, size_t secondary) : my_storage(storage), my_secondary(secondary) {}
+    PrimaryMyopicFullDense(const Storage_& storage, Index_ secondary) : my_storage(storage), my_secondary(secondary) {}
 
     const Value_* fetch(Index_ i, Value_* buffer) {
-        size_t offset = static_cast<size_t>(i) * my_secondary; // cast to size_t to avoid overflow of 'Index_'.
+        auto offset = sanisizer::product_unsafe<decltype(my_storage.size())>(my_secondary, i);
         if constexpr(has_data<Value_, Storage_>::value) {
             return my_storage.data() + offset;
         } else {
@@ -42,17 +46,17 @@ public:
 
 private:
     const Storage_& my_storage;
-    size_t my_secondary;
+    Index_ my_secondary;
 };
 
 template<typename Value_, typename Index_, class Storage_>
-class PrimaryMyopicBlockDense : public MyopicDenseExtractor<Value_, Index_> {
+class PrimaryMyopicBlockDense final : public MyopicDenseExtractor<Value_, Index_> {
 public:
-    PrimaryMyopicBlockDense(const Storage_& storage, size_t secondary, Index_ block_start, Index_ block_length) : 
+    PrimaryMyopicBlockDense(const Storage_& storage, Index_ secondary, Index_ block_start, Index_ block_length) : 
         my_storage(storage), my_secondary(secondary), my_block_start(block_start), my_block_length(block_length) {}
 
     const Value_* fetch(Index_ i, Value_* buffer) {
-        size_t offset = static_cast<size_t>(i) * my_secondary + my_block_start; // cast to size_t to avoid overflow.
+        auto offset = sanisizer::nd_offset<decltype(my_storage.size())>(my_block_start, my_secondary, i);
         if constexpr(has_data<Value_, Storage_>::value) {
             return my_storage.data() + offset;
         } else {
@@ -63,94 +67,86 @@ public:
 
 private:
     const Storage_& my_storage;
-    size_t my_secondary;
-    size_t my_block_start, my_block_length;
+    Index_ my_secondary;
+    Index_ my_block_start, my_block_length;
 };
 
 template<typename Value_, typename Index_, class Storage_>
-class PrimaryMyopicIndexDense : public MyopicDenseExtractor<Value_, Index_> {
+class PrimaryMyopicIndexDense final : public MyopicDenseExtractor<Value_, Index_> {
 public:
-    PrimaryMyopicIndexDense(const Storage_& storage, size_t secondary, VectorPtr<Index_> indices_ptr) : 
+    PrimaryMyopicIndexDense(const Storage_& storage, Index_ secondary, VectorPtr<Index_> indices_ptr) : 
         my_storage(storage), my_secondary(secondary), my_indices_ptr(std::move(indices_ptr)) {}
 
     const Value_* fetch(Index_ i, Value_* buffer) {
-        auto copy = buffer;
-        size_t offset = static_cast<size_t>(i) * my_secondary; // cast to size_t avoid overflow.
-        for (auto x : *my_indices_ptr) {
-            *copy = my_storage[offset + static_cast<size_t>(x)]; // more casting for overflow protection.
-            ++copy;
+        const auto& indices = *my_indices_ptr;
+        for (decltype(indices.size()) x = 0, end = indices.size(); x < end; ++x) {
+            buffer[x] = my_storage[sanisizer::nd_offset<decltype(my_storage.size())>(indices[x], my_secondary, i)];
         }
         return buffer;
     }
 
 private:
     const Storage_& my_storage;
-    size_t my_secondary;
+    Index_ my_secondary;
     VectorPtr<Index_> my_indices_ptr;
 };
 
 template<typename Value_, typename Index_, class Storage_>
-class SecondaryMyopicFullDense : public MyopicDenseExtractor<Value_, Index_> {
+class SecondaryMyopicFullDense final : public MyopicDenseExtractor<Value_, Index_> {
 public:
     SecondaryMyopicFullDense(const Storage_& storage, Index_ secondary, Index_ primary) : 
         my_storage(storage), my_secondary(secondary), my_primary(primary) {}
 
     const Value_* fetch(Index_ i, Value_* buffer) {
-        size_t offset = i; // use size_t to avoid overflow.
-        auto copy = buffer;
-        for (Index_ x = 0; x < my_primary; ++x, ++copy, offset += my_secondary) {
-            *copy = my_storage[offset];
+        for (decltype(my_primary) x = 0; x < my_primary; ++x) {
+            buffer[x] = my_storage[sanisizer::nd_offset<decltype(my_storage.size())>(i, my_secondary, x)];
         }
         return buffer;
     }
 
 private:
     const Storage_& my_storage;
-    size_t my_secondary;
+    Index_ my_secondary;
     Index_ my_primary;
 };
 
 template<typename Value_, typename Index_, class Storage_>
-class SecondaryMyopicBlockDense : public MyopicDenseExtractor<Value_, Index_> {
+class SecondaryMyopicBlockDense final : public MyopicDenseExtractor<Value_, Index_> {
 public:
     SecondaryMyopicBlockDense(const Storage_& storage, Index_ secondary, Index_ block_start, Index_ block_length) : 
         my_storage(storage), my_secondary(secondary), my_block_start(block_start), my_block_length(block_length) {}
 
     const Value_* fetch(Index_ i, Value_* buffer) {
-        size_t offset = my_block_start * my_secondary + static_cast<size_t>(i); // cast to avoid overflow.
-        auto copy = buffer;
-        for (Index_ x = 0; x < my_block_length; ++x, ++copy, offset += my_secondary) {
-            *copy = my_storage[offset];
+        for (decltype(my_block_length) x = 0; x < my_block_length; ++x) {
+            buffer[x] = my_storage[sanisizer::nd_offset<decltype(my_storage.size())>(i, my_secondary, my_block_start + x)];
         }
         return buffer;
     }
 
 private:
     const Storage_& my_storage;
-    size_t my_secondary;
-    size_t my_block_start;
+    Index_ my_secondary;
+    Index_ my_block_start;
     Index_ my_block_length;
 };
 
 template<typename Value_, typename Index_, class Storage_>
-class SecondaryMyopicIndexDense : public MyopicDenseExtractor<Value_, Index_> {
+class SecondaryMyopicIndexDense final : public MyopicDenseExtractor<Value_, Index_> {
 public:
     SecondaryMyopicIndexDense(const Storage_& storage, Index_ secondary, VectorPtr<Index_> indices_ptr) : 
         my_storage(storage), my_secondary(secondary), my_indices_ptr(std::move(indices_ptr)) {}
 
     const Value_* fetch(Index_ i, Value_* buffer) {
-        auto copy = buffer;
-        size_t offset = static_cast<size_t>(i); // cast to avoid overflow.
-        for (auto x : *my_indices_ptr) {
-            *copy = my_storage[static_cast<size_t>(x) * my_secondary + offset]; // more casting to avoid overflow.
-            ++copy;
+        const auto& indices = *my_indices_ptr;
+        for (decltype(indices.size()) x = 0, end = indices.size(); x < end; ++x) {
+            buffer[x] = my_storage[sanisizer::nd_offset<decltype(my_storage.size())>(i, my_secondary, indices[x])];
         }
         return buffer;
     }
 
 private:
     const Storage_& my_storage;
-    size_t my_secondary;
+    Index_ my_secondary;
     VectorPtr<Index_> my_indices_ptr;
 };
 
@@ -169,7 +165,7 @@ private:
  * Methods should be available for `size()`, `begin()`, `end()` and `[]`.
  * If a method is available for `data()` that returns a `const Value_*`, it will also be used.
  */
-template<typename Value_, typename Index_, class Storage_ = std::vector<Value_> >
+template<typename Value_, typename Index_, class Storage_>
 class DenseMatrix : public Matrix<Value_, Index_> {
 public: 
     /**
@@ -180,7 +176,12 @@ public:
      * If `false`, a column-major representation is assumed instead.
      */
     DenseMatrix(Index_ nrow, Index_ ncol, Storage_ values, bool row_major) : my_nrow(nrow), my_ncol(ncol), my_values(std::move(values)), my_row_major(row_major) {
-        if (static_cast<size_t>(my_nrow) * static_cast<size_t>(my_ncol) != my_values.size()) { // cast to size_t is deliberate to avoid overflow on Index_ on product.
+        auto nvalues = my_values.size();
+        if (my_nrow == 0) {
+            if (nvalues != 0) {
+                throw std::runtime_error("length of 'values' should be equal to product of 'nrows' and 'ncols'");
+            }
+        } else if (!safe_non_negative_equal(nvalues / my_nrow, my_ncol) || nvalues % my_nrow != 0) { // using division instead of 'my_nrow * my_ncol == nvalues' as the product might overflow.
             throw std::runtime_error("length of 'values' should be equal to product of 'nrows' and 'ncols'");
         }
     }
@@ -310,7 +311,7 @@ public:
  * See `tatami::DenseMatrix` for details on the template parameters.
  */
 template<typename Value_, typename Index_, class Storage_ = std::vector<Value_> >
-class DenseColumnMatrix : public DenseMatrix<Value_, Index_, Storage_> {
+class DenseColumnMatrix final : public DenseMatrix<Value_, Index_, Storage_> {
 public:
     /**
      * @param nrow Number of rows.
@@ -326,7 +327,7 @@ public:
  * See `tatami::DenseMatrix` for details on the template parameters.
  */
 template<typename Value_, typename Index_, class Storage_ = std::vector<Value_> >
-class DenseRowMatrix : public DenseMatrix<Value_, Index_, Storage_> {
+class DenseRowMatrix final : public DenseMatrix<Value_, Index_, Storage_> {
 public:
     /**
      * @param nrow Number of rows.

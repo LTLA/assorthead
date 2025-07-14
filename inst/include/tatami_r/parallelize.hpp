@@ -10,6 +10,8 @@
  */
 
 #include "manticore/manticore.hpp"
+#include "sanisizer/sanisizer.hpp"
+
 #include <thread>
 #include <cmath>
 #include <vector>
@@ -107,7 +109,7 @@ void parallelize(Function_ fun, Index_ ntasks, int nthreads) {
 
     std::vector<std::thread> runners;
     runners.reserve(nthreads);
-    std::vector<std::exception_ptr> errors(nthreads);
+    auto errors = sanisizer::create<std::vector<std::exception_ptr> >(nthreads);
 
     Index_ start = 0;
     for (int w = 0; w < nthreads; ++w) {

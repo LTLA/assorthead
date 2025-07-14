@@ -3,6 +3,9 @@
 
 #include <unordered_map>
 #include <list>
+#include <cstddef>
+
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file LruSlabCache.hpp
@@ -26,17 +29,22 @@ template<typename Id_, class Slab_>
 class LruSlabCache {
 private:
     typedef std::pair<Slab_, Id_> Element;
-    std::list<Element> my_cache_data;
+    typedef std::list<Element> SlabPool;
+
+    typename SlabPool::size_type my_max_slabs;
+    SlabPool my_cache_data;
     std::unordered_map<Id_, typename std::list<Element>::iterator> my_cache_exists;
-    size_t my_max_slabs;
+
     Id_ my_last_id = 0;
     Slab_* my_last_slab = NULL;
 
 public:
     /**
+     * @tparam MaxSlabs_ Integer type of the maximum number of slabs.
      * @param max_slabs Maximum number of slabs to store in the cache.
      */
-    LruSlabCache(size_t max_slabs) : my_max_slabs(max_slabs) {}
+    template<typename MaxSlabs_>
+    LruSlabCache(MaxSlabs_ max_slabs) : my_max_slabs(sanisizer::cast<decltype(my_max_slabs)>(max_slabs)) {}
 
     /**
      * Deleted as the cache holds persistent iterators.
@@ -118,15 +126,17 @@ public:
 public:
     /**
      * @return Maximum number of slabs in the cache.
+     * The type is an unsigned integer defined in `std::list::size_type`.
      */
-    size_t get_max_slabs() const {
+    auto get_max_slabs() const {
         return my_max_slabs;
     }
 
     /**
      * @return Number of slabs currently in the cache.
+     * The type is an unsigned integer defined in `std::list::size_type`.
      */
-    size_t get_num_slabs() const {
+    auto get_num_slabs() const {
         return my_cache_data.size();
     }
 };

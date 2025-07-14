@@ -3,10 +3,13 @@
 
 #include "utils.hpp"
 #include "../base/Matrix.hpp"
+#include "../utils/Index_to_container.hpp"
 
 #include <algorithm>
 #include <numeric>
 #include <memory>
+
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file DelayedSubsetSorted.hpp
@@ -56,7 +59,7 @@ DenseParallelResults<Index_> format_dense_parallel(const SubsetStorage_& indices
 }
 
 template<bool oracle_, typename Value_, typename Index_>
-class ParallelDense : public DenseExtractor<oracle_, Value_, Index_> {
+class ParallelDense final : public DenseExtractor<oracle_, Value_, Index_> {
 public:
     template<class SubsetStorage_>
     ParallelDense(const Matrix<Value_, Index_>* matrix, const SubsetStorage_& subset, bool row, MaybeOracle<oracle_, Index_> oracle, const Options& opt) {
@@ -78,7 +81,7 @@ public:
     }
 
 private:
-    void initialize(const Matrix<Value_, Index_>* mat, DenseParallelResults<Index_> processed, size_t extent, bool row, MaybeOracle<oracle_, Index_> oracle, const Options& opt) {
+    void initialize(const Matrix<Value_, Index_>* mat, DenseParallelResults<Index_> processed, Index_ extent, bool row, MaybeOracle<oracle_, Index_> oracle, const Options& opt) {
         my_shift = extent - processed.collapsed.size();
         my_ext = new_extractor<false, oracle_>(mat, row, std::move(oracle), std::move(processed.collapsed), opt);
         my_expansion = std::move(processed.expansion);
@@ -116,7 +119,7 @@ public:
 private:
     std::unique_ptr<DenseExtractor<oracle_, Value_, Index_> > my_ext;
     std::vector<Index_> my_expansion;
-    size_t my_shift;
+    Index_ my_shift;
 };
 
 template<typename Index_>
@@ -149,17 +152,14 @@ SparseParallelResults<Index_> format_sparse_parallel(const SubsetStorage_& indic
         output.collapsed.reserve(len);
         auto first = indices[to_index(0)];
 
-        // 'start' and 'length' are vectors that enable look-up according to
-        // the indices of the underlying array. To avoid the need to allocate a
-        // vector of length equal to the underlying array's dimension, we only
-        // consider the extremes of 'indices'; we allocate the two vectors to
-        // have length equal to the range of 'indices'. The 'offset' defines
-        // the lower bound that must be subtracted from the array indices to
-        // get an index into 'start' or 'length'.
+        // 'start' and 'length' are vectors that enable look-up according to the indices of the underlying array.
+        // To avoid the need to allocate a vector of length equal to the underlying array's dimension, we only consider the extremes of 'indices'.
+        // We allocate both start/length vectors to have length equal to the range of 'indices'.
+        // The 'offset' defines the lower bound that must be subtracted from the array indices to get an index into 'start' or 'length'.
         output.expansion.offset = first;
-        auto allocation = indices[to_index(len - 1)] - output.expansion.offset + 1;
-        output.expansion.start.resize(allocation);
-        output.expansion.length.resize(allocation);
+        Index_ allocation = indices[to_index(len - 1)] - output.expansion.offset + 1; // fits in an Index_ as it should be no greater than the input matrix's dimension extent.
+        resize_container_to_Index_size(output.expansion.start, allocation);
+        output.expansion.length.resize(output.expansion.start.size());
 
         Index_ lookup = 0;
         output.expansion.start[0] = 0;
@@ -189,7 +189,7 @@ template<bool oracle_, typename Value_, typename Index_>
 class ParallelSparseCore {
 public:
     template<class SubsetStorage_, class ToIndex_>
-    ParallelSparseCore(const Matrix<Value_, Index_>* matrix, const SubsetStorage_& subset, size_t extent, bool row, MaybeOracle<oracle_, Index_> oracle, Options opt, ToIndex_ to_index) {
+    ParallelSparseCore(const Matrix<Value_, Index_>* matrix, const SubsetStorage_& subset, Index_ extent, bool row, MaybeOracle<oracle_, Index_> oracle, Options opt, ToIndex_ to_index) {
         auto processed = format_sparse_parallel<Index_>(subset, extent, std::forward<ToIndex_>(to_index));
         my_shift = extent - processed.collapsed.size();
 
@@ -197,7 +197,8 @@ public:
         my_needs_index = opt.sparse_extract_index;
         opt.sparse_extract_index = true; // must extract the indices for proper my_expansion.
         if (!my_needs_index) {
-            my_holding_ibuffer.reserve(processed.collapsed.size()); // need a holding space for indices if 'ibuffer' is not supplied.
+            // Need a holding space for indices if 'ibuffer' is not supplied.
+            resize_container_to_Index_size(my_holding_ibuffer, processed.collapsed.size()); // processed.collapsed.size() should fit in an Index_, hence the cast is safe.
         }
 
         my_ext = new_extractor<true, oracle_>(matrix, row, std::move(oracle), std::move(processed.collapsed), opt);
@@ -259,11 +260,11 @@ private:
     std::unique_ptr<SparseExtractor<oracle_, Value_, Index_> > my_ext;
     std::vector<Index_> my_holding_ibuffer;
     SparseParallelExpansion<Index_> my_expansion;
-    size_t my_shift;
+    Index_ my_shift;
 };
 
 template<bool oracle_, typename Value_, typename Index_>
-class ParallelFullSparse : public SparseExtractor<oracle_, Value_, Index_> {
+class ParallelFullSparse final : public SparseExtractor<oracle_, Value_, Index_> {
 public:
     template<class SubsetStorage_>
     ParallelFullSparse(const Matrix<Value_, Index_>* matrix, const SubsetStorage_& subset, bool row, MaybeOracle<oracle_, Index_> oracle, const Options& opt) :
@@ -278,7 +279,7 @@ private:
 };
 
 template<bool oracle_, typename Value_, typename Index_>
-class ParallelBlockSparse : public SparseExtractor<oracle_, Value_, Index_> {
+class ParallelBlockSparse final : public SparseExtractor<oracle_, Value_, Index_> {
 public:
     template<class SubsetStorage_>
     ParallelBlockSparse(const Matrix<Value_, Index_>* matrix, const SubsetStorage_& subset, bool row, MaybeOracle<oracle_, Index_> oracle, Index_ block_start, Index_ block_length, const Options& opt) : 
@@ -296,7 +297,7 @@ private:
 };
 
 template<bool oracle_, typename Value_, typename Index_>
-class ParallelIndexSparse : public SparseExtractor<oracle_, Value_, Index_> {
+class ParallelIndexSparse final : public SparseExtractor<oracle_, Value_, Index_> {
 public:
     template<class SubsetStorage_>
     ParallelIndexSparse(const Matrix<Value_, Index_>* matrix, const SubsetStorage_& subset, bool row, MaybeOracle<oracle_, Index_> oracle, VectorPtr<Index_> indices_ptr, const Options& opt) : 
@@ -331,7 +332,7 @@ private:
  * Any class implementing `[`, `size()`, `begin()` and `end()` can be used here.
  */
 template<typename Value_, typename Index_, class SubsetStorage_>
-class DelayedSubsetSorted : public Matrix<Value_, Index_> {
+class DelayedSubsetSorted final : public Matrix<Value_, Index_> {
 public:
     /**
      * @param matrix Pointer to the underlying (pre-subset) matrix.
@@ -344,6 +345,7 @@ public:
     DelayedSubsetSorted(std::shared_ptr<const Matrix<Value_, Index_> > matrix, SubsetStorage_ subset, bool by_row, bool check = true) : 
         my_matrix(std::move(matrix)), my_subset(std::move(subset)), my_by_row(by_row) 
     {
+        sanisizer::can_cast<Index_>(my_subset.size());
         if (check) {
             for (Index_ i = 1, end = my_subset.size(); i < end; ++i) {
                 if (my_subset[i] < my_subset[i-1]) {

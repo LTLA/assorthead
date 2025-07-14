@@ -55,7 +55,7 @@ using VectorPtr = std::shared_ptr<const std::vector<Index_> >;
  * `Matrix` subclasses should describe whether they are dense/sparse and if they prefer row or column access.
  * This allows users to choose the best method of extracting data from the matrix.
  */
-template <typename Value_, typename Index_ = int>
+template <typename Value_, typename Index_>
 class Matrix {
 public:
     /**
@@ -87,11 +87,19 @@ public:
 public:
     /**
      * @return Number of rows.
+     *
+     * It is expected that the number of rows can be represented by a `std::size_t` without overflow, even if `Index_` is of a larger size.
+     * This is implied by the fact that `MyopicDenseExtractor::fetch()` and friends accept a pointer for their buffer arguments;
+     * the length of the array referenced by these pointers (possibly equal to the number of rows) must fit in a `std::size_t`.
      */
     virtual Index_ nrow() const = 0;
 
     /**
      * @return Number of columns.
+     *
+     * It is expected that the number of columns can be represented by a `std::size_t` without overflow, even if `Index_` is of a larger size.
+     * This is implied by the fact that `MyopicDenseExtractor::fetch()` and friends accept a pointer for their buffer arguments;
+     * the length of the array referenced by these pointers (possibly equal to the number of rows) must fit in a `std::size_t`.
      */
     virtual Index_ ncol() const = 0;
 

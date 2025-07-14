@@ -1,6 +1,13 @@
 #ifndef TATAMI_CHUNKED_CHUNK_DIMENSION_STATS_HPP
 #define TATAMI_CHUNKED_CHUNK_DIMENSION_STATS_HPP
 
+#include "sanisizer/sanisizer.hpp"
+
+/**
+ * @file ChunkDimensionStats.hpp
+ * @brief Chunk dimension statistics.
+ */
+
 namespace tatami_chunked {
 
 /**
@@ -34,12 +41,15 @@ Index_ integer_ceil(Index_ left, Index_ right) {
 template<typename Index_>
 struct ChunkDimensionStats {
     /**
+     * @tparam DimExtent_ Integer type of the dimension extent.
+     * @tparam ChunkLength_ Integer type of the chunk length.
      * @param dimension_extent Full extent of the dimension.
      * @param chunk_length Length of each chunk.
      */
-    ChunkDimensionStats(Index_ dimension_extent, Index_ chunk_length) :
-        dimension_extent(dimension_extent),
-        chunk_length(chunk_length),
+    template<typename DimExtent_, typename ChunkLength_>
+    ChunkDimensionStats(DimExtent_ dimension_extent, ChunkLength_ chunk_length) :
+        dimension_extent(sanisizer::cast<Index_>(dimension_extent)),
+        chunk_length(sanisizer::cast<Index_>(chunk_length)),
         num_chunks(integer_ceil(dimension_extent, chunk_length)),
         last_chunk_length(num_chunks ? (dimension_extent - (num_chunks - 1) * chunk_length) : 0)
     {}

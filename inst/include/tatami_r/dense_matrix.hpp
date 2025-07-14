@@ -1,34 +1,37 @@
 #ifndef TATAMI_R_DENSE_MATRIX_HPP
 #define TATAMI_R_DENSE_MATRIX_HPP
 
+#include "Rcpp.h"
 #include "tatami/tatami.hpp"
+#include "sanisizer/sanisizer.hpp"
+
 #include <algorithm>
+#include <cstddef>
 
 namespace tatami_r { 
 
-template<typename InputValue_, class InputObject_,  typename CachedValue_>
-void parse_dense_matrix_internal(const InputObject_& data, size_t data_start_row, size_t data_start_col, bool row, CachedValue_* cache, size_t cache_num_rows, size_t cache_num_cols) {
-    size_t data_num_rows = data.rows();
-    auto input = static_cast<const InputValue_*>(data.begin()) + data_start_row + data_start_col * data_num_rows;
+template<typename InputValue_, class InputObject_, typename Index_, typename CachedValue_>
+void parse_dense_matrix_internal(const InputObject_& data, Index_ data_start_row, Index_ data_start_col, bool row, CachedValue_* cache, Index_ cache_num_rows, Index_ cache_num_cols) {
+    Index_ data_num_rows = data.rows();
+    auto input = static_cast<const InputValue_*>(data.begin()) + sanisizer::nd_offset<std::size_t>(data_start_row, data_num_rows, data_start_col);
 
     if (row) {
         // 'data' is a column-major matrix, but transpose() expects a row-major
         // input, so we just conceptually transpose it.
         tatami::transpose(input, cache_num_cols, cache_num_rows, data_num_rows, cache, cache_num_cols);
     } else {
-        // Use an offset so that we don't accidentally create a pointer past
-        // the end of the array at the final loop iteration (which is UB).
-        size_t in_offset = 0;
-        for (size_t c = 0; c < cache_num_cols; ++c) {
-            std::copy_n(input + in_offset, cache_num_rows, cache);
-            in_offset += data_num_rows;
-            cache += cache_num_rows;
+        for (Index_ c = 0; c < cache_num_cols; ++c) {
+            std::copy_n(
+                input + sanisizer::product_unsafe<std::size_t>(c, data_num_rows),
+                cache_num_rows,
+                cache + sanisizer::product_unsafe<std::size_t>(c, cache_num_rows)
+            );
         }
     }
 }
 
-template<typename CachedValue_>
-void parse_dense_matrix(const Rcpp::RObject& seed, size_t data_start_row, size_t data_start_col, bool row, CachedValue_* cache, size_t cache_num_rows, size_t cache_num_cols) {
+template<typename Index_, typename CachedValue_>
+void parse_dense_matrix(const Rcpp::RObject& seed, Index_ data_start_row, Index_ data_start_col, bool row, CachedValue_* cache, Index_ cache_num_rows, Index_ cache_num_cols) {
     auto stype = seed.sexp_type();
     if (stype == REALSXP) {
         Rcpp::NumericMatrix y(seed);

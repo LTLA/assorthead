@@ -5,6 +5,9 @@
 #include <vector>
 #include <list>
 #include <type_traits>
+#include <optional>
+#include <cstddef>
+
 #include "tatami/tatami.hpp"
 
 /**
@@ -19,8 +22,8 @@ namespace tatami_chunked {
  *
  * @tparam Id_ Type of slab identifier, typically integer.
  * @tparam Index_ Type of row/column index produced by the oracle.
- * @tparam Size_ Numeric type for the slab size.
  * @tparam Slab_ Class for a single slab.
+ * @tparam Size_ Numeric type for the slab size.
  *
  * Implement an oracle-aware cache for variable-size slabs.
  * Each slab is defined as the set of chunks required to read an element of the target dimension (or a contiguous block/indexed subset thereof) from a `tatami::Matrix`.
@@ -43,11 +46,14 @@ template<typename Id_, typename Index_, class Slab_, typename Size_>
 class OracularVariableSlabCache {
 private:
     std::shared_ptr<const tatami::Oracle<Index_> > my_oracle;
-    size_t my_total;
-    size_t my_counter = 0;
+    tatami::PredictionIndex my_total;
+    tatami::PredictionIndex my_counter = 0;
+
+    typedef std::vector<Slab_> SlabPool;
+    typedef typename SlabPool::size_type SlabIndex;
 
     Index_ my_last_slab_id = 0;
-    size_t my_last_slab_num = -1;
+    std::optional<SlabIndex> my_last_slab_num;
 
     Size_ my_max_size, my_used_size = 0;
     std::vector<Slab_> my_all_slabs;
@@ -55,11 +61,11 @@ private:
     // We need to hold an offset into 'my_all_slabs' rather than a pointer, as
     // 'my_all_slabs' might be reallocated upon addition of new slabs, given that
     // we don't know the maximum number of slabs ahead of time.
-    std::unordered_map<Id_, size_t> my_current_cache, my_future_cache;
-    std::vector<std::pair<Id_, size_t> > my_to_populate, my_to_reuse;
+    std::unordered_map<Id_, SlabIndex> my_current_cache, my_future_cache;
+    std::vector<std::pair<Id_, SlabIndex> > my_to_populate, my_to_reuse;
     std::vector<Id_> my_in_need;
-    std::vector<size_t> my_free_pool;
-    size_t my_refresh_point = 0;
+    std::vector<SlabIndex> my_free_pool;
+    tatami::PredictionIndex my_refresh_point = 0;
 
 public:
     /**
@@ -67,7 +73,7 @@ public:
      * @param max_size Total size of all slabs to store in the cache.
      * This may be zero, in which case no caching should be performed.
      */
-    OracularVariableSlabCache(std::shared_ptr<const tatami::Oracle<Index_> > oracle, size_t max_size) : 
+    OracularVariableSlabCache(std::shared_ptr<const tatami::Oracle<Index_> > oracle, std::size_t max_size) : 
         my_oracle(std::move(oracle)), 
         my_total(my_oracle->total()),
         my_max_size(max_size) 
@@ -135,12 +141,12 @@ public:
      * @param create Function that accepts no arguments and returns a `Slab_` object with sufficient memory to hold a slab's contents when used in `populate()`.
      * This may also return a default-constructed `Slab_` object if the allocation is done dynamically per slab in `populate()`.
      * @param populate Function that accepts three arguments - `to_populate`, `to_reuse` and `all_slabs`.
-     * - The `to_populate` argument is a `std::vector<std::pair<Id_, size_t> >&` specifying the slabs to be populated.
+     * - The `to_populate` argument is a `std::vector<std::pair<Id_, SlabIndex> >&` specifying the slabs to be populated.
      *   The first `Id_` element of each pair contains the slab identifier, i.e., the first element returned by the `identify` function.
-     *   The second `size_t` element is the index of the entry of `all_slabs` containing the corresponding `Slab_` instance, as returned by `create()`.
+     *   The second `SlabIndex` element is an unsigned integer and the index of the entry of `all_slabs` containing the corresponding `Slab_` instance, as returned by `create()`.
      *   This argument can be modified in any manner.
      *   It is guaranteed to be non-empty but is not guaranteed to be sorted.
-     * - The `to_reuse` argument is a `std::vector<std::pair<Id_, size_t> >&` specifying the cached slabs that were re-used in the upcoming set of predictions.
+     * - The `to_reuse` argument is a `std::vector<std::pair<Id_, SlabIndex> >&` specifying the cached slabs that were re-used in the upcoming set of predictions.
      *   The elements of each pair are interpreted in the same manner as `to_populate`. 
      *   This argument can be modified in any manner.
      *   It is not guaranteed to be non-empty or sorted.
@@ -157,8 +163,8 @@ public:
     std::pair<const Slab_*, Index_> next(Ifunction_ identify, Ufunction_ upper_size, Afunction_ actual_size, Cfunction_ create, Pfunction_ populate) {
         Index_ index = this->next(); 
         auto slab_info = identify(index);
-        if (slab_info.first == my_last_slab_id && my_last_slab_num != static_cast<size_t>(-1)) {
-            return std::make_pair(my_all_slabs.data() + my_last_slab_num, slab_info.second);
+        if (slab_info.first == my_last_slab_id && my_last_slab_num.has_value()) {
+            return std::make_pair(my_all_slabs.data() + *my_last_slab_num, slab_info.second);
         }
         my_last_slab_id = slab_info.first;
 
@@ -185,7 +191,7 @@ public:
 
                 auto ccIt = my_current_cache.find(future_slab_info.first);
                 if (ccIt != my_current_cache.end()) {
-                    size_t slab_num = ccIt->second;
+                    auto slab_num = ccIt->second;
                     auto candidate = my_used_size + actual_size(future_slab_info.first, my_all_slabs[slab_num]);
                     if (candidate > my_max_size) {
                         break;
@@ -207,12 +213,12 @@ public:
             auto cIt = my_current_cache.begin();
             for (auto a : my_in_need) {
                 if (cIt != my_current_cache.end()) {
-                    size_t slab_num = cIt->second;
+                    auto slab_num = cIt->second;
                     my_to_populate.emplace_back(a, slab_num);
                     my_future_cache[a] = slab_num;
                     ++cIt;
                 } else {
-                    size_t slab_num = my_all_slabs.size();
+                    auto slab_num = my_all_slabs.size();
                     my_all_slabs.push_back(create());
                     my_to_populate.emplace_back(a, slab_num);
                     my_future_cache[a] = slab_num;
@@ -235,7 +241,7 @@ public:
         // We know it must exist, so no need to check ccIt's validity.
         auto ccIt = my_current_cache.find(slab_info.first);
         my_last_slab_num = ccIt->second;
-        return std::make_pair(my_all_slabs.data() + my_last_slab_num, slab_info.second);
+        return std::make_pair(my_all_slabs.data() + *my_last_slab_num, slab_info.second);
     }
 
 private:
@@ -254,24 +260,27 @@ private:
 public:
     /**
      * @return Maximum total size of the cache.
-     * This is the same as the `max_size` used in the constructor.
+     * This has the same value as the `max_size` used in the constructor.
+     * The type is an unsigned integer defined in `std::vector::size_type`.
      */
-    size_t get_max_size() const {
+    auto get_max_size() const {
         return my_max_size;
     }
 
     /**
      * @return Current usage across all slabs in the cache.
      * This should be interpreted as an upper bound on usage if there is a difference between estimated and actual slab sizes.
+     * The type is an unsigned integer defined in `std::vector::size_type`.
      */
-    size_t get_used_size() const {
+    auto get_used_size() const {
         return my_used_size;
     }
 
     /**
      * @return Number of slabs currently in the cache.
+     * The type is an unsigned integer defined in `std::vector::size_type`.
      */
-    size_t get_num_slabs() const {
+    auto get_num_slabs() const {
         return my_current_cache.size();
     }
 };

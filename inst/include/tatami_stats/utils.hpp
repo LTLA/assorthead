@@ -3,6 +3,10 @@
 
 #include <vector>
 #include <algorithm>
+#include <cstddef>
+
+#include "sanisizer/sanisizer.hpp"
+#include "tatami/tatami.hpp"
 
 /**
  * @file utils.hpp
@@ -25,9 +29,9 @@ namespace tatami_stats {
  * Note that not all groups may actually have non-zero occurrences in `group`.
  */
 template<typename Group_>
-size_t total_groups(const Group_* group, size_t n) {
+std::size_t total_groups(const Group_* group, std::size_t n) {
     if (n) {
-        return static_cast<size_t>(*std::max_element(group, group + n)) + 1;
+        return sanisizer::sum<std::size_t>(*std::max_element(group, group + n), 1);
     } else {
         return 0;
     }
@@ -86,7 +90,11 @@ public:
      * @param fill Initial value to fill the buffer.
      */
     template<typename Index_>
-    LocalOutputBuffer(size_t thread, Index_ start, Index_ length, Output_* output, Output_ fill) : my_output(output + start), use_local(thread > 0), my_buffer(use_local ? length : 0, fill) {
+    LocalOutputBuffer(int thread, Index_ start, Index_ length, Output_* output, Output_ fill) : 
+        my_output(output + start),
+        use_local(thread > 0),
+        my_buffer(use_local ? tatami::can_cast_Index_to_container_size<decltype(my_buffer)>(length) : static_cast<Index_>(0), fill)
+    {
         if (!use_local) {
             // Setting to zero to match the initial behavior of 'my_buffer' when 'use_local = true'.
             std::fill_n(my_output, length, fill);
@@ -103,7 +111,7 @@ public:
      * @param[out] output Pointer to the global output buffer.
      */
     template<typename Index_>
-    LocalOutputBuffer(size_t thread, Index_ start, Index_ length, Output_* output) : LocalOutputBuffer(thread, start, length, output, 0) {}
+    LocalOutputBuffer(int thread, Index_ start, Index_ length, Output_* output) : LocalOutputBuffer(thread, start, length, output, 0) {}
 
     /**
      * Default constructor.
@@ -144,7 +152,6 @@ private:
     std::vector<Output_> my_buffer;
 };
 
-
 /**
  * @brief Local output buffers for running calculations.
  *
@@ -164,25 +171,25 @@ public:
      * @param number Number of output buffers.
      * @param start Index of the first objective vector in the contiguous block for this thread.
      * @param length Number of objective vectors in the contiguous block for this thread.
-     * @param outfun Function that accepts an `Index_` specifying the index of an output buffer in `[0, number)` and returns a `Output_*` pointer to that buffer.
+     * @param outfun Function that accepts an `std::size_t` specifying the index of an output buffer in `[0, number)` and returns a `Output_*` pointer to that buffer.
      * @param fill Initial value to fill the buffer.
      */
     template<typename Index_>
-    LocalOutputBuffers(size_t thread, size_t number, Index_ start, Index_ length, GetOutput_ outfun, Output_ fill) : 
+    LocalOutputBuffers(int thread, std::size_t number, Index_ start, Index_ length, GetOutput_ outfun, Output_ fill) : 
         my_number(number),
-        my_start(start),
+        my_start(start), // Remember, Index_ is assumed to always be castable to std::size_t in a tatami context, otherwise fetch() wouldn't work.
         my_use_local(thread > 0),
         my_getter(std::move(outfun))
     {
         if (thread == 0) {
-            for (size_t i = 0; i < my_number; ++i) {
+            for (decltype(my_number) i = 0; i < my_number; ++i) {
                 // Setting to the fill to match the initial behavior of 'my_buffer' when 'thread > 0'.
                 std::fill_n(my_getter(i) + my_start, length, fill);
             }
         } else {
             my_buffers.reserve(my_number);
-            for (size_t i = 0; i < my_number; ++i) {
-                my_buffers.emplace_back(length, fill);
+            for (decltype(my_number) i = 0; i < my_number; ++i) {
+                my_buffers.emplace_back(tatami::can_cast_Index_to_container_size<typename decltype(my_buffers)::value_type>(length), fill);
             }
         }
     }
@@ -198,7 +205,7 @@ public:
      * @param outfun Function that accepts an `Index_` specifying the index of an output buffer in `[0, number)` and returns a `Output_*` pointer to that buffer.
      */
     template<typename Index_>
-    LocalOutputBuffers(size_t thread, size_t number, Index_ start, Index_ length, GetOutput_ outfun) :
+    LocalOutputBuffers(int thread, std::size_t number, Index_ start, Index_ length, GetOutput_ outfun) :
         LocalOutputBuffers(thread, number, start, length, std::move(outfun), 0) {}
 
     /**
@@ -210,7 +217,7 @@ public:
      * @return Number of output buffers.
      * This is the same as `number` in the constructor.
      */
-    size_t size() const {
+    std::size_t size() const {
         return my_number;
     }
 
@@ -220,7 +227,7 @@ public:
      * This contains at least `length` addressable elements (see the argument of the same name in the constructor). 
      * For `thread = 0`, this will be equal to `outfun(i) + start`.
      */
-    Output_* data(size_t i) {
+    Output_* data(std::size_t i) {
         return (my_use_local ? my_buffers[i].data() : my_getter(i) + my_start);
     }
 
@@ -230,7 +237,7 @@ public:
      * This contains at least `length` addressable elements (see the argument of the same name in the constructor). 
      * For `thread = 0`, this will be equal to `outfun(i) + start`.
      */
-    const Output_* data(size_t i) const {
+    const Output_* data(std::size_t i) const {
         return (my_use_local ? my_buffers[i].data() : my_getter(i) + my_start);
     }
 
@@ -240,7 +247,7 @@ public:
      */
     void transfer() {
         if (my_use_local) {
-            for (size_t i = 0; i < my_number; ++i) {
+            for (decltype(my_number) i = 0; i < my_number; ++i) {
                 const auto& current = my_buffers[i];
                 std::copy(current.begin(), current.end(), my_getter(i) + my_start);
             }
@@ -248,8 +255,8 @@ public:
     }
 
 private:
-    size_t my_number = 0;
-    size_t my_start = 0;
+    std::size_t my_number = 0;
+    std::size_t my_start = 0;
     bool my_use_local = true;
     std::vector<std::vector<Output_> > my_buffers;
     GetOutput_ my_getter;

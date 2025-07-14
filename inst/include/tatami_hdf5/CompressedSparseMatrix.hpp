@@ -1,18 +1,19 @@
 #ifndef TATAMI_HDF5_SPARSE_MATRIX_HPP
 #define TATAMI_HDF5_SPARSE_MATRIX_HPP
 
-#include "H5Cpp.h"
-
-#include <string>
-#include <vector>
-#include <algorithm>
-
-#include "tatami/tatami.hpp"
-
 #include "sparse_primary.hpp"
 #include "sparse_secondary.hpp"
 #include "serialize.hpp"
 #include "utils.hpp"
+
+#include <string>
+#include <vector>
+#include <algorithm>
+#include <cstddef>
+
+#include "H5Cpp.h"
+#include "tatami/tatami.hpp"
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file CompressedSparseMatrix.hpp
@@ -35,7 +36,7 @@ struct CompressedSparseMatrixOptions {
      * Larger caches improve access speed at the cost of memory usage.
      * Small values may be ignored as `CompressedSparseMatrix` will always allocate enough to cache a single element of the target dimension.
      */
-    size_t maximum_cache_size = 100000000;
+    std::size_t maximum_cache_size = sanisizer::cap<std::size_t>(100000000);
 };
 
 /**
@@ -68,21 +69,20 @@ struct CompressedSparseMatrixOptions {
  * if a smaller type is known to be able to store all indices (based on their HDF5 type or other knowledge).
  */
 template<typename Value_, typename Index_, typename CachedValue_ = Value_, typename CachedIndex_ = Index_>
-class CompressedSparseMatrix : public tatami::Matrix<Value_, Index_> {
+class CompressedSparseMatrix final : public tatami::Matrix<Value_, Index_> {
     Index_ my_nrow, my_ncol;
     std::string my_file_name, my_value_name, my_index_name;
     std::vector<hsize_t> pointers;
     bool my_csr;
 
-    // We distinguish between our own cache of slabs versus HDF5's cache of uncompressed chunks.
-    size_t my_slab_cache_size;
-    size_t my_max_non_zeros;
-    size_t my_chunk_cache_size;
+    std::size_t my_slab_cache_size; // our own cache of slabs.
+    Index_ my_max_non_zeros;
+    CompressedSparseMatrix_internal::ChunkCacheSizes my_chunk_cache_sizes; // HDF5's cache of uncompressed chunks.
 
 public:
     /**
-     * @param nr Number of rows in the matrix.
-     * @param nc Number of columns in the matrix.
+     * @param nrow Number of rows in the matrix.
+     * @param ncol Number of columns in the matrix.
      * @param file_name Path to the file.
      * @param value_name Name of the 1D dataset inside `file_name` containing the values of the structural non-zero elements.
      * @param index_name Name of the 1D dataset inside `file_name` containing the indices of the structural non-zero elements.
@@ -93,7 +93,16 @@ public:
      * If false, the matrix is assumed to be stored in compressed sparse column format.
      * @param options Further options.
      */
-    CompressedSparseMatrix(Index_ nrow, Index_ ncol, std::string file_name, std::string value_name, std::string index_name, std::string pointer_name, bool csr, const CompressedSparseMatrixOptions& options) :
+    CompressedSparseMatrix(
+        Index_ nrow,
+        Index_ ncol,
+        std::string file_name,
+        std::string value_name,
+        std::string index_name,
+        std::string pointer_name,
+        bool csr,
+        const CompressedSparseMatrixOptions& options
+    ) :
         my_nrow(nrow), 
         my_ncol(ncol), 
         my_file_name(std::move(file_name)), 
@@ -102,6 +111,19 @@ public:
         my_csr(csr),
         my_slab_cache_size(options.maximum_cache_size)
     {
+        // Here, the 'primary' dimension refers to the dimension by which the non-zero elements are grouped.
+        // The secondary dimension is, well, the other dimension.
+        Index_ primary_dim = my_csr ? my_nrow : my_ncol;
+        Index_ secondary_dim = my_csr ? my_ncol : my_nrow;
+
+        auto dim_as_str = [](bool row) -> std::string {
+            if (row) {
+                return "rows";
+            } else {
+                return "columns";
+            }
+        };
+
         serialize([&]() -> void {
             H5::H5File file_handle(my_file_name, H5F_ACC_RDONLY);
             auto dhandle = open_and_check_dataset<false>(file_handle, my_value_name);
@@ -113,52 +135,27 @@ public:
             }
 
             auto phandle = open_and_check_dataset<true>(file_handle, pointer_name);
-            size_t ptr_size = get_array_dimensions<1>(phandle, "pointer_name")[0];
-            size_t dim_p1 = static_cast<size_t>(my_csr ? my_nrow : my_ncol) + 1;
-            if (ptr_size != dim_p1) {
-                throw std::runtime_error("'pointer_name' dataset should have length equal to the number of " + (my_csr ? std::string("rows") : std::string("columns")) + " plus 1");
+            auto ptr_size = get_array_dimensions<1>(phandle, "pointer_name")[0];
+            if (ptr_size == 0 || !sanisizer::is_equal(ptr_size - 1, primary_dim)) {
+                throw std::runtime_error("'pointer_name' dataset should have length equal to the number of " + dim_as_str(my_csr) + " plus 1");
             }
 
-            // We aim to store two chunks in HDF5's chunk cache; one
-            // overlapping the start of the primary dimension element's range,
-            // and one overlapping the end, so that we don't re-read the
-            // content for the new primary dimension element. To simplify
-            // matters, we just read the chunk sizes (in bytes) for both
-            // datasets and use the larger chunk size for both datasets.
-            // Hopefully the chunks are not too big...
-            hsize_t dchunk_length = 0;
-            size_t dchunk_element_size = 0;
             auto dparms = dhandle.getCreatePlist();
             if (dparms.getLayout() == H5D_CHUNKED) {
+                hsize_t dchunk_length;
                 dparms.getChunk(1, &dchunk_length);
-                dchunk_element_size = dhandle.getDataType().getSize();
+                my_chunk_cache_sizes.value = CompressedSparseMatrix_internal::compute_chunk_cache_size(nonzeros, dchunk_length, dhandle.getDataType().getSize());
             }
 
-            hsize_t ichunk_length = 0;
-            size_t ichunk_element_size = 0;
             auto iparms = ihandle.getCreatePlist();
             if (iparms.getLayout() == H5D_CHUNKED) {
+                hsize_t ichunk_length;
                 iparms.getChunk(1, &ichunk_length);
-                ichunk_element_size = ihandle.getDataType().getSize();
+                my_chunk_cache_sizes.index = CompressedSparseMatrix_internal::compute_chunk_cache_size(nonzeros, ichunk_length, ihandle.getDataType().getSize());
             }
 
-            auto non_overflow_double_min = [nonzeros](hsize_t chunk_length) -> size_t {
-                // Basically computes std::min(chunk_length * 2, nonzeros) without
-                // overflowing hsize_t, for a potentially silly choice of hsize_t...
-                if (chunk_length < nonzeros) {
-                    return nonzeros;
-                } else {
-                    return chunk_length + std::min(chunk_length, nonzeros - chunk_length);
-                }
-            };
-
-            my_chunk_cache_size = std::max(
-                non_overflow_double_min(ichunk_length) * ichunk_element_size, 
-                non_overflow_double_min(dchunk_length) * dchunk_element_size
-            );
-
             // Checking the contents of the index pointers.
-            pointers.resize(dim_p1);
+            pointers.resize(sanisizer::cast<decltype(pointers.size())>(ptr_size));
             phandle.read(pointers.data(), H5::PredType::NATIVE_HSIZE);
             if (pointers[0] != 0) {
                 throw std::runtime_error("first index pointer should be zero");
@@ -169,10 +166,16 @@ public:
         });
 
         my_max_non_zeros = 0;
-        for (size_t i = 1; i < pointers.size(); ++i) {
-            hsize_t diff = pointers[i] - pointers[i-1];
-            if (diff > my_max_non_zeros) {
-                my_max_non_zeros = diff;
+        for (Index_ i = 0; i < primary_dim; ++i) {
+            if (pointers[i+1] < pointers[i]) {
+                throw std::runtime_error("pointers should be ordered");
+            }
+            auto diff = pointers[i+1] - pointers[i];
+            if (sanisizer::is_greater_than(diff, secondary_dim)) {
+                throw std::runtime_error("differences between pointers should be no greater than the number of " + dim_as_str(!my_csr));
+            }
+            if (sanisizer::is_greater_than(diff, my_max_non_zeros)) {
+                my_max_non_zeros = diff; // cast is safe, because we know that it's less than the secondary_dim.
             }
         }
     }
@@ -187,8 +190,8 @@ public:
      * @param pointer_name Name of the 1D dataset inside `file_name` containing the index pointers for the start and end of each csr (if `csr = true`) or column (otherwise).
      * @param csr Whether the matrix is stored in compressed sparse csr format.
      */
-    CompressedSparseMatrix(Index_ ncsr, Index_ ncol, std::string file_name, std::string value_name, std::string index_name, std::string pointer_name, bool csr) :
-        CompressedSparseMatrix(ncsr, ncol, std::move(file_name), std::move(value_name), std::move(index_name), std::move(pointer_name), csr, CompressedSparseMatrixOptions()) {}
+    CompressedSparseMatrix(Index_ nrow, Index_ ncol, std::string file_name, std::string value_name, std::string index_name, std::string pointer_name, bool csr) :
+        CompressedSparseMatrix(nrow, ncol, std::move(file_name), std::move(value_name), std::move(index_name), std::move(pointer_name), csr, CompressedSparseMatrixOptions()) {}
 
 public:
     Index_ nrow() const {
@@ -237,7 +240,7 @@ private:
             pointers, 
             my_slab_cache_size,
             my_max_non_zeros,
-            my_chunk_cache_size
+            my_chunk_cache_sizes
         );
     }
 

@@ -1,12 +1,13 @@
 #ifndef TATAMI_STATS_RANGES_HPP
 #define TATAMI_STATS_RANGES_HPP
 
-#include "tatami/tatami.hpp"
 #include "utils.hpp"
 
 #include <vector>
 #include <algorithm>
 #include <type_traits>
+
+#include "tatami/tatami.hpp"
 
 /**
  * @file ranges.hpp
@@ -44,31 +45,23 @@ struct Options {
  */
 namespace internal {
 
-template<bool minimum_, typename Value_>
-constexpr auto choose_placeholder() {
-    if constexpr(minimum_) {
-        // Placeholder value 'x' is such that 'x > y' is always true for any non-NaN 'y'.
-        if constexpr(std::numeric_limits<Value_>::has_infinity) {
-            return std::numeric_limits<Value_>::infinity();
-        } else {
-            return std::numeric_limits<Value_>::max();
-        }
+template<typename Value_>
+constexpr Value_ choose_minimum_placeholder() {
+    // Placeholder value 'x' is such that 'x >= y' is always true for any non-NaN 'y'.
+    if constexpr(std::numeric_limits<Value_>::has_infinity) {
+        return std::numeric_limits<Value_>::infinity();
     } else {
-        // Placeholder value 'x' is such that 'x < y' is always true for any non-NaN 'y'.
-        if constexpr(std::numeric_limits<Value_>::has_infinity) {
-            return -std::numeric_limits<Value_>::infinity();
-        } else {
-            return std::numeric_limits<Value_>::lowest();
-        }
+        return std::numeric_limits<Value_>::max();
     }
 }
 
-template<bool minimum_, typename Output_, typename Value_>
-bool is_better(Output_ best, Value_ alt) {
-    if constexpr(minimum_) {
-        return best > static_cast<Output_>(alt);
+template<typename Value_>
+constexpr Value_ choose_maximum_placeholder() {
+    // Placeholder value 'x' is such that 'x <= y' is always true for any non-NaN 'y'.
+    if constexpr(std::numeric_limits<Value_>::has_infinity) {
+        return -std::numeric_limits<Value_>::infinity();
     } else {
-        return best < static_cast<Output_>(alt);
+        return std::numeric_limits<Value_>::lowest();
     }
 }
 
@@ -80,42 +73,59 @@ bool is_better(Output_ best, Value_ alt) {
 /**
  * Directly compute the minimum or maximum of a dense objective vector.
  *
- * @tparam minimum_ Whether to compute the minimum.
- * If false, the maximum is computed instead.
  * @tparam Value_ Type of the input data.
  * @tparam Index_ Type of the row/column indices.
  *
  * @param[in] ptr Pointer to an array of length `num`, containing the values of the objective vector.
  * @param num Length of the objective vector, i.e., length of the array at `ptr`.
+ * @param minimum Whether to compute the minimum.
+ * If false, the maximum is computed instead.
  * @param skip_nan See `Options::skip_nan` for details.
  *
- * @return The minimum or maximum value, depending on `minimum_`.
- * If `num = 0` or (if `skip_nan_ = true`) there are no non-NaN values, a placeholder value is returned instead
- * that is never less than (if `minimum_ true`) or greater than (otherwise) any non-NaN value of type `Value_`.
+ * @return The minimum or maximum value, depending on `minimum`.
+ * If `num = 0` or (if `skip_nan = true`) there are no non-NaN values, a placeholder value is returned instead
+ * that is never less than (if `minimum true`) or greater than (otherwise) any non-NaN value of type `Value_`.
  */
-template<bool minimum_, typename Value_, typename Index_>
-Value_ direct(const Value_* ptr, Index_ num, bool skip_nan) {
+template<typename Value_, typename Index_>
+Value_ direct(const Value_* ptr, Index_ num, bool minimum, bool skip_nan) {
     return ::tatami_stats::internal::nanable_ifelse_with_value<Value_>(
         skip_nan,
+
         [&]() -> Value_ {
-            auto current = internal::choose_placeholder<minimum_, Value_>(); 
-            for (Index_ i = 0; i < num; ++i) {
-                auto val = ptr[i];
-                if (internal::is_better<minimum_>(current, val)) { // no need to explicitly handle NaNs, as any comparison with NaNs is always false.
-                    current = val;
+            if (minimum) {
+                auto current = internal::choose_minimum_placeholder<Value_>(); 
+                for (Index_ i = 0; i < num; ++i) {
+                    auto val = ptr[i];
+                    if (val < current) { // no need to explicitly handle NaNs, as any comparison with NaNs is always false.
+                        current = val;
+                    }
                 }
+                return current;
+            } else {
+                auto current = internal::choose_maximum_placeholder<Value_>(); 
+                for (Index_ i = 0; i < num; ++i) {
+                    auto val = ptr[i];
+                    if (val > current) { // again, no need to explicitly handle NaNs, as any comparison with NaNs is always false.
+                        current = val;
+                    }
+                }
+                return current;
             }
-            return current;
         },
+
         [&]() -> Value_ {
             if (num) {
-                if constexpr(minimum_) {
+                if (minimum) {
                     return *std::min_element(ptr, ptr + num);
                 } else {
                     return *std::max_element(ptr, ptr + num);
                 }
             } else {
-                return internal::choose_placeholder<minimum_, Value_>(); 
+                if (minimum) {
+                    return internal::choose_minimum_placeholder<Value_>();
+                } else {
+                    return internal::choose_maximum_placeholder<Value_>();
+                }
             }
         }
     );
@@ -124,8 +134,6 @@ Value_ direct(const Value_* ptr, Index_ num, bool skip_nan) {
 /**
  * Compute the extremes of a sparse objective vector.
  *
- * @tparam minimum_ Whether to compute the minimum.
- * If false, the maximum is computed instead.
  * @tparam Value_ Type of the input data.
  * @tparam Index_ Type of the row/column indices.
  *
@@ -133,24 +141,40 @@ Value_ direct(const Value_* ptr, Index_ num, bool skip_nan) {
  * @param num_nonzero Number of structural non-zeros in the objective vector.
  * @param num_all Length of the objective vector, including the structural zeros not in `value`.
  * This should be greater than or equal to `num_nonzero`.
+ * @tparam minimum Whether to compute the minimum.
+ * If false, the maximum is computed instead.
  * @param skip_nan See `Options::skip_nan` for details.
  *
- * @return The minimum or maximum value, depending on `minimum_`.
- * If `num_all = 0` or (if `skip_nan_ = true`) there are no non-NaN values, a placeholder value is returned instead
- * that is never less than (if `minimum_ true`) or greater than (otherwise) any non-NaN value of type `Value_`.
+ * @return The minimum or maximum value, depending on `minimum`.
+ * If `num_all = 0` or (if `skip_nan = true`) there are no non-NaN values, a placeholder value is returned instead
+ * that is never less than (if `minimum true`) or greater than (otherwise) any non-NaN value of type `Value_`.
  */
-template<bool minimum_, typename Value_, typename Index_>
-Value_ direct(const Value_* value, Index_ num_nonzero, Index_ num_all, bool skip_nan) {
+template<typename Value_, typename Index_>
+Value_ direct(const Value_* value, Index_ num_nonzero, Index_ num_all, bool minimum, bool skip_nan) {
     if (num_nonzero) {
-        auto candidate = direct<minimum_>(value, num_nonzero, skip_nan);
-        if (num_nonzero < num_all && internal::is_better<minimum_>(candidate, 0)) {
-            candidate = 0;
+        auto candidate = direct(value, num_nonzero, minimum, skip_nan);
+        if (num_nonzero < num_all) {
+            if (minimum) {
+                if (candidate > 0) {
+                    candidate = 0;
+                }
+            } else {
+                if (candidate < 0) {
+                    candidate = 0;
+                }
+            }
         }
         return candidate;
+
     } else if (num_all) {
         return 0;
+
     } else {
-        return internal::choose_placeholder<minimum_, Value_>();
+        if (minimum) {
+            return internal::choose_minimum_placeholder<Value_>();
+        } else {
+            return internal::choose_maximum_placeholder<Value_>();
+        }
     }
 }
 
@@ -163,22 +187,25 @@ Value_ direct(const Value_* value, Index_ num_nonzero, Index_ num_all, bool skip
  * The idea is to repeatedly call `add()` for `ptr` corresponding to observed vectors from 0 to \f$m - 1\f$,
  * which computes the running minimum/maximum for each objective vector at each invocation.
  *
- * @tparam minimum_ Whether to compute the minimum.
- * If false, the maximum is computed instead.
  * @tparam Output_ Type of the output data.
  * @tparam Value_ Type of the input data.
  * @tparam Index_ Type of the row/column indices.
  */
-template<bool minimum_, typename Output_, typename Value_, typename Index_>
+template<typename Output_, typename Value_, typename Index_>
 class RunningDense {
 public:
     /**
      * @param num Number of objective vectors, i.e., \f$n\f$.
-     * @param[out] store Pointer to an output array of length `num`.
-     * After `finish()` is called, this will contain the minimum/maximum for each objective vector.
+     * @param[out] store_min Pointer to an output array of length `num`.
+     * After `finish()` is called, this will contain the minimum for each objective vector.
+     * If `NULL`, no minimum is reported.
+     * @param[out] store_max Pointer to an output array of length `num`.
+     * After `finish()` is called, this will contain the maximum for each objective vector.
+     * If `NULL`, no maximum is reported.
      * @param skip_nan See `Options::skip_nan` for details.
      */
-    RunningDense(Index_ num, Output_* store, bool skip_nan) : my_num(num), my_store(store), my_skip_nan(skip_nan) {}
+    RunningDense(Index_ num, Output_* store_min, Output_* store_max, bool skip_nan) :
+        my_num(num), my_store_min(store_min), my_store_max(store_max), my_skip_nan(skip_nan) {}
 
     /**
      * Add the next observed vector to the running min/max calculation.
@@ -189,26 +216,57 @@ public:
             my_init = false;
             ::tatami_stats::internal::nanable_ifelse<Value_>(
                 my_skip_nan,
-                [&]() {
-                    for (Index_ i = 0; i < my_num; ++i, ++ptr) {
-                        auto val = *ptr;
-                        if (std::isnan(val)) {
-                            my_store[i] = internal::choose_placeholder<minimum_, Value_>();
-                        } else {
-                            my_store[i] = val;
+
+                [&]() -> void {
+                    if (my_store_min) {
+                        for (Index_ i = 0; i < my_num; ++i) {
+                            auto val = ptr[i];
+                            if (std::isnan(val)) {
+                                my_store_min[i] = internal::choose_minimum_placeholder<Value_>();
+                            } else {
+                                my_store_min[i] = val;
+                            }
+                        }
+                    }
+                    if (my_store_max) {
+                        for (Index_ i = 0; i < my_num; ++i) {
+                            auto val = ptr[i];
+                            if (std::isnan(val)) {
+                                my_store_max[i] = internal::choose_maximum_placeholder<Value_>();
+                            } else {
+                                my_store_max[i] = val;
+                            }
                         }
                     }
                 },
-                [&]() {
-                    std::copy_n(ptr, my_num, my_store);
+
+                [&]() -> void {
+                    if (my_store_min) {
+                        std::copy_n(ptr, my_num, my_store_min);
+                    }
+                    if (my_store_max) {
+                        std::copy_n(ptr, my_num, my_store_max);
+                    }
                 }
             );
 
         } else {
-            for (Index_ i = 0; i < my_num; ++i, ++ptr) {
-                auto val = *ptr;
-                if (internal::is_better<minimum_>(my_store[i], val)) { // this should implicitly skip NaNs, any NaN comparison will be false.
-                    my_store[i] = val;
+            if (my_store_min) {
+                for (Index_ i = 0; i < my_num; ++i) {
+                    auto val = ptr[i];
+                    auto& current = my_store_min[i];
+                    if (val < current) { // this should implicitly skip val=NaNs, as any NaN comparison will be false.
+                        current = val;
+                    }
+                }
+            }
+            if (my_store_max) {
+                for (Index_ i = 0; i < my_num; ++i) {
+                    auto val = ptr[i];
+                    auto& current = my_store_max[i];
+                    if (val > current) { // this should implicitly skip val=NaNs, as any NaN comparison will be false.
+                        current = val;
+                    }
                 }
             }
         }
@@ -219,14 +277,20 @@ public:
      */
     void finish() {
         if (my_init) {
-            std::fill_n(my_store, my_num, internal::choose_placeholder<minimum_, Value_>());
+            if (my_store_min) {
+                std::fill_n(my_store_min, my_num, internal::choose_minimum_placeholder<Value_>());
+            }
+            if (my_store_max) {
+                std::fill_n(my_store_max, my_num, internal::choose_maximum_placeholder<Value_>());
+            }
         }
     }
 
 private:
     bool my_init = true;
     Index_ my_num;
-    Output_* my_store;
+    Output_* my_store_min;
+    Output_* my_store_max;
     bool my_skip_nan;
 };
 
@@ -236,26 +300,28 @@ private:
  * Compute running minima and maximuma from sparse data. 
  * This does the same as `RunningDense` but for sparse observed vectors.
  *
- * @tparam minimum_ Whether to compute the minimum.
- * If false, the maximum is computed instead.
  * @tparam Output_ Type of the output data.
  * @tparam Value_ Type of the input value.
  * @tparam Index_ Type of the row/column indices.
  */
-template<bool minimum_, typename Output_, typename Value_, typename Index_>
+template<typename Output_, typename Value_, typename Index_>
 class RunningSparse {
 public:
     /**
      * @param num Number of objective vectors.
-     * @param[out] store Pointer to an output array of length `num`.
-     * After `finish()` is called, this will contain the minimum/maximum for each objective vector.
+     * @param[out] store_min Pointer to an output array of length `num`.
+     * After `finish()` is called, this will contain the minimum for each objective vector.
+     * If `NULL`, no minimum is reported.
+     * @param[out] store_max Pointer to an output array of length `num`.
+     * After `finish()` is called, this will contain the maximum for each objective vector.
+     * If `NULL`, no maximum is reported.
      * @param skip_nan See `Options::skip_nan` for details.
      * @param subtract Offset to subtract from each element of `index` before using it to index into `store`.
      * Only relevant if `store` holds statistics for a contiguous subset of objective vectors,
      * e.g., during task allocation for parallelization.
      */
-    RunningSparse(Index_ num, Output_* store, bool skip_nan, Index_ subtract = 0) : 
-        my_num(num), my_store(store), my_skip_nan(skip_nan), my_subtract(subtract) {}
+    RunningSparse(Index_ num, Output_* store_min, Output_* store_max, bool skip_nan, Index_ subtract = 0) : 
+        my_num(num), my_store_min(store_min), my_store_max(store_max), my_skip_nan(skip_nan), my_subtract(subtract) {}
 
     /**
      * Add the next observed vector to the min/max calculation.
@@ -265,14 +331,25 @@ public:
      */
     void add(const Value_* value, const Index_* index, Index_ number) {
         if (my_count == 0) {
-            my_nonzero.resize(my_num);
-            std::fill_n(my_store, my_num, internal::choose_placeholder<minimum_, Value_>());
+            tatami::resize_container_to_Index_size(my_nonzero, my_num);
+
+            if (my_store_min) {
+                std::fill_n(my_store_min, my_num, internal::choose_minimum_placeholder<Value_>());
+            }
+            if (my_store_max) {
+                std::fill_n(my_store_max, my_num, internal::choose_maximum_placeholder<Value_>());
+            }
 
             if (!my_skip_nan) {
-                for (Index_ i = 0; i < number; ++i, ++value, ++index) {
-                    auto val = *value;
-                    auto idx = *index - my_subtract;
-                    my_store[idx] = val;
+                for (Index_ i = 0; i < number; ++i) {
+                    auto val = value[i];
+                    auto idx = index[i] - my_subtract;
+                    if (my_store_min) {
+                        my_store_min[idx] = val;
+                    }
+                    if (my_store_max) {
+                        my_store_max[idx] = val;
+                    }
                     ++my_nonzero[idx];
                 }
                 my_count = 1;
@@ -280,12 +357,20 @@ public:
             }
         }
 
-        for (Index_ i = 0; i < number; ++i, ++value, ++index) {
-            auto val = *value;
-            auto idx = *index - my_subtract;
-            auto& current = my_store[idx];
-            if (internal::is_better<minimum_>(current, val)) { // this should implicitly skip NaNs, any NaN comparison will be false.
-                current = val;
+        for (Index_ i = 0; i < number; ++i) {
+            auto val = value[i];
+            auto idx = index[i] - my_subtract;
+            if (my_store_min) { // this should implicitly skip NaNs, any NaN comparison will be false.
+                auto& current = my_store_min[idx];
+                if (current > val) {
+                    current = val;
+                }
+            }
+            if (my_store_max) {
+                auto& current = my_store_max[idx];
+                if (current < val) {
+                    current = val;
+                }
             }
             ++my_nonzero[idx];
         }
@@ -300,20 +385,34 @@ public:
         if (my_count) {
             for (Index_ i = 0; i < my_num; ++i) {
                 if (my_count > my_nonzero[i]) {
-                    auto& current = my_store[i];
-                    if (internal::is_better<minimum_>(current, 0)) {
-                        current = 0;
+                    if (my_store_min) {
+                        auto& current = my_store_min[i];
+                        if (current > 0) {
+                            current = 0;
+                        }
+                    }
+                    if (my_store_max) {
+                        auto& current = my_store_max[i];
+                        if (current < 0) {
+                            current = 0;
+                        }
                     }
                 }
             }
         } else {
-            std::fill_n(my_store, my_num, internal::choose_placeholder<minimum_, Value_>());
+            if (my_store_min) {
+                std::fill_n(my_store_min, my_num, internal::choose_minimum_placeholder<Value_>());
+            }
+            if (my_store_max) {
+                std::fill_n(my_store_max, my_num, internal::choose_maximum_placeholder<Value_>());
+            }
         }
     }
 
 private:
     Index_ my_num;
-    Output_* my_store;
+    Output_* my_store_min;
+    Output_* my_store_max;
     bool my_skip_nan;
     Index_ my_subtract;
     Index_ my_count = 0;
@@ -329,7 +428,7 @@ private:
  *
  * @param row Whether to compute the range for each row.
  * If false, the range is computed for each column instead.
- * @param p Pointer to a `tatami::Matrix`.
+ * @param mat Instance of a `tatami::Matrix`.
  * @param[out] min_out Pointer to an array of length equal to the number of rows (if `row = true`) or columns (otherwise).
  * On output, this will contain the minimum of each row/column.
  * Alternatively, this may be NULL, in which case the minima are not computed.
@@ -339,61 +438,54 @@ private:
  * @param ropt Range calculation options.
  */
 template<typename Value_, typename Index_, typename Output_>
-void apply(bool row, const tatami::Matrix<Value_, Index_>* p, Output_* min_out, Output_* max_out, const Options& ropt) {
-    auto dim = (row ? p->nrow() : p->ncol());
-    auto otherdim = (row ? p->ncol() : p->nrow());
-    const bool direct = p->prefer_rows() == row;
+void apply(bool row, const tatami::Matrix<Value_, Index_>& mat, Output_* min_out, Output_* max_out, const Options& ropt) {
+    auto dim = (row ? mat.nrow() : mat.ncol());
+    auto otherdim = (row ? mat.ncol() : mat.nrow());
+    const bool direct = mat.prefer_rows() == row;
 
     bool store_min = min_out != NULL;
     bool store_max = max_out != NULL;
 
-    if (p->sparse()) {
+    if (mat.sparse()) {
         tatami::Options opt;
         opt.sparse_ordered_index = false;
 
         if (direct) {
             opt.sparse_extract_index = false;
-            tatami::parallelize([&](int, Index_ s, Index_ l) {
-                auto ext = tatami::consecutive_extractor<true>(p, row, s, l, opt);
-                std::vector<Value_> vbuffer(otherdim);
+            tatami::parallelize([&](int, Index_ s, Index_ l) -> void {
+                auto ext = tatami::consecutive_extractor<true>(mat, row, s, l, opt);
+                auto vbuffer = tatami::create_container_of_Index_size<std::vector<Value_> >(otherdim);
                 for (Index_ x = 0; x < l; ++x) {
                     auto out = ext->fetch(vbuffer.data(), NULL);
                     if (store_min) {
-                        min_out[x + s] = ranges::direct<true>(out.value, out.number, otherdim, ropt.skip_nan);
+                        min_out[x + s] = ranges::direct(out.value, out.number, otherdim, true, ropt.skip_nan);
                     }
                     if (store_max) {
-                        max_out[x + s] = ranges::direct<false>(out.value, out.number, otherdim, ropt.skip_nan);
+                        max_out[x + s] = ranges::direct(out.value, out.number, otherdim, false, ropt.skip_nan);
                     }
                 }
             }, dim, ropt.num_threads);
 
         } else {
-            tatami::parallelize([&](int thread, Index_ s, Index_ l) {
-                auto ext = tatami::consecutive_extractor<true>(p, !row, static_cast<Index_>(0), otherdim, s, l, opt);
-                std::vector<Value_> vbuffer(l);
-                std::vector<Index_> ibuffer(l);
+            tatami::parallelize([&](int thread, Index_ s, Index_ l) -> void {
+                auto ext = tatami::consecutive_extractor<true>(mat, !row, static_cast<Index_>(0), otherdim, s, l, opt);
+                auto vbuffer = tatami::create_container_of_Index_size<std::vector<Value_> >(l);
+                auto ibuffer = tatami::create_container_of_Index_size<std::vector<Index_> >(l);
 
                 auto local_min = (store_min ? LocalOutputBuffer<Output_>(thread, s, l, min_out) : LocalOutputBuffer<Output_>());
                 auto local_max = (store_max ? LocalOutputBuffer<Output_>(thread, s, l, max_out) : LocalOutputBuffer<Output_>());
-                ranges::RunningSparse<true, Output_, Value_, Index_> runmin(l, local_min.data(), ropt.skip_nan, s);
-                ranges::RunningSparse<false, Output_, Value_, Index_> runmax(l, local_max.data(), ropt.skip_nan, s);
+                ranges::RunningSparse<Output_, Value_, Index_> runner(l, local_min.data(), local_max.data(), ropt.skip_nan, s);
 
                 for (Index_ x = 0; x < otherdim; ++x) {
                     auto out = ext->fetch(vbuffer.data(), ibuffer.data());
-                    if (store_min) {
-                        runmin.add(out.value, out.index, out.number);
-                    }
-                    if (store_max) {
-                        runmax.add(out.value, out.index, out.number);
-                    }
+                    runner.add(out.value, out.index, out.number);
                 }
 
+                runner.finish();
                 if (store_min) {
-                    runmin.finish();
                     local_min.transfer();
                 }
                 if (store_max) {
-                    runmax.finish();
                     local_max.transfer();
                 }
             }, dim, ropt.num_threads);
@@ -401,46 +493,39 @@ void apply(bool row, const tatami::Matrix<Value_, Index_>* p, Output_* min_out, 
 
     } else {
         if (direct) {
-            tatami::parallelize([&](int, Index_ s, Index_ l) {
-                auto ext = tatami::consecutive_extractor<false>(p, row, s, l);
-                std::vector<Value_> buffer(otherdim);
+            tatami::parallelize([&](int, Index_ s, Index_ l) -> void {
+                auto ext = tatami::consecutive_extractor<false>(mat, row, s, l);
+                auto buffer = tatami::create_container_of_Index_size<std::vector<Value_> >(otherdim);
                 for (Index_ x = 0; x < l; ++x) {
                     auto ptr = ext->fetch(buffer.data());
                     if (store_min) {
-                        min_out[x + s] = ranges::direct<true>(ptr, otherdim, ropt.skip_nan);
+                        min_out[x + s] = ranges::direct(ptr, otherdim, true, ropt.skip_nan);
                     }
                     if (store_max) {
-                        max_out[x + s] = ranges::direct<false>(ptr, otherdim, ropt.skip_nan);
+                        max_out[x + s] = ranges::direct(ptr, otherdim, false, ropt.skip_nan);
                     }
                 }
             }, dim, ropt.num_threads);
 
         } else {
-            tatami::parallelize([&](int thread, Index_ s, Index_ l) {
-                auto ext = tatami::consecutive_extractor<false>(p, !row, static_cast<Index_>(0), otherdim, s, l);
-                std::vector<Value_> buffer(l);
+            tatami::parallelize([&](int thread, Index_ s, Index_ l) -> void {
+                auto ext = tatami::consecutive_extractor<false>(mat, !row, static_cast<Index_>(0), otherdim, s, l);
+                auto buffer = tatami::create_container_of_Index_size<std::vector<Value_> >(l);
 
                 auto local_min = (store_min ? LocalOutputBuffer<Output_>(thread, s, l, min_out) : LocalOutputBuffer<Output_>());
                 auto local_max = (store_max ? LocalOutputBuffer<Output_>(thread, s, l, max_out) : LocalOutputBuffer<Output_>());
-                ranges::RunningDense<true, Output_, Value_, Index_> runmin(l, local_min.data(), ropt.skip_nan);
-                ranges::RunningDense<false, Output_, Value_, Index_> runmax(l, local_max.data(), ropt.skip_nan);
+                ranges::RunningDense<Output_, Value_, Index_> runner(l, local_min.data(), local_max.data(), ropt.skip_nan);
 
                 for (Index_ x = 0; x < otherdim; ++x) {
                     auto ptr = ext->fetch(buffer.data());
-                    if (store_min) {
-                        runmin.add(ptr);
-                    }
-                    if (store_max) {
-                        runmax.add(ptr);
-                    }
+                    runner.add(ptr);
                 }
 
+                runner.finish();
                 if (store_min) {
-                    runmin.finish();
                     local_min.transfer();
                 }
                 if (store_max) {
-                    runmax.finish();
                     local_max.transfer();
                 }
             }, dim, ropt.num_threads);
@@ -451,41 +536,59 @@ void apply(bool row, const tatami::Matrix<Value_, Index_>* p, Output_* min_out, 
 }
 
 /**
+ * @cond
+ */
+// Back-compatibility.
+template<typename Value_, typename Index_, typename Output_>
+void apply(bool row, const tatami::Matrix<Value_, Index_>* p, Output_* min_out, Output_* max_out, const Options& ropt) {
+    apply(row, *p, min_out, max_out, ropt); 
+}
+/**
+ * @endcond
+ */
+
+/**
  * Wrapper around `apply()` for column ranges.
  *
  * @tparam Output Type of the output value.
  * @tparam Value_ Type of the matrix value.
  * @tparam Index_ Type of the row/column indices.
  *
- * @param p Pointer to a `tatami::Matrix`.
+ * @param mat Instance of a `tatami::Matrix`.
  * @param ropt Range calculation options.
  *
  * @return A pair of vectors, each of length equal to the number of columns.
  * The first and second vector contains the minimum and maximum value per column, respectively.
  */
 template<typename Output_ = double, typename Value_, typename Index_>
-std::pair<std::vector<Output_>, std::vector<Output_> > by_column(const tatami::Matrix<Value_, Index_>* p, const Options& ropt) {
-    std::vector<Output_> mins(p->ncol()), maxs(p->ncol());
-    apply(false, p, mins.data(), maxs.data(), ropt);
+std::pair<std::vector<Output_>, std::vector<Output_> > by_column(const tatami::Matrix<Value_, Index_>& mat, const Options& ropt) {
+    auto mins = tatami::create_container_of_Index_size<std::vector<Output_> >(mat.ncol());
+    auto maxs = mins;
+    apply(false, mat, mins.data(), maxs.data(), ropt);
     return std::make_pair(std::move(mins), std::move(maxs));
 }
 
 /**
- * Overload with default options.
- *
- * @tparam Output Type of the output value.
- * @tparam Value_ Type of the matrix value.
- * @tparam Index_ Type of the row/column indices.
- *
- * @param p Pointer to a `tatami::Matrix`.
- *
- * @return A pair of vectors, each of length equal to the number of columns.
- * The first and second vector contains the minimum and maximum value per column, respectively.
+ * @cond
  */
+// Back-compatibility.
+template<typename Output_ = double, typename Value_, typename Index_>
+std::pair<std::vector<Output_>, std::vector<Output_> > by_column(const tatami::Matrix<Value_, Index_>* p, const Options& ropt) {
+    return by_column<Output_>(*p, ropt);
+}
+
+template<typename Output_ = double, typename Value_, typename Index_>
+std::pair<std::vector<Output_>, std::vector<Output_> > by_column(const tatami::Matrix<Value_, Index_>& mat) {
+    return by_column<Output_>(mat, {});
+}
+
 template<typename Output_ = double, typename Value_, typename Index_>
 std::pair<std::vector<Output_>, std::vector<Output_> > by_column(const tatami::Matrix<Value_, Index_>* p) {
-    return by_column<Output_>(p, Options());
+    return by_column<Output_>(*p);
 }
+/**
+ * @endcond
+ */
 
 /**
  * Wrapper around `apply()` for row ranges.
@@ -494,35 +597,41 @@ std::pair<std::vector<Output_>, std::vector<Output_> > by_column(const tatami::M
  * @tparam Value_ Type of the matrix value.
  * @tparam Index_ Type of the row/column indices.
  *
- * @param p Pointer to a `tatami::Matrix`.
+ * @param mat Instance of a `tatami::Matrix`.
  * @param ropt Range calculation options.
  *
  * @return A pair of vectors, each of length equal to the number of rows.
  * The first and second vector contains the minimum and maximum value per row, respectively.
  */
 template<typename Output_ = double, typename Value_, typename Index_>
-std::pair<std::vector<Output_>, std::vector<Output_> > by_row(const tatami::Matrix<Value_, Index_>* p, const Options& ropt) {
-    std::vector<Output_> mins(p->nrow()), maxs(p->nrow());
-    apply(true, p, mins.data(), maxs.data(), ropt);
+std::pair<std::vector<Output_>, std::vector<Output_> > by_row(const tatami::Matrix<Value_, Index_>& mat, const Options& ropt) {
+    auto mins = tatami::create_container_of_Index_size<std::vector<Output_> >(mat.nrow());
+    auto maxs = mins;
+    apply(true, mat, mins.data(), maxs.data(), ropt);
     return std::make_pair(std::move(mins), std::move(maxs));
 }
 
 /**
- * Overload with default options.
- *
- * @tparam Output Type of the output value.
- * @tparam Value_ Type of the matrix value.
- * @tparam Index_ Type of the row/column indices.
- *
- * @param p Pointer to a `tatami::Matrix`.
- *
- * @return A pair of vectors, each of length equal to the number of rows.
- * The first and second vector contains the minimum and maximum value per row, respectively.
+ * @cond
  */
+// Back-compatibility.
+template<typename Output_ = double, typename Value_, typename Index_>
+std::pair<std::vector<Output_>, std::vector<Output_> > by_row(const tatami::Matrix<Value_, Index_>* p, const Options& ropt) {
+    return by_row<Output_>(*p, ropt);
+}
+
+template<typename Output_ = double, typename Value_, typename Index_>
+std::pair<std::vector<Output_>, std::vector<Output_> > by_row(const tatami::Matrix<Value_, Index_>& mat) {
+    return by_row<Output_>(mat, {}); 
+}
+
 template<typename Output_ = double, typename Value_, typename Index_>
 std::pair<std::vector<Output_>, std::vector<Output_> > by_row(const tatami::Matrix<Value_, Index_>* p) {
-    return by_row<Output_>(p, Options());
+    return by_row<Output_>(*p);
 }
+/**
+ * @endcond
+ */
 
 }
 

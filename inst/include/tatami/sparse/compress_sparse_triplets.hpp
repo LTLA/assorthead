@@ -1,9 +1,15 @@
 #ifndef TATAMI_COMPRESS_SPARSE_TRIPLETS_H
 #define TATAMI_COMPRESS_SPARSE_TRIPLETS_H
 
+#include "../utils/Index_to_container.hpp"
+
 #include <vector>
 #include <algorithm>
 #include <numeric>
+#include <utility>
+#include <cstddef>
+
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file compress_sparse_triplets.hpp
@@ -18,16 +24,17 @@ namespace compress_triplets {
 /**
  * @cond
  */
-template<class Primary, class Secondary>
-int is_ordered(const Primary& primary, const Secondary& secondary) {
+template<class Primary_, class Secondary_>
+int is_ordered(const Primary_& primary, const Secondary_& secondary) {
     if (!std::is_sorted(primary.begin(), primary.end())) {
         return 2;
     }
 
-    size_t start = 0;
-    while (start < primary.size()) {
-        size_t end = start + 1;
-        while (end < primary.size() && primary[end] == primary[start]) {
+    auto nprimary = primary.size();
+    decltype(nprimary) start = 0;
+    while (start < nprimary) {
+        decltype(nprimary) end = start + 1;
+        while (end < nprimary && primary[end] == primary[start]) {
             if (secondary[end] < secondary[end - 1]) {
                 // Quit on first failure; we've seen enough.
                 return 1;
@@ -40,19 +47,20 @@ int is_ordered(const Primary& primary, const Secondary& secondary) {
     return 0;
 }
 
-template<class Primary, class Secondary>
-void order(int status, std::vector<size_t>& indices, const Primary& primary, const Secondary& secondary) {
+template<typename Size_, class Primary_, class Secondary_>
+void order(int status, std::vector<Size_>& indices, const Primary_& primary, const Secondary_& secondary) {
     if (status == 1) {
-        size_t start = 0;
-        while (start < primary.size()) {
-            size_t end = start + 1;
-            while (end < primary.size() && primary[end] == primary[start]) {
+        auto nprimary = primary.size();
+        decltype(nprimary) start = 0;
+        while (start < nprimary) {
+            decltype(nprimary) end = start + 1;
+            while (end < nprimary && primary[end] == primary[start]) {
                 ++end;
             }
 
             // Checking if this particular run can be skipped.
             if (!std::is_sorted(secondary.begin() + start, secondary.begin() + end)) {
-                std::sort(indices.begin() + start, indices.begin() + end, [&](size_t left, size_t right) -> bool { 
+                std::sort(indices.begin() + start, indices.begin() + end, [&](Size_ left, Size_ right) -> bool { 
                     return secondary[left] < secondary[right];
                 });
             }
@@ -60,7 +68,7 @@ void order(int status, std::vector<size_t>& indices, const Primary& primary, con
         }
 
     } else if (status == 2) {
-        std::sort(indices.begin(), indices.end(), [&](size_t left, size_t right) -> bool {
+        std::sort(indices.begin(), indices.end(), [&](Size_ left, Size_ right) -> bool {
             if (primary[left] == primary[right]) {
                 return (secondary[left] < secondary[right]);
             }
@@ -95,9 +103,10 @@ void order(int status, std::vector<size_t>& indices, const Primary& primary, con
  * A vector of index pointers is returned with length `nrow + 1` (if `csr = true`) or `ncol + 1` (if `csr = false`).
  */
 template<class Values_, class RowIndices_, class ColumnIndices_>
-std::vector<size_t> compress_sparse_triplets(size_t nrow, size_t ncol, Values_& values, RowIndices_& row_indices, ColumnIndices_& column_indices, bool csr) {
-    const size_t N = row_indices.size();
-    if (N != column_indices.size() || values.size() != N) { 
+std::vector<decltype(std::declval<Values_>().size())> compress_sparse_triplets(std::size_t nrow, std::size_t ncol, Values_& values, RowIndices_& row_indices, ColumnIndices_& column_indices, bool csr) {
+    // We use decltype(N) as the return type to match the size_type of the input containers, which might not be size_t for arbitrary containers.
+    auto N = values.size();
+    if (!safe_non_negative_equal(N, row_indices.size()) || !safe_non_negative_equal(N, column_indices.size())) { 
         throw std::runtime_error("'row_indices', 'column_indices' and 'values' should have the same length");
     }
 
@@ -109,10 +118,8 @@ std::vector<size_t> compress_sparse_triplets(size_t nrow, size_t ncol, Values_& 
     }
 
     if (order_status != 0) {
-        std::vector<size_t> indices(N);
-        for (size_t i = 0; i < N; ++i) {
-            indices[i] = i;
-        }
+        auto indices = sanisizer::create<std::vector<decltype(N)> >(N);
+        std::iota(indices.begin(), indices.end(), static_cast<decltype(N)>(0));
 
         // Sorting without duplicating the data.
         if (csr) {
@@ -124,13 +131,13 @@ std::vector<size_t> compress_sparse_triplets(size_t nrow, size_t ncol, Values_& 
         // Reordering values in place. This (i) saves memory, and (ii) allows
         // us to work with Values_, RowIndices_, etc. that may not have well-defined copy
         // constructors (e.g., if they refer to external memory).
-        for (size_t i = 0; i < indices.size(); ++i) {
-            if (indices[i] == static_cast<size_t>(-1)) {
+        auto used = sanisizer::create<std::vector<unsigned char> >(N);
+        for (decltype(N) i = 0; i < N; ++i) {
+            if (used[i]) {
                 continue;
             }
-
-            size_t current = i, replacement = indices[i];
-            indices[i] = -1;
+            auto current = i, replacement = indices[i];
+            used[i] = 1;
 
             while (replacement != i) {
                 std::swap(row_indices[current], row_indices[replacement]);
@@ -138,22 +145,23 @@ std::vector<size_t> compress_sparse_triplets(size_t nrow, size_t ncol, Values_& 
                 std::swap(values[current], values[replacement]);
 
                 current = replacement;
-                auto next_replacement = indices[replacement]; 
-                indices[replacement] = -1;
-                replacement = next_replacement;
+                used[current] = 1;
+                replacement = indices[replacement]; 
             } 
         }
     }
 
     // Collating the indices.
-    std::vector<size_t> output(csr ? nrow + 1 : ncol + 1);
+    typedef std::vector<decltype(N)> Output;
+    typedef typename Output::size_type OutputSize;
+    Output output(sanisizer::sum<OutputSize>(csr ? nrow : ncol, 1));
     if (csr) {
         for (auto t : row_indices) {
-            ++(output[t+1]);
+            ++(output[static_cast<OutputSize>(t) + 1]);
         } 
     } else {
         for (auto t : column_indices) {
-            ++(output[t+1]);
+            ++(output[static_cast<OutputSize>(t) + 1]);
         }
     }
     std::partial_sum(output.begin(), output.end(), output.begin());
@@ -166,7 +174,7 @@ std::vector<size_t> compress_sparse_triplets(size_t nrow, size_t ncol, Values_& 
  */
 // Back-compatibility.
 template<bool row_, class Values_, class RowIndices_, class ColumnIndices_>
-std::vector<size_t> compress_sparse_triplets(size_t nrow, size_t ncol, Values_& values, RowIndices_& row_indices, ColumnIndices_& column_indices) {
+auto compress_sparse_triplets(std::size_t nrow, std::size_t ncol, Values_& values, RowIndices_& row_indices, ColumnIndices_& column_indices) {
     return compress_sparse_triplets(nrow, ncol, values, row_indices, column_indices, row_);
 }
 /**

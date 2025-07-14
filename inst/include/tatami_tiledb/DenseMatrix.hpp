@@ -1,9 +1,6 @@
 #ifndef TATAMI_TILEDB_DENSE_MATRIX_HPP
 #define TATAMI_TILEDB_DENSE_MATRIX_HPP
 
-#include "tatami_chunked/tatami_chunked.hpp"
-#include <tiledb/tiledb>
-
 #include "serialize.hpp"
 #include "utils.hpp"
 
@@ -11,6 +8,11 @@
 #include <memory>
 #include <vector>
 #include <type_traits>
+#include <cstddef>
+
+#include <tiledb/tiledb>
+#include "tatami_chunked/tatami_chunked.hpp"
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file DenseMatrix.hpp
@@ -34,7 +36,7 @@ struct DenseMatrixOptions {
      * Larger caches improve access speed at the cost of memory usage.
      * Small values may be ignored if `require_minimum_cache` is `true`.
      */
-    size_t maximum_cache_size = 100000000;
+    std::size_t maximum_cache_size = sanisizer::cap<std::size_t>(100000000);
 
     /**
      * Whether to automatically enforce a minimum size for the cache, regardless of `maximum_cache_size`.
@@ -53,7 +55,7 @@ typedef ::tatami_tiledb::internal::Components Components;
 typedef ::tatami_tiledb::internal::VariablyTypedDimension Dimension;
 typedef ::tatami_tiledb::internal::VariablyTypedVector CacheBuffer;
 
-inline void execute_query(const Components& tdb_comp, const tiledb::Subarray& subarray, const std::string& attribute, bool row, CacheBuffer& buffer, size_t offset, size_t length) {
+inline void execute_query(const Components& tdb_comp, const tiledb::Subarray& subarray, const std::string& attribute, bool row, CacheBuffer& buffer, std::size_t offset, std::size_t length) {
     tiledb::Query query(tdb_comp.ctx, tdb_comp.array);
     query.set_subarray(subarray);
     query.set_layout(row ? TILEDB_ROW_MAJOR : TILEDB_COL_MAJOR);
@@ -70,8 +72,8 @@ inline void execute_query(const Components& tdb_comp, const tiledb::Subarray& su
 template<typename Index_>
 struct CacheParameters {
     Index_ chunk_length;
-    size_t slab_size_in_elements;
-    size_t max_slabs_in_cache;
+    std::size_t slab_size_in_elements;
+    Index_ max_slabs_in_cache;
 };
 
 template<typename Index_>
@@ -87,7 +89,8 @@ public:
         tiledb_datatype_t tdb_type,
         Index_ non_target_length,
         [[maybe_unused]] tatami::MaybeOracle<false, Index_> oracle, // for consistency with the oracular version.
-        const CacheParameters<Index_>& cache_stats) :
+        const CacheParameters<Index_>& cache_stats
+    ) :
         my_tdb_comp(tdb_comp),
         my_attribute(attribute),
         my_row(row),
@@ -97,7 +100,7 @@ public:
         my_non_target_length(non_target_length),
         my_target_chunk_length(cache_stats.chunk_length),
         my_slab_size(cache_stats.slab_size_in_elements),
-        my_holding(tdb_type, my_slab_size * cache_stats.max_slabs_in_cache),
+        my_holding(tdb_type, sanisizer::product<std::size_t>(my_slab_size, cache_stats.max_slabs_in_cache)),
         my_cache(cache_stats.max_slabs_in_cache)
     {}
 
@@ -112,13 +115,13 @@ private:
 
     Index_ my_non_target_length;
     Index_ my_target_chunk_length;
-    size_t my_slab_size;
+    std::size_t my_slab_size;
     CacheBuffer my_holding;
 
     struct Slab {
-        size_t offset;
+        std::size_t offset;
     };
-    size_t my_offset = 0;
+    std::size_t my_offset = 0;
     tatami_chunked::LruSlabCache<Index_, Slab> my_cache;
 
 private:
@@ -149,7 +152,7 @@ private:
             }
         );
 
-        size_t final_offset = info.offset + static_cast<size_t>(my_non_target_length) * static_cast<size_t>(index); // cast to size_t to avoid overflow
+        auto final_offset = info.offset + sanisizer::product_unsafe<std::size_t>(my_non_target_length, index);
         my_holding.copy(final_offset, my_non_target_length, buffer);
         return buffer;
     }
@@ -157,18 +160,30 @@ private:
 public:
     template<typename Value_>
     const Value_* fetch_block(Index_ i, Index_ block_start, Value_* buffer) {
-        return fetch_raw(i, buffer, [&](tiledb::Subarray& subarray, int rowdex) {
-            my_tdb_non_target_dim.add_range(subarray, rowdex, block_start, my_non_target_length);
-        });
+        return fetch_raw(
+            i,
+            buffer,
+            [&](tiledb::Subarray& subarray, int rowdex) -> void {
+                my_tdb_non_target_dim.add_range(subarray, rowdex, block_start, my_non_target_length);
+            }
+        );
     }
 
     template<typename Value_>
     const Value_* fetch_indices(Index_ i, const std::vector<Index_>& indices, Value_* buffer) {
-        return fetch_raw(i, buffer, [&](tiledb::Subarray& subarray, int rowdex) {
-            tatami::process_consecutive_indices<Index_>(indices.data(), indices.size(), [&](Index_ s, Index_ l) {
-                my_tdb_non_target_dim.add_range(subarray, rowdex, s, l);
-            });
-        });
+        return fetch_raw(
+            i,
+            buffer,
+            [&](tiledb::Subarray& subarray, int rowdex) -> void {
+                tatami::process_consecutive_indices<Index_>(
+                    indices.data(),
+                    indices.size(),
+                    [&](Index_ s, Index_ l) -> void {
+                        my_tdb_non_target_dim.add_range(subarray, rowdex, s, l);
+                    }
+                );
+            }
+        );
     }
 };
 
@@ -185,7 +200,8 @@ public:
         tiledb_datatype_t tdb_type,
         Index_ non_target_length,
         tatami::MaybeOracle<true, Index_> oracle, 
-        const CacheParameters<Index_>& cache_stats) :
+        const CacheParameters<Index_>& cache_stats
+    ) :
         my_tdb_comp(tdb_comp),
         my_attribute(attribute),
         my_row(row),
@@ -195,7 +211,7 @@ public:
         my_non_target_length(non_target_length),
         my_target_chunk_length(cache_stats.chunk_length),
         my_slab_size(cache_stats.slab_size_in_elements),
-        my_holding(tdb_type, my_slab_size * cache_stats.max_slabs_in_cache),
+        my_holding(tdb_type, sanisizer::product<std::size_t>(my_slab_size, cache_stats.max_slabs_in_cache)),
         my_cache(std::move(oracle), cache_stats.max_slabs_in_cache)
     {}
 
@@ -210,13 +226,13 @@ private:
 
     Index_ my_non_target_length;
     Index_ my_target_chunk_length;
-    size_t my_slab_size;
+    std::size_t my_slab_size;
     CacheBuffer my_holding;
 
     struct Slab {
-        size_t offset;
+        std::size_t offset;
     };
-    size_t my_offset = 0;
+    std::size_t my_offset = 0;
     tatami_chunked::OracularSlabCache<Index_, Index_, Slab, true> my_cache;
 
 private:
@@ -242,11 +258,11 @@ private:
                 my_offset += my_slab_size;
                 return output;
             },
-            /* populate = */ [&](std::vector<std::pair<Index_, Slab*> >& to_populate, std::vector<std::pair<Index_, Slab*> >& to_reuse) {
+            /* populate = */ [&](std::vector<std::pair<Index_, Slab*> >& to_populate, std::vector<std::pair<Index_, Slab*> >& to_reuse) -> void {
                 // Defragmenting the existing chunks. We sort by offset to make 
                 // sure that we're not clobbering in-use slabs during the copy().
-                sort_by_field(to_reuse, [](const std::pair<Index_, Slab*>& x) -> size_t { return x.second->offset; });
-                size_t running_offset = 0;
+                sort_by_field(to_reuse, [](const std::pair<Index_, Slab*>& x) -> std::size_t { return x.second->offset; });
+                std::size_t running_offset = 0;
                 for (auto& x : to_reuse) {
                     auto& cur_offset = x.second->offset;
                     if (cur_offset != running_offset) {
@@ -306,7 +322,7 @@ private:
             }
         );
 
-        size_t final_offset = info.first->offset + my_non_target_length * static_cast<size_t>(info.second); // cast to size_t to avoid overflow
+        auto final_offset = info.first->offset + sanisizer::product_unsafe<std::size_t>(my_non_target_length, info.second);
         my_holding.copy(final_offset, my_non_target_length, buffer);
         return buffer;
     }
@@ -314,18 +330,30 @@ private:
 public:
     template<typename Value_>
     const Value_* fetch_block(Index_ i, Index_ block_start, Value_* buffer) {
-        return fetch_raw(i, buffer, [&](tiledb::Subarray& subarray, int rowdex) {
-            my_tdb_non_target_dim.add_range(subarray, rowdex, block_start, my_non_target_length);
-        });
+        return fetch_raw(
+            i,
+            buffer,
+            [&](tiledb::Subarray& subarray, int rowdex) -> void {
+                my_tdb_non_target_dim.add_range(subarray, rowdex, block_start, my_non_target_length);
+            }
+        );
     }
 
     template<typename Value_>
     const Value_* fetch_indices(Index_ i, const std::vector<Index_>& indices, Value_* buffer) {
-        return fetch_raw(i, buffer, [&](tiledb::Subarray& subarray, int rowdex) {
-            tatami::process_consecutive_indices<Index_>(indices.data(), indices.size(), [&](Index_ s, Index_ l) {
-                my_tdb_non_target_dim.add_range(subarray, rowdex, s, l);
-            });
-        });
+        return fetch_raw(
+            i,
+            buffer, 
+            [&](tiledb::Subarray& subarray, int rowdex) -> void {
+                tatami::process_consecutive_indices<Index_>(
+                    indices.data(),
+                    indices.size(),
+                    [&](Index_ s, Index_ l) -> void {
+                        my_tdb_non_target_dim.add_range(subarray, rowdex, s, l);
+                    }
+                );
+            }
+        );
     }
 };
 
@@ -337,7 +365,7 @@ using DenseCore = typename std::conditional<oracle_, OracularCore<Index_>, Myopi
  ***************************/
 
 template<bool oracle_, typename Value_, typename Index_>
-class Full : public tatami::DenseExtractor<oracle_, Value_, Index_> {
+class Full final : public tatami::DenseExtractor<oracle_, Value_, Index_> {
 public:
     Full(
         const Components& tdb_comp,
@@ -373,7 +401,7 @@ private:
 };
 
 template<bool oracle_, typename Value_, typename Index_>
-class Block : public tatami::DenseExtractor<oracle_, Value_, Index_> {
+class Block final : public tatami::DenseExtractor<oracle_, Value_, Index_> {
 public:
     Block(
         const Components& tdb_comp,
@@ -412,7 +440,7 @@ private:
 };
 
 template<bool oracle_, typename Value_, typename Index_>
-class Index : public tatami::DenseExtractor<oracle_, Value_, Index_> {
+class Index final : public tatami::DenseExtractor<oracle_, Value_, Index_> {
 public:
     Index(
         const Components& tdb_comp,
@@ -469,7 +497,7 @@ private:
  * This should be a function-like macro that accepts a function and executes it inside a user-defined serial section.
  */
 template<typename Value_, typename Index_>
-class DenseMatrix : public tatami::Matrix<Value_, Index_> {
+class DenseMatrix final : public tatami::Matrix<Value_, Index_> {
 public:
     /**
      * @param uri File path (or some other appropriate location) of the TileDB array.
@@ -499,7 +527,7 @@ public:
 private:
     template<class PossibleContext_>
     void initialize(const std::string& uri, PossibleContext_ ctx, const DenseMatrixOptions& options) {
-        serialize([&]() {
+        serialize([&]() -> void {
             my_tdb_comp.reset(
                 [&]{
                     // If we have to create our own Context_ object, we do so inside the serialized
@@ -510,9 +538,9 @@ private:
                         return new DenseMatrix_internal::Components(uri);
                     }
                 }(),
-                [](DenseMatrix_internal::Components* ptr) {
+                [](DenseMatrix_internal::Components* ptr) -> void {
                     // Serializing the deleter, for completeness's sake.
-                    serialize([&]() {
+                    serialize([&]() -> void {
                         delete ptr;
                     });
                 }
@@ -563,7 +591,7 @@ private:
     tiledb_datatype_t my_tdb_type;
 
     std::string my_attribute;
-    size_t my_cache_size_in_elements;
+    std::size_t my_cache_size_in_elements;
     bool my_require_minimum_cache;
 
     int my_first_offset, my_second_offset;
@@ -617,7 +645,7 @@ private:
         const auto& tdb_target_dim = (row ? my_tdb_first_dim : my_tdb_second_dim);
         const auto& tdb_non_target_dim = (row ? my_tdb_second_dim : my_tdb_first_dim);
 
-        tatami_chunked::SlabCacheStats slab_stats(
+        tatami_chunked::SlabCacheStats<Index_> slab_stats(
             target_dim_stats.chunk_length,
             non_target_length,
             target_dim_stats.num_chunks,

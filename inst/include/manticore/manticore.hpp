@@ -34,8 +34,8 @@ class Executor {
     std::mutex run_lock;
     std::condition_variable cv;
 
-    size_t nthreads;
-    size_t ncomplete;
+    int nthreads;
+    int ncomplete;
     std::string fallback_error;
     std::string error_message;
 
@@ -55,7 +55,7 @@ public:
      * @param n Number of worker threads in this session.
      * @param e Default error message if a non-standard exception is thrown.
      */
-    void initialize(size_t n, std::string e) {
+    void initialize(int n, std::string e) {
         nthreads = n;
         ncomplete = 0;
         fallback_error = std::move(e);
@@ -69,7 +69,7 @@ public:
      *
      * @param n Number of worker threads in this session.
      */
-    void initialize(size_t n) {
+    void initialize(int n) {
         initialize(n, "failed main thread execution");
     }
 
@@ -121,7 +121,7 @@ public:
         // Waiting until the main thread executor is free,
         // and then assigning it a task.
         std::unique_lock lk(run_lock);
-        cv.wait(lk, [&]{ return status == Status::FREE; });
+        cv.wait(lk, [&]() -> bool { return status == Status::FREE; });
 
         fun = std::move(f);
         status = Status::PRIMED;
@@ -132,7 +132,7 @@ public:
         cv.notify_all();
 
         lk.lock();
-        cv.wait(lk, [&]{ return status == Status::FINISHED; });
+        cv.wait(lk, [&]() -> bool { return status == Status::FINISHED; });
 
         // Making a copy of any error message so we can use it for throwing
         // after the unlock. Also clearing the error message for the next thread.
@@ -158,7 +158,7 @@ public:
         while (1) {
             std::unique_lock lk(run_lock);
 
-            cv.wait(lk, [&]{ return status == Status::PRIMED || done(); });
+            cv.wait(lk, [&]() -> bool { return status == Status::PRIMED || done(); });
             if (done()) {
                 break;
             }

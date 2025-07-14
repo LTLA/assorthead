@@ -1,12 +1,15 @@
 #ifndef TATAMI_HDF5_LOAD_SPARSE_MATRIX_HPP
 #define TATAMI_HDF5_LOAD_SPARSE_MATRIX_HPP
 
-#include "H5Cpp.h"
+#include "utils.hpp"
 
 #include <string>
+#include <vector>
+#include <cstddef>
 
+#include "H5Cpp.h"
 #include "tatami/tatami.hpp"
-#include "utils.hpp"
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file load_compressed_sparse_matrix.hpp
@@ -41,10 +44,10 @@ namespace tatami_hdf5 {
  * @return Pointer to a `tatami::CompressedSparseMatrix` containing all values and indices in memory.
  * This differs from a `tatami_hdf5::CompressedSparseMatrix`, where the loading of data is deferred until requested.
  */
-template<typename Value_, typename Index_, class ValueStorage_ = std::vector<Value_>, class IndexStorage_ = std::vector<Index_>, class PointerStorage_ = std::vector<size_t> >
+template<typename Value_, typename Index_, class ValueStorage_ = std::vector<Value_>, class IndexStorage_ = std::vector<Index_>, class PointerStorage_ = std::vector<std::size_t> >
 std::shared_ptr<tatami::Matrix<Value_, Index_> > load_compressed_sparse_matrix(
-    size_t nr, 
-    size_t nc, 
+    Index_ nr, 
+    Index_ nc, 
     const std::string& file, 
     const std::string& vals, 
     const std::string& idx, 
@@ -54,28 +57,28 @@ std::shared_ptr<tatami::Matrix<Value_, Index_> > load_compressed_sparse_matrix(
     H5::H5File file_handle(file, H5F_ACC_RDONLY);
 
     auto dhandle = open_and_check_dataset<false>(file_handle, vals);
-    const size_t nonzeros = get_array_dimensions<1>(dhandle, "vals")[0];
+    auto nonzeros = get_array_dimensions<1>(dhandle, "vals")[0];
 
-    ValueStorage_ x(nonzeros);
+    auto x = sanisizer::create<ValueStorage_>(nonzeros);
     dhandle.read(x.data(), define_mem_type<tatami::ElementType<ValueStorage_> >());
     
     auto ihandle = open_and_check_dataset<true>(file_handle, idx);
     if (get_array_dimensions<1>(ihandle, "idx")[0] != nonzeros) {
         throw std::runtime_error("number of non-zero elements is not consistent between 'data' and 'idx'");
     }
-    IndexStorage_ i(nonzeros);
+    auto i = sanisizer::create<IndexStorage_>(nonzeros);
     ihandle.read(i.data(), define_mem_type<tatami::ElementType<IndexStorage_> >());
 
     auto phandle = open_and_check_dataset<true>(file_handle, ptr);
-    const size_t ptr_size = get_array_dimensions<1>(phandle, "ptr")[0];
-    if (ptr_size != (row ? nr : nc) + 1) {
+    auto ptr_size = get_array_dimensions<1>(phandle, "ptr")[0];
+    if (ptr_size == 0 || !sanisizer::is_equal(ptr_size - 1, row ? nr : nc)) {
         throw std::runtime_error("'ptr' dataset should have length equal to the number of " + (row ? std::string("rows") : std::string("columns")) + " plus 1");
     }
 
     // Because HDF5 doesn't have a native type for size_t.
-    PointerStorage_ p(ptr_size);
-    if constexpr(std::is_same<size_t, tatami::ElementType<PointerStorage_> >::value) {
-        if constexpr(std::is_same<size_t, hsize_t>::value) {
+    auto p = sanisizer::create<PointerStorage_>(ptr_size);
+    if constexpr(std::is_same<std::size_t, tatami::ElementType<PointerStorage_> >::value) {
+        if constexpr(std::is_same<std::size_t, hsize_t>::value) {
             phandle.read(p.data(), H5::PredType::NATIVE_HSIZE);
         } else {
             std::vector<hsize_t> p0(ptr_size);

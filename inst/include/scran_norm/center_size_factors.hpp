@@ -27,17 +27,21 @@ enum class CenterBlockMode : char { PER_BLOCK, LOWEST };
  */
 struct CenterSizeFactorsOptions {
     /**
-     * Strategy for handling blocks in `compute_blocked()`.
+     * Strategy for handling blocks in `center_size_factors_blocked()`.
      *
      * With the `PER_BLOCK` strategy, size factors are scaled separately for each block so that they have a mean of 1 within each block.
      * The scaled size factors are identical to those obtained by separate invocations of `center_size_factors()` on the size factors for each block.
-     * This can be desirable to ensure consistency with independent analyses of each block - otherwise, the centering would depend on the size factors across all blocks.
+     * This can be desirable to ensure consistency with independent analyses of each block - otherwise, the centering would depend on the size factors in other blocks.
      * However, any systematic differences in the size factors between blocks are lost, i.e., systematic changes in coverage between blocks will not be normalized.
      * 
-     * With the `LOWEST` strategy, we compute the mean size factor for each block and we divide all size factors by the minimum mean.
-     * In effect, we normalize across blocks by downscale all blocks to match the coverage of the lowest-coverage block.
-     * This is useful for datasets with highly heterogeneous coverage of different blocks as it avoids egregious upscaling of low-coverage blocks.
-     * (By contrast, downscaling is always safe as it simply discards information across all blocks by shrinking log-fold changes towards zero at low expression.) 
+     * With the `LOWEST` strategy, we compute the mean size factor for each block and we divide all size factors by the lowest mean.
+     * Here, our normalization strategy involves downscaling all blocks to match the coverage of the lowest-coverage block.
+     * This is useful for datasets with highly variable coverage between different blocks as it avoids egregious upscaling of low-coverage blocks.
+     * Specifically, strong upscaling allows the log-transformation to ignore any shrinkage from the pseudo-count.
+     * This is problematic as it inflates differences between cells at log-values derived from low counts, increasing noise and overstating log-fold changes. 
+     * Downscaling is safer as it allows the pseudo-count to shrink the log-differences between cells towards zero at low counts,
+     * effectively sacrificing some information in the higher-coverage batches so that they can be compared to the low-coverage batches
+     * (which is preferable to exaggerating the informativeness of the latter for comparison to the former).
      */
     CenterBlockMode block_mode = CenterBlockMode::LOWEST;
 

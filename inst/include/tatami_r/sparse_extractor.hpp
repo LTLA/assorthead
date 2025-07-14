@@ -16,6 +16,13 @@ namespace tatami_r {
 
 namespace UnknownMatrix_internal {
 
+// GENERAL COMMENTS:
+//
+// - No need to protect against overflows when incrementing to get to 1-based indexing.
+//   This is because the value being incremented is less than the dimension extent, which is known to fit into an Index_.
+// - No need to protect against overflows when creating IntegerVectors from dimension extents.
+//   We already know that the dimension extent can be safely converted to/from an int, based on checks in the UnknownMatrix constructor.
+
 /********************
  *** Core classes ***
  ********************/
@@ -32,7 +39,7 @@ public:
         [[maybe_unused]] Index_ max_target_chunk_length, // provided here for compatibility with the other Sparse*Core classes.
         [[maybe_unused]] const std::vector<Index_>& ticks,
         [[maybe_unused]] const std::vector<Index_>& map,
-        [[maybe_unused]] const tatami_chunked::SlabCacheStats& stats,
+        [[maybe_unused]] const tatami_chunked::SlabCacheStats<Index_>& stats,
         bool needs_value,
         bool needs_index) : 
         my_matrix(matrix),
@@ -58,7 +65,7 @@ private:
     Slab my_solo;
 
     tatami::MaybeOracle<oracle_, Index_> my_oracle;
-    typename std::conditional<oracle_, size_t, bool>::type my_counter = 0;
+    typename std::conditional<oracle_, tatami::PredictionIndex, bool>::type my_counter = 0;
 
 public:
     std::pair<const Slab*, Index_> fetch_raw(Index_ i) {
@@ -97,7 +104,7 @@ public:
         Index_ max_target_chunk_length, 
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats& stats,
+        const tatami_chunked::SlabCacheStats<Index_>& stats,
         bool needs_value,
         bool needs_index) : 
         my_matrix(matrix),
@@ -137,7 +144,7 @@ public:
             },
             [&](Index_ id, Slab& cache) -> void {
                 auto chunk_start = my_chunk_ticks[id], chunk_end = my_chunk_ticks[id + 1];
-                size_t chunk_len = chunk_end - chunk_start;
+                Index_ chunk_len = chunk_end - chunk_start;
                 std::fill_n(cache.number, chunk_len, 0);
 
 #ifdef TATAMI_R_PARALLELIZE_UNKNOWN 
@@ -175,7 +182,7 @@ public:
         Index_ max_target_chunk_length, 
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats& stats,
+        const tatami_chunked::SlabCacheStats<Index_>& stats,
         bool needs_value,
         bool needs_index) : 
         my_matrix(matrix),
@@ -254,7 +261,7 @@ public:
                 }
 
                 my_chunk_numbers.clear();
-                my_chunk_numbers.resize(total_len);
+                tatami::resize_container_to_Index_size(my_chunk_numbers, total_len);
 
 #ifdef TATAMI_R_PARALLELIZE_UNKNOWN 
                 // This involves some Rcpp initializations, so we lock it just in case.
@@ -316,7 +323,7 @@ public:
         Index_ max_target_chunk_length, 
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats& stats,
+        const tatami_chunked::SlabCacheStats<Index_>& stats,
         bool needs_value,
         bool needs_index) : 
         my_core(
@@ -380,7 +387,7 @@ public:
         Index_ max_target_chunk_length, 
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats& stats,
+        const tatami_chunked::SlabCacheStats<Index_>& stats,
         bool needs_value,
         bool needs_index) : 
         my_core(
@@ -446,7 +453,7 @@ public:
         Index_ max_target_chunk_length, 
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats& stats,
+        const tatami_chunked::SlabCacheStats<Index_>& stats,
         bool needs_value,
         bool needs_index) : 
         my_core(
@@ -502,7 +509,7 @@ public:
  ***********************************/
 
 template<typename Slab_, typename Value_, typename Index_>
-const Value_* densify(const Slab_& slab, Index_ offset, size_t non_target_length, Value_* buffer) {
+const Value_* densify(const Slab_& slab, Index_ offset, Index_ non_target_length, Value_* buffer) {
     auto vptr = slab.values[offset];
     auto iptr = slab.indices[offset];
     std::fill_n(buffer, non_target_length, 0);
@@ -524,7 +531,7 @@ public:
         Index_ max_target_chunk_length, 
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats& stats) :
+        const tatami_chunked::SlabCacheStats<Index_>& stats) :
         my_core(
             matrix,
             sparse_extractor,
@@ -547,7 +554,7 @@ public:
 
 private:
     SparseCore<solo_, oracle_, Index_, CachedValue_, CachedIndex_> my_core;
-    size_t my_non_target_dim;
+    Index_ my_non_target_dim;
 
 public:
     const Value_* fetch(Index_ i, Value_* buffer) {
@@ -569,7 +576,7 @@ public:
         Index_ max_target_chunk_length, 
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats& stats) :
+        const tatami_chunked::SlabCacheStats<Index_>& stats) :
         my_core(
             matrix,
             sparse_extractor,
@@ -592,7 +599,7 @@ public:
 
 private:
     SparseCore<solo_, oracle_, Index_, CachedValue_, CachedIndex_> my_core;
-    size_t my_block_length;
+    Index_ my_block_length;
 
 public:
     const Value_* fetch(Index_ i, Value_* buffer) {
@@ -613,7 +620,7 @@ public:
         Index_ max_target_chunk_length, 
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats& stats) :
+        const tatami_chunked::SlabCacheStats<Index_>& stats) :
         my_core( 
             matrix,
             sparse_extractor,
@@ -632,7 +639,7 @@ public:
 
 private:
     SparseCore<solo_, oracle_, Index_, CachedValue_, CachedIndex_> my_core;
-    size_t my_num_indices;
+    Index_ my_num_indices;
 
 public:
     const Value_* fetch(Index_ i, Value_* buffer) {

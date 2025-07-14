@@ -1,12 +1,15 @@
 #ifndef TATAMI_MULT_HPP
 #define TATAMI_MULT_HPP
 
-#include "tatami/tatami.hpp"
-
 #include "dense_row.hpp"
 #include "sparse_row.hpp"
 #include "dense_column.hpp"
 #include "sparse_column.hpp"
+
+#include <vector>
+
+#include "tatami/tatami.hpp"
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file tatami_mult.hpp
@@ -182,7 +185,8 @@ namespace internal {
 
 template<typename LeftValue_, typename LeftIndex_, typename RightValue_, typename RightIndex_, typename Output_>
 void multiply(const tatami::Matrix<LeftValue_, LeftIndex_>& left, const tatami::Matrix<RightValue_, RightIndex_>& right, Output_* output, bool column_major_out, int num_threads) {
-    size_t row_shift, col_shift;
+    RightIndex_ row_shift;
+    LeftIndex_ col_shift;
     if (column_major_out) {
         row_shift = 1;
         col_shift = left.nrow();
@@ -246,7 +250,7 @@ void multiply(const tatami::Matrix<LeftValue_, LeftIndex_>& left, const tatami::
 template<typename LeftValue_, typename LeftIndex_, typename RightValue_, typename RightIndex_, typename Output_>
 void multiply(const tatami::Matrix<LeftValue_, LeftIndex_>& left, const tatami::Matrix<RightValue_, RightIndex_>& right, Output_* output, const Options& opt) {
     if (opt.prefer_larger) {
-        if (left.nrow() < right.ncol()) {
+        if (sanisizer::is_less_than(left.nrow(), right.ncol())) {
             auto tright = tatami::make_DelayedTranspose(tatami::wrap_shared_ptr(&right));
             auto tleft = tatami::make_DelayedTranspose(tatami::wrap_shared_ptr(&left));
             internal::multiply(*tright, *tleft, output, !opt.column_major_output, opt.num_threads);

@@ -1,12 +1,15 @@
 #ifndef TATAMI_HDF5_LOAD_DENSE_MATRIX_HPP
 #define TATAMI_HDF5_LOAD_DENSE_MATRIX_HPP
 
-#include "H5Cpp.h"
+#include "utils.hpp"
 
 #include <string>
+#include <vector>
+#include <memory>
 
+#include "H5Cpp.h"
 #include "tatami/tatami.hpp"
-#include "utils.hpp"
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file load_dense_matrix.hpp
@@ -40,7 +43,7 @@ std::shared_ptr<tatami::Matrix<Value_, Index_> > load_dense_matrix(const std::st
     auto dhandle = open_and_check_dataset<false>(fhandle, name);
 
     auto dims = get_array_dimensions<2>(dhandle, name);
-    ValueStorage_ values(static_cast<size_t>(dims[0]) * static_cast<size_t>(dims[1])); // cast just in case hsize_t is something silly...
+    ValueStorage_ values(sanisizer::product<decltype(std::declval<ValueStorage_>().size())>(dims[0], dims[1]));
     dhandle.read(values.data(), define_mem_type<tatami::ElementType<ValueStorage_> >());
 
     if (transpose) {

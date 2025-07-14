@@ -2,7 +2,8 @@
 #define TATAMI_CONSECUTIVE_ORACLE_HPP
 
 #include "../base/Oracle.hpp"
-#include <numeric>
+
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file ConsecutiveOracle.hpp
@@ -18,25 +19,25 @@ namespace tatami {
  * @brief Predict future accesses along a consecutive sequence. 
  */
 template<typename Index_>
-class ConsecutiveOracle : public Oracle<Index_> {
+class ConsecutiveOracle final : public Oracle<Index_> {
 public:
     /**
      * @param start Start index of the consecutive sequence on the target dimension.
      * @param length Length of the sequence.
      */
-    ConsecutiveOracle(Index_ start, Index_ length) : my_offset(start), my_length(length) {}
+    ConsecutiveOracle(Index_ start, Index_ length) : my_offset(start), my_length(sanisizer::cast<PredictionIndex>(length)) {}
 
-    size_t total() const {
+    PredictionIndex total() const {
         return my_length;
     }
 
-    Index_ get(size_t i) const {
+    Index_ get(PredictionIndex i) const {
         return my_offset + i;
     }
 
 private:
     Index_ my_offset;
-    size_t my_length;
+    PredictionIndex my_length;
 };
 
 }

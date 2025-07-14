@@ -2,6 +2,7 @@
 #define TATAMI_SPARSE_PRIMARY_EXTRACTION_HPP
 
 #include "../utils/has_data.hpp"
+#include "../utils/Index_to_container.hpp"
 
 #include <algorithm>
 
@@ -43,9 +44,8 @@ public:
     RetrievePrimarySubsetDense(const std::vector<Index_>& subset, Index_ extent) : my_extent(extent) {
         if (!subset.empty()) {
             my_offset = subset.front();
-            my_lastp1 = subset.back() + 1;
-            size_t alloc = my_lastp1 - my_offset;
-            my_present.resize(alloc);
+            my_lastp1 = subset.back() + 1; // +1 is safe as Index_ can hold the dimension extent, which is greater than all subset indices.
+            resize_container_to_Index_size(my_present, my_lastp1 - my_offset);
 
             // Starting off at 1 to ensure that 0 is still a marker for
             // absence. It should be fine as subset.size() should fit inside
@@ -76,7 +76,7 @@ public:
         auto original_start = indices_start;
         refine_primary_limits(indices_start, indices_end, my_extent, my_offset, my_lastp1);
 
-        size_t counter = indices_start - original_start;
+        auto counter = indices_start - original_start;
         for (; indices_start != indices_end; ++indices_start, ++counter) {
             auto ix = *indices_start;
             auto shift = my_present[ix - my_offset];
@@ -93,9 +93,8 @@ public:
     RetrievePrimarySubsetSparse(const std::vector<Index_>& subset, Index_ extent) : my_extent(extent) {
         if (!subset.empty()) {
             my_offset = subset.front();
-            my_lastp1 = subset.back() + 1;
-            size_t alloc = my_lastp1 - my_offset;
-            my_present.resize(alloc);
+            my_lastp1 = subset.back() + 1; // +1 is safe as Index_ can hold the dimension extent, which is greater than all subset indices.
+            resize_container_to_Index_size(my_present, my_lastp1 - my_offset);
 
             // Unlike the dense case, this is a simple present/absent signal,
             // as we don't need to map each structural non-zero back onto its 
@@ -123,7 +122,7 @@ public:
         auto original_start = indices_start;
         refine_primary_limits(indices_start, indices_end, my_extent, my_offset, my_lastp1);
 
-        size_t counter = indices_start - original_start;
+        auto counter = indices_start - original_start;
         for (; indices_start != indices_end; ++indices_start, ++counter) {
             auto ix = *indices_start;
             if (my_present[ix - my_offset]) {
