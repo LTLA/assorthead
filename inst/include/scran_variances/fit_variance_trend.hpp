@@ -4,7 +4,10 @@
 #include <algorithm>
 #include <vector>
 #include <array>
+#include <cstddef>
+
 #include "WeightedLowess/WeightedLowess.hpp"
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file fit_variance_trend.hpp
@@ -20,6 +23,7 @@ struct FitVarianceTrendOptions {
     /**
      * Minimum mean log-expression for trend fitting.
      * Genes with lower means are not used in trend fitting, and their fitted values are defined by extrapolating the left edge of the fitted trend is extrapolated to the origin.
+     * This ensures that the fitted trend is not driven by the majority of low-abundance genes.
      * Only used if `FitVarianceTrendOptions::mean_filter = true`.
      */
     double minimum_mean = 0.1;
@@ -44,16 +48,15 @@ struct FitVarianceTrendOptions {
 
     /**
      * Should a minimum width constraint be applied to the LOWESS smoother?
-     * This forces each window to be a minimum width (see `FitVarianceTrendOptions::minimum_width`)
-     * to avoid overfitting from very small windows in high-density intervals.
+     * This forces each window to be a minimum width (see `FitVarianceTrendOptions::minimum_width`) to avoid overfitting from very small windows in high-density intervals.
      * For example, the default smoother performs poorly at high abundances where there are few genes.
      */
     bool use_minimum_width = false;
 
     /**
      * Minimum width of the window to use when `FitVarianceTrendOptions::use_minimum_width = true`.
-     * This should be appropriate for the range of `mean` values used in `fit_variance_trend()`;
-     * the default value is chosen based on the typical range in single-cell RNA-seq data.
+     * This should be appropriate for the range of `mean` values used in `fit_variance_trend()`.
+     * The default value is chosen based on the typical range in single-cell RNA-seq data.
      */
     double minimum_width = 1;
 
@@ -117,19 +120,19 @@ struct FitVarianceTrendWorkspace {
  * @param options Further options.
  */
 template<typename Float_>
-void fit_variance_trend(size_t n, const Float_* mean, const Float_* variance, Float_* fitted, Float_* residuals, FitVarianceTrendWorkspace<Float_>& workspace, const FitVarianceTrendOptions& options) {
+void fit_variance_trend(std::size_t n, const Float_* mean, const Float_* variance, Float_* fitted, Float_* residuals, FitVarianceTrendWorkspace<Float_>& workspace, const FitVarianceTrendOptions& options) {
     auto& xbuffer = workspace.xbuffer;
-    xbuffer.resize(n);
+    xbuffer.resize(sanisizer::cast<decltype(xbuffer.size())>(n));
     auto& ybuffer = workspace.ybuffer;
-    ybuffer.resize(n);
+    ybuffer.resize(sanisizer::cast<decltype(ybuffer.size())>(n));
 
     auto quad = [](Float_ x) -> Float_ {
         return x * x * x * x;
     };
 
-    size_t counter = 0;
+    std::size_t counter = 0;
     Float_ min_mean = options.minimum_mean;
-    for (size_t i = 0; i < n; ++i) {
+    for (decltype(n) i = 0; i < n; ++i) {
         if (!options.mean_filter || mean[i] >= min_mean) {
             xbuffer[counter] = mean[i];
             if (options.transform) {
@@ -175,7 +178,7 @@ void fit_variance_trend(size_t n, const Float_* mean, const Float_* variance, Fl
     // backwards to ensure that writing to the original position on this array
     // doesn't clobber the first 'counter' positions containing the fitted
     // values, at least not until each value is shifted to its original place.
-    for (size_t i = n; i > 0; --i) {
+    for (auto i = n; i > 0; --i) {
         auto j = i - 1;
         if (!options.mean_filter || mean[j] >= min_mean) {
             --counter;
@@ -185,7 +188,7 @@ void fit_variance_trend(size_t n, const Float_* mean, const Float_* variance, Fl
         }
     }
 
-    for (size_t i = 0; i < n; ++i) {
+    for (decltype(n) i = 0; i < n; ++i) {
         residuals[i] = variance[i] - fitted[i];
     }
     return;
@@ -206,7 +209,18 @@ struct FitVarianceTrendResults {
      */
     FitVarianceTrendResults() {}
 
-    FitVarianceTrendResults(size_t n) : fitted(n), residuals(n) {}
+    FitVarianceTrendResults(std::size_t n) :
+        fitted(sanisizer::cast<decltype(fitted.size())>(n)
+#ifdef SCRAN_VARIANCES_TEST_INIT
+            , SCRAN_VARIANCES_TEST_INIT
+#endif
+        ),
+        residuals(sanisizer::cast<decltype(residuals.size())>(n)
+#ifdef SCRAN_VARIANCES_TEST_INIT
+            , SCRAN_VARIANCES_TEST_INIT
+#endif
+        )
+    {}
     /**
      * @endcond
      */
@@ -235,7 +249,7 @@ struct FitVarianceTrendResults {
  * @return Result of the trend fit, containing the fitted values and residuals for each gene. 
  */
 template<typename Float_>
-FitVarianceTrendResults<Float_> fit_variance_trend(size_t n, const Float_* mean, const Float_* variance, const FitVarianceTrendOptions& options) {
+FitVarianceTrendResults<Float_> fit_variance_trend(std::size_t n, const Float_* mean, const Float_* variance, const FitVarianceTrendOptions& options) {
     FitVarianceTrendResults<Float_> output(n);
     FitVarianceTrendWorkspace<Float_> work;
     fit_variance_trend(n, mean, variance, output.fitted.data(), output.residuals.data(), work, options);
