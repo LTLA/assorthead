@@ -80,7 +80,7 @@ Input_ can_cast(Input_ x) {
  * Create a new container of a specified size.
  * This protects against overflow when casting the integer size to the container's size type.
  *
- * @tparam Container_ Container class that accepts the size in the first argument of its constructor.
+ * @tparam Container_ Container class with a `size()` method and a constructor that accepts the size as the first argument.
  * @tparam Input_ Integer type of the input size.
  * @tparam Args_ Further arguments to pass to the container's constructor.
  *
