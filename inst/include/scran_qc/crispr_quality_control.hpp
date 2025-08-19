@@ -5,8 +5,10 @@
 #include <limits>
 #include <algorithm>
 #include <type_traits>
+#include <cstddef>
 
 #include "tatami/tatami.hpp"
+#include "sanisizer/sanisizer.hpp"
 
 #include "find_median_mad.hpp"
 #include "per_cell_qc_metrics.hpp"
@@ -109,7 +111,7 @@ void compute_crispr_qc_metrics(
 
     PerCellQcMetricsOptions opt;
     opt.num_threads = options.num_threads;
-    per_cell_qc_metrics(mat, std::vector<uint8_t*>{}, tmp, opt);
+    per_cell_qc_metrics(mat, std::vector<const unsigned char*>{}, tmp, opt);
 }
 
 /**
@@ -166,28 +168,28 @@ ComputeCrisprQcMetricsResults<Sum_, Detected_, Value_, Index_> compute_crispr_qc
     ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_> x;
     ComputeCrisprQcMetricsResults<Sum_, Detected_, Value_, Index_> output;
 
-    output.sum.resize(NC
+    tatami::resize_container_to_Index_size(output.sum, NC
 #ifdef SCRAN_QC_TEST_INIT
         , SCRAN_QC_TEST_INIT
 #endif
     );
     x.sum = output.sum.data();
 
-    output.detected.resize(NC
+    tatami::resize_container_to_Index_size(output.detected, NC
 #ifdef SCRAN_QC_TEST_INIT
         , SCRAN_QC_TEST_INIT
 #endif
     );
     x.detected = output.detected.data();
 
-    output.max_value.resize(NC
+    tatami::resize_container_to_Index_size(output.max_value, NC
 #ifdef SCRAN_QC_TEST_INIT
         , SCRAN_QC_TEST_INIT
 #endif
     );
     x.max_value = output.max_value.data();
 
-    output.max_index.resize(NC
+    tatami::resize_container_to_Index_size(output.max_index, NC
 #ifdef SCRAN_QC_TEST_INIT
         , SCRAN_QC_TEST_INIT
 #endif
@@ -215,13 +217,13 @@ struct ComputeCrisprQcFiltersOptions {
 namespace internal {
 
 template<typename Float_, class Host_, typename Sum_, typename Detected_, typename Value_, typename Index_, typename BlockSource_>
-void crispr_populate(Host_& host, size_t n, const ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_>& res, BlockSource_ block, const ComputeCrisprQcFiltersOptions& options) {
+void crispr_populate(Host_& host, std::size_t n, const ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_>& res, BlockSource_ block, const ComputeCrisprQcFiltersOptions& options) {
     constexpr bool unblocked = std::is_same<BlockSource_, bool>::value;
     auto buffer = [&]{
         if constexpr(unblocked) {
-            return std::vector<Float_>(n);
+            return sanisizer::create<std::vector<Float_> >(n);
         } else {
-            return FindMedianMadWorkspace<Float_, size_t>(n, block);
+            return FindMedianMadWorkspace<Float_>(n, block);
         }
     }();
 
@@ -229,7 +231,7 @@ void crispr_populate(Host_& host, size_t n, const ComputeCrisprQcMetricsBuffers<
     static_assert(std::is_floating_point<Float_>::value);
     std::vector<Float_> maxprop;
     maxprop.reserve(n);
-    for (size_t i = 0; i < n; ++i) {
+    for (decltype(n) i = 0; i < n; ++i) {
         maxprop.push_back(static_cast<Float_>(res.max_value[i]) / static_cast<Float_>(res.sum[i]));
     }
 
@@ -243,7 +245,7 @@ void crispr_populate(Host_& host, size_t n, const ComputeCrisprQcMetricsBuffers<
         }
     }();
 
-    for (size_t i = 0; i < n; ++i) {
+    for (decltype(n) i = 0; i < n; ++i) {
         auto limit = [&]{
             if constexpr(unblocked){
                 return prop_res.median;
@@ -273,12 +275,12 @@ void crispr_populate(Host_& host, size_t n, const ComputeCrisprQcMetricsBuffers<
 }
 
 template<class Host_, typename Sum_, typename Detected_, typename Value_, typename Index_, typename BlockSource_, typename Output_>
-void crispr_filter(const Host_& host, size_t n, const ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_>& metrics, BlockSource_ block, Output_* output) {
+void crispr_filter(const Host_& host, std::size_t n, const ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_>& metrics, BlockSource_ block, Output_* output) {
     constexpr bool unblocked = std::is_same<BlockSource_, bool>::value;
     std::fill_n(output, n, 1);
 
     const auto& mv = host.get_max_value();
-    for (size_t i = 0; i < n; ++i) {
+    for (decltype(n) i = 0; i < n; ++i) {
         auto thresh = [&]{
             if constexpr(unblocked) {
                 return mv;
@@ -345,7 +347,7 @@ public:
      * On output, this is truthy for cells considered to be of high quality, and false otherwise.
      */
     template<typename Sum_, typename Detected_, typename Value_, typename Index_, typename Output_>
-    void filter(size_t num, const ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_>& metrics, Output_* output) const {
+    void filter(std::size_t num, const ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_>& metrics, Output_* output) const {
         internal::crispr_filter(*this, num, metrics, false, output);
     }
 
@@ -375,9 +377,9 @@ public:
      * @param metrics CRISPR-based QC metrics returned by `compute_crispr_qc_metrics()`.
      * @return Vector of length `num`, containing the high-quality calls.
      */
-    template<typename Output_ = uint8_t, typename Sum_ = double, typename Detected_ = int, typename Value_ = double, typename Index_ = int>
+    template<typename Output_ = unsigned char, typename Sum_, typename Detected_, typename Value_, typename Index_>
     std::vector<Output_> filter(const ComputeCrisprQcMetricsResults<Sum_, Detected_, Value_, Index_>& metrics) const {
-        std::vector<Output_> output(metrics.max_value.size()
+        auto output = sanisizer::create<std::vector<Output_> >(metrics.max_value.size()
 #ifdef SCRAN_QC_TEST_INIT
             , SCRAN_QC_TEST_INIT
 #endif
@@ -422,7 +424,7 @@ public:
  */
 template<typename Float_ = double, typename Sum_, typename Detected_, typename Value_, typename Index_>
 CrisprQcFilters<Float_> compute_crispr_qc_filters(
-    size_t num,
+    std::size_t num,
     const ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_>& metrics,
     const ComputeCrisprQcFiltersOptions& options)
 {
@@ -443,7 +445,7 @@ CrisprQcFilters<Float_> compute_crispr_qc_filters(
  *
  * @return Object containing filter thresholds.
  */
-template<typename Float_ = double, typename Sum_ = double, typename Detected_ = int, typename Value_ = double, typename Index_ = int>
+template<typename Float_ = double, typename Sum_, typename Detected_, typename Value_, typename Index_>
 CrisprQcFilters<Float_> compute_crispr_qc_filters(
     const ComputeCrisprQcMetricsResults<Sum_, Detected_, Value_, Index_>& metrics,
     const ComputeCrisprQcFiltersOptions& options)
@@ -496,7 +498,7 @@ public:
      * On output, this is truthy for cells considered to be of high quality, and false otherwise.
      */
     template<typename Sum_, typename Detected_, typename Value_, typename Index_, typename Block_, typename Output_>
-    void filter(size_t num, const ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_>& metrics, const Block_* block, Output_* output) const {
+    void filter(std::size_t num, const ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_>& metrics, const Block_* block, Output_* output) const {
         internal::crispr_filter(*this, num, metrics, block, output);
     }
 
@@ -533,9 +535,9 @@ public:
      *
      * @return Vector of length `num`, containing the high-quality calls.
      */
-    template<typename Output_ = uint8_t, typename Sum_ = double, typename Detected_ = int, typename Value_ = double, typename Index_ = int, typename Block_ = int>
+    template<typename Output_ = unsigned char, typename Sum_, typename Detected_, typename Value_, typename Index_, typename Block_>
     std::vector<Output_> filter(const ComputeCrisprQcMetricsResults<Sum_, Detected_, Value_, Index_>& metrics, const Block_* block) const {
-        std::vector<Output_> output(metrics.max_value.size()
+        auto output = sanisizer::create<std::vector<Output_> >(metrics.max_value.size()
 #ifdef SCRAN_QC_TEST_INIT
             , SCRAN_QC_TEST_INIT
 #endif
@@ -566,7 +568,7 @@ public:
  */
 template<typename Float_ = double, typename Sum_, typename Detected_, typename Value_, typename Index_, typename Block_>
 CrisprQcBlockedFilters<Float_> compute_crispr_qc_filters_blocked(
-    size_t num,
+    std::size_t num,
     const ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_>& metrics,
     const Block_* block,
     const ComputeCrisprQcFiltersOptions& options)

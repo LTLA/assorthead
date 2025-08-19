@@ -14,6 +14,7 @@
 
 #include "byteme/RawBufferReader.hpp"
 #include "byteme/PerByte.hpp"
+#include "sanisizer/sanisizer.hpp"
 
 #include "utils.hpp"
 
@@ -24,12 +25,6 @@
  */
 
 namespace eminem {
-
-/**
- * Integer type for the row/column indices and line counts.
- * We use an `unsigned long long` by default to guarantee at least 64 bits of storage.
- */
-typedef unsigned long long Index;
 
 /**
  * @brief Options for the `Parser` constructor.
@@ -45,7 +40,7 @@ struct ParserOptions {
      * This is rounded up to the nearest newline before parallel processing.
      * Only relevant when `num_threads > 1`.
      */
-    std::size_t block_size = 65536;
+    std::size_t block_size = sanisizer::cap<std::size_t>(65536);
 };
 
 /**
@@ -55,7 +50,9 @@ template<typename Workspace_>
 class ThreadPool {
 public:
     template<typename RunJob_>
-    ThreadPool(RunJob_ run_job, int num_threads) : my_helpers(num_threads) {
+    ThreadPool(RunJob_ run_job, int num_threads) :
+        my_helpers(sanisizer::cast<decltype(my_helpers.size())>(num_threads)) 
+    {
         std::mutex init_mut;
         std::condition_variable init_cv;
         int num_initialized = 0;
@@ -216,14 +213,24 @@ inline std::size_t count_newlines(const std::vector<char>& buffer) {
     }
     return n;
 }
+
+typedef unsigned long long Index; // for back-compatibility.
 /**
  * @endcond
  */
 
 /**
+ * Integer type of the line count and line numbers in `Parser`.
+ * We use an `unsigned long long` by default to guarantee at least 64 bits of storage.
+ */
+typedef unsigned long long LineIndex;
+
+/**
  * @brief Parse a matrix from a Matrix Market file.
  *
- * @tparam Input_ Class for the source of input bytes, satisfying the `byteme::PerByteInterface` instance.
+ * @tparam Input_ Class of the source of input bytes.
+ * This should be a pointer to an object satisfying the `byteme::PerByteInterface` instance.
+ * @tparam Index_ Integer type of the row/column indices.
  *
  * This parses a Matrix Market file according to the specification described at https://math.nist.gov/MatrixMarket/reports/MMformat.ps.gz.
  * It is expected that users call `scan_preamble()` to determine the field type (see `eminem::Field` for supported values),
@@ -239,7 +246,7 @@ inline std::size_t count_newlines(const std::vector<char>& buffer) {
  * - The final line of the file may or may not be newline terminated.
  * - Integer values for the row/column indices, number of rows/columns and number of lines should be a sequence of one or more digits.
  *   Leading zeros are ignored and will not be interpreted as octal.
- *   An error is thrown if overflow of the `Index` type occurs in `scan_preamble()`.
+ *   An error is thrown if overflow of the `Index_` type occurs in `scan_preamble()`.
  *   An error is also thrown if the row/column indices in any data line exceed the number of rows/columns in the preamble,
  *   or if the observed number of data lines exceeds the expected number for coordinate matrices/vectors.
  * - Integer data values should be a sequence of one or more digits, optionally preceded by a `+` or `-` sign.
@@ -264,25 +271,27 @@ inline std::size_t count_newlines(const std::vector<char>& buffer) {
  * No validation is performed to determine whether coordinates are consistent with non-general symmetries.
  * Similarly, we do not check for the existence of multiple lines with the same row/column indices in coordinate matrices/vectors.
  */
-template<class Input_>
+template<class Input_, typename Index_ = unsigned long long>
 class Parser {
 public:
     /**
-     * @param input Source of input bytes, typically a `byteme::PerByteInterface` instance.
+     * @param input Source of input bytes, typically a pointer to a `byteme::PerByteInterface` instance.
      * @param options Further options.
      */
-    Parser(std::unique_ptr<Input_> input, const ParserOptions& options) : 
+    Parser(Input_ input, const ParserOptions& options) : 
         my_input(std::move(input)),
         my_nthreads(options.num_threads),
         my_block_size(options.block_size)
-    {}
+    {
+        sanisizer::cast<typename std::vector<char>::size_type>(my_block_size); // checking that there won't be any overflow in fill_to_next_newline().
+    }
 
 private:
-    std::unique_ptr<Input_> my_input;
+    Input_ my_input;
     int my_nthreads;
     std::size_t my_block_size;
 
-    Index my_current_line = 0;
+    LineIndex my_current_line = 0;
     MatrixDetails my_details;
 
     template<typename Input2_>
@@ -310,7 +319,7 @@ private:
     }
 
     template<typename Input2_>
-    static bool skip_lines(Input2_& input, Index& current_line) {
+    static bool skip_lines(Input2_& input, LineIndex& current_line) {
         // Skip comments and empty lines.
         while (1) {
             char x = input.get();
@@ -579,21 +588,23 @@ public:
 private:
     // Only calls with 'last_ = true' need to know if there are any remaining bytes after the newline.
     // This is because all non-last calls with no remaining bytes must have thrown.
+    template<typename Integer_>
     struct NotLastSizeInfo {
-        Index index = 0;
+        Integer_ index = 0;
     };
 
+    template<typename Integer_>
     struct LastSizeInfo {
-        Index index = 0;
+        Integer_ index = 0;
         bool remaining = false;
     };
 
-    template<bool last_>
-    using SizeInfo = typename std::conditional<last_, LastSizeInfo, NotLastSizeInfo>::type;
+    template<bool last_, typename Integer_>
+    using SizeInfo = typename std::conditional<last_, LastSizeInfo<Integer_>, NotLastSizeInfo<Integer_> >::type;
 
-    template<bool last_, class Input2_>
-    static SizeInfo<last_> scan_integer_field(bool size, Input2_& input, Index overall_line_count) {
-        SizeInfo<last_> output;
+    template<bool last_, typename Integer_, class Input2_>
+    static SizeInfo<last_, Integer_> scan_integer_field(bool size, Input2_& input, LineIndex overall_line_count) {
+        SizeInfo<last_, Integer_> output;
         bool found = false;
 
         auto what = [&]() -> std::string {
@@ -604,16 +615,16 @@ private:
             }
         };
 
-        constexpr Index max_limit = std::numeric_limits<Index>::max();
-        constexpr Index max_limit_before_mult = max_limit / 10; 
-        constexpr Index max_limit_mod = max_limit % 10; 
+        constexpr Integer_ max_limit = std::numeric_limits<Integer_>::max();
+        constexpr Integer_ max_limit_before_mult = max_limit / 10; 
+        constexpr Integer_ max_limit_mod = max_limit % 10; 
 
         while (1) {
             char x = input.get();
             switch(x) {
                 case '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case '9':
                     { 
-                        Index delta = x - '0';
+                        Integer_ delta = x - '0';
                         // Structuring the conditionals so that it's most likely to short-circuit after only testing the first one.
                         if (output.index >= max_limit_before_mult && !(output.index == max_limit_before_mult && delta <= max_limit_mod)) {
                             throw std::runtime_error("integer overflow in " + what() + " field on line " + std::to_string(overall_line_count + 1));
@@ -669,18 +680,24 @@ private:
     }
 
     template<bool last_, class Input2_>
-    static SizeInfo<last_> scan_size_field(Input2_& input, Index overall_line_count) {
-        return scan_integer_field<last_>(true, input, overall_line_count);
+    static SizeInfo<last_, Index_> scan_size_field(Input2_& input, LineIndex overall_line_count) {
+        return scan_integer_field<last_, Index_>(true, input, overall_line_count);
+    }
+
+    template<class Input2_>
+    static SizeInfo<true, LineIndex> scan_line_count_field(Input2_& input, LineIndex overall_line_count) {
+        return scan_integer_field<true, LineIndex>(true, input, overall_line_count);
     }
 
     template<bool last_, class Input2_>
-    static SizeInfo<last_> scan_index_field(Input2_& input, Index overall_line_count) {
-        return scan_integer_field<last_>(false, input, overall_line_count);
+    static SizeInfo<last_, Index_> scan_index_field(Input2_& input, LineIndex overall_line_count) {
+        return scan_integer_field<last_, Index_>(false, input, overall_line_count);
     }
 
 private:
     bool my_passed_size = false;
-    Index my_nrows = 0, my_ncols = 0, my_nlines = 0;
+    Index_ my_nrows = 0, my_ncols = 0;
+    LineIndex my_nlines = 0;
 
     void scan_size() {
         if (!(my_input->valid())) {
@@ -703,7 +720,7 @@ private:
                 auto second_field = scan_size_field<false>(*my_input, my_current_line);
                 my_ncols = second_field.index;
 
-                auto third_field = scan_size_field<true>(*my_input, my_current_line);
+                auto third_field = scan_line_count_field(*my_input, my_current_line);
                 my_nlines = third_field.index;
 
             } else { // i.e., my_details.format == Format::ARRAY
@@ -712,7 +729,7 @@ private:
 
                 auto second_field = scan_size_field<true>(*my_input, my_current_line);
                 my_ncols = second_field.index;
-                my_nlines = my_nrows * my_ncols;
+                my_nlines = sanisizer::product<LineIndex>(my_nrows, my_ncols);
             }
 
         } else {
@@ -720,7 +737,7 @@ private:
                 auto first_field = scan_size_field<false>(*my_input, my_current_line);
                 my_nrows = first_field.index;
 
-                auto second_field = scan_size_field<true>(*my_input, my_current_line);
+                auto second_field = scan_line_count_field(*my_input, my_current_line);
                 my_nlines = second_field.index;
 
             } else { // i.e., my_details.format == Format::ARRAY
@@ -743,7 +760,7 @@ public:
      *
      * @return Number of rows.
      */
-    Index get_nrows() const {
+    Index_ get_nrows() const {
         if (!my_passed_size) {
             throw std::runtime_error("size line has not yet been scanned");
         }
@@ -757,7 +774,7 @@ public:
      *
      * @return Number of columns.
      */
-    Index get_ncols() const {
+    Index_ get_ncols() const {
         if (!my_passed_size) {
             throw std::runtime_error("size line has not yet been scanned");
         }
@@ -771,7 +788,7 @@ public:
      *
      * @return Number of non-zero lines. 
      */
-    Index get_nlines() const {
+    LineIndex get_nlines() const {
         if (!my_passed_size) {
             throw std::runtime_error("size line has not yet been scanned");
         }
@@ -807,13 +824,13 @@ private:
         return available;
     }
 
-    void check_num_lines_loop(Index data_line_count) const {
+    void check_num_lines_loop(LineIndex data_line_count) const {
         if (data_line_count >= my_nlines) {
             throw std::runtime_error("more lines present than specified in the header (" + std::to_string(data_line_count) + " versus " + std::to_string(my_nlines) + ")");
         }
     }
 
-    void check_num_lines_final(bool finished, Index data_line_count) const {
+    void check_num_lines_final(bool finished, LineIndex data_line_count) const {
         if (finished) {
             if (data_line_count != my_nlines) {
                 // Must be fewer, otherwise we would have triggered the error in check_num_lines_loop() during iteration.
@@ -823,7 +840,7 @@ private:
     }
 
 private:
-    void check_matrix_coordinate_line(Index currow, Index curcol, Index overall_line_count) const {
+    void check_matrix_coordinate_line(Index_ currow, Index_ curcol, LineIndex overall_line_count) const {
         if (!currow) {
             throw std::runtime_error("row index must be positive on line " + std::to_string(overall_line_count + 1));
         }
@@ -839,7 +856,7 @@ private:
     }
 
     template<typename Type_, class Input2_, typename FieldParser_, class WrappedStore_>
-    bool scan_matrix_coordinate_non_pattern_base(Input2_& input, Index& overall_line_count, FieldParser_& fparser, WrappedStore_ wstore) const {
+    bool scan_matrix_coordinate_non_pattern_base(Input2_& input, LineIndex& overall_line_count, FieldParser_& fparser, WrappedStore_ wstore) const {
         bool valid = input.valid();
         while (valid) {
             // Handling stray comments, empty lines, and leading spaces.
@@ -869,7 +886,7 @@ private:
     template<typename Type_, class FieldParser_, class Store_>
     bool scan_matrix_coordinate_non_pattern(Store_ store) {
         bool finished = false;
-        Index current_data_line = 0;
+        LineIndex current_data_line = 0;
 
         if (my_nthreads == 1) {
             FieldParser_ fparser;
@@ -877,7 +894,7 @@ private:
                 *my_input,
                 my_current_line,
                 fparser,
-                [&](Index r, Index c, Type_ value) -> bool {
+                [&](Index_ r, Index_ c, Type_ value) -> bool {
                     check_num_lines_loop(current_data_line);
                     ++current_data_line;
                     return store(r, c, value);
@@ -888,8 +905,8 @@ private:
             struct Workspace {
                 std::vector<char> buffer;
                 FieldParser_ fparser;
-                std::vector<std::tuple<Index, Index, Type_> > contents;
-                Index overall_line;
+                std::vector<std::tuple<Index_, Index_, Type_> > contents;
+                LineIndex overall_line;
             };
 
             ThreadPool<Workspace> tp(
@@ -900,7 +917,7 @@ private:
                         pb,
                         work.overall_line,
                         work.fparser,
-                        [&](Index r, Index c, Type_ value) -> bool {
+                        [&](Index_ r, Index_ c, Type_ value) -> bool {
                             work.contents.emplace_back(r, c, value);
                             return true; // threads cannot quit early in their parallel sections; this (and thus scan_*_base) must always return true.
                         }
@@ -932,7 +949,7 @@ private:
 
 private:
     template<class Input2_, class WrappedStore_>
-    bool scan_matrix_coordinate_pattern_base(Input2_& input, Index& overall_line_count, WrappedStore_ wstore) const {
+    bool scan_matrix_coordinate_pattern_base(Input2_& input, LineIndex& overall_line_count, WrappedStore_ wstore) const {
         bool valid = input.valid();
         while (valid) {
             // Handling stray comments, empty lines, and leading spaces.
@@ -960,13 +977,13 @@ private:
     template<class Store_>
     bool scan_matrix_coordinate_pattern(Store_ store) {
         bool finished = false;
-        Index current_data_line = 0;
+        LineIndex current_data_line = 0;
 
         if (my_nthreads == 1) {
             finished = scan_matrix_coordinate_pattern_base(
                 *my_input,
                 my_current_line,
-                [&](Index r, Index c) -> bool {
+                [&](Index_ r, Index_ c) -> bool {
                     check_num_lines_loop(current_data_line);
                     ++current_data_line;
                     return store(r, c);
@@ -976,8 +993,8 @@ private:
         } else {
             struct Workspace {
                 std::vector<char> buffer;
-                std::vector<std::tuple<Index, Index> > contents;
-                Index overall_line;
+                std::vector<std::tuple<Index_, Index_> > contents;
+                LineIndex overall_line;
             };
 
             ThreadPool<Workspace> tp(
@@ -987,7 +1004,7 @@ private:
                     return scan_matrix_coordinate_pattern_base(
                         pb,
                         work.overall_line,
-                        [&](Index r, Index c) -> bool {
+                        [&](Index_ r, Index_ c) -> bool {
                             work.contents.emplace_back(r, c);
                             return true; // threads cannot quit early in their parallel sections; this (and thus scan_*_base) must always return true.
                         }
@@ -1018,7 +1035,7 @@ private:
     }
 
 private:
-    void check_vector_coordinate_line(Index currow, Index overall_line_count) const {
+    void check_vector_coordinate_line(Index_ currow, LineIndex overall_line_count) const {
         if (!currow) {
             throw std::runtime_error("row index must be positive on line " + std::to_string(overall_line_count + 1));
         }
@@ -1028,7 +1045,7 @@ private:
     }
 
     template<typename Type_, class Input2_, class FieldParser_, class WrappedStore_>
-    bool scan_vector_coordinate_non_pattern_base(Input2_& input, Index& overall_line_count, FieldParser_& fparser, WrappedStore_ wstore) const {
+    bool scan_vector_coordinate_non_pattern_base(Input2_& input, LineIndex& overall_line_count, FieldParser_& fparser, WrappedStore_ wstore) const {
         bool valid = input.valid();
         while (valid) {
             // handling stray comments, empty lines, and leading spaces.
@@ -1057,7 +1074,7 @@ private:
     template<typename Type_, class FieldParser_, class Store_>
     bool scan_vector_coordinate_non_pattern(Store_ store) {
         bool finished = false;
-        Index current_data_line = 0;
+        LineIndex current_data_line = 0;
 
         if (my_nthreads == 1) {
             FieldParser_ fparser;
@@ -1065,7 +1082,7 @@ private:
                 *my_input,
                 my_current_line,
                 fparser,
-                [&](Index r, Type_ value) -> bool {
+                [&](Index_ r, Type_ value) -> bool {
                     check_num_lines_loop(current_data_line);
                     ++current_data_line;
                     return store(r, 1, value);
@@ -1076,8 +1093,8 @@ private:
             struct Workspace {
                 std::vector<char> buffer;
                 FieldParser_ fparser;
-                std::vector<std::tuple<Index, Type_> > contents;
-                Index overall_line;
+                std::vector<std::tuple<Index_, Type_> > contents;
+                LineIndex overall_line;
             };
 
             ThreadPool<Workspace> tp(
@@ -1088,7 +1105,7 @@ private:
                         pb,
                         work.overall_line,
                         work.fparser,
-                        [&](Index r, Type_ value) -> bool {
+                        [&](Index_ r, Type_ value) -> bool {
                             work.contents.emplace_back(r, value);
                             return true; // threads cannot quit early in their parallel sections; this (and thus scan_*_base) must always return true.
                         }
@@ -1120,7 +1137,7 @@ private:
 
 private:
     template<class Input2_, class WrappedStore_>
-    bool scan_vector_coordinate_pattern_base(Input2_& input, Index& overall_line_count, WrappedStore_ wstore) const {
+    bool scan_vector_coordinate_pattern_base(Input2_& input, LineIndex& overall_line_count, WrappedStore_ wstore) const {
         bool valid = input.valid();
         while (valid) {
             // Handling stray comments, empty lines, and leading spaces.
@@ -1147,13 +1164,13 @@ private:
     template<class Store_>
     bool scan_vector_coordinate_pattern(Store_ store) {
         bool finished = false;
-        Index current_data_line = 0;
+        LineIndex current_data_line = 0;
 
         if (my_nthreads == 1) {
             finished = scan_vector_coordinate_pattern_base(
                 *my_input,
                 my_current_line,
-                [&](Index r) -> bool {
+                [&](Index_ r) -> bool {
                     check_num_lines_loop(current_data_line);
                     ++current_data_line;
                     return store(r, 1);
@@ -1163,8 +1180,8 @@ private:
         } else {
             struct Workspace {
                 std::vector<char> buffer;
-                std::vector<Index> contents;
-                Index overall_line;
+                std::vector<Index_> contents;
+                LineIndex overall_line;
             };
 
             ThreadPool<Workspace> tp(
@@ -1174,7 +1191,7 @@ private:
                     return scan_vector_coordinate_pattern_base(
                         pb,
                         work.overall_line,
-                        [&](Index r) -> bool {
+                        [&](Index_ r) -> bool {
                             work.contents.emplace_back(r);
                             return true; // threads cannot quit early in their parallel sections; this (and thus scan_*_base) must always return true.
                         }
@@ -1206,7 +1223,7 @@ private:
 
 private:
     template<typename Type_, class Input2_, class FieldParser_, class WrappedStore_>
-    bool scan_matrix_array_base(Input2_& input, Index& overall_line_count, FieldParser_& fparser, WrappedStore_ wstore) const {
+    bool scan_matrix_array_base(Input2_& input, LineIndex& overall_line_count, FieldParser_& fparser, WrappedStore_ wstore) const {
         bool valid = input.valid();
         while (valid) {
             // Handling stray comments, empty lines, and leading spaces.
@@ -1232,9 +1249,9 @@ private:
     template<typename Type_, class FieldParser_, class Store_>
     bool scan_matrix_array(Store_ store) {
         bool finished = false;
-        Index current_data_line = 0;
+        LineIndex current_data_line = 0;
 
-        Index currow = 1, curcol = 1;
+        Index_ currow = 1, curcol = 1;
         auto increment = [&]() {
             ++currow;
             if (currow > my_nrows) {
@@ -1265,7 +1282,7 @@ private:
                 std::vector<char> buffer;
                 FieldParser_ fparser;
                 std::vector<Type_> contents;
-                Index overall_line;
+                LineIndex overall_line;
             };
 
             ThreadPool<Workspace> tp(
@@ -1309,7 +1326,7 @@ private:
 
 private:
     template<typename Type_, class Input2_, class FieldParser_, class WrappedStore_>
-    bool scan_vector_array_base(Input2_& input, Index& overall_line_count, FieldParser_& fparser, WrappedStore_ wstore) const {
+    bool scan_vector_array_base(Input2_& input, LineIndex& overall_line_count, FieldParser_& fparser, WrappedStore_ wstore) const {
         bool valid = input.valid();
         while (valid) {
             // Handling stray comments, empty lines, and leading spaces.
@@ -1335,7 +1352,7 @@ private:
     template<typename Type_, class FieldParser_, class Store_>
     bool scan_vector_array(Store_ store) {
         bool finished = false;
-        Index current_data_line = 0;
+        LineIndex current_data_line = 0;
         if (my_nthreads == 1) {
             FieldParser_ fparser;
             finished = scan_vector_array_base<Type_>(
@@ -1354,7 +1371,7 @@ private:
                 std::vector<char> buffer;
                 FieldParser_ fparser;
                 std::vector<Type_> contents;
-                Index overall_line;
+                LineIndex overall_line;
             };
 
             ThreadPool<Workspace> tp(
@@ -1406,7 +1423,7 @@ private:
     class IntegerFieldParser {
     public:
         template<class Input2_>
-        ParseInfo<Type_> operator()(Input2_& input, Index overall_line_count) {
+        ParseInfo<Type_> operator()(Input2_& input, LineIndex overall_line_count) {
             char firstchar = input.get();
             bool negative = (firstchar == '-');
             if (negative || firstchar == '+') {
@@ -1486,7 +1503,7 @@ public:
      * @tparam Type_ Type to represent the integer.
      * @tparam Store_ Function to process each line.
      *
-     * @param store Function with the signature `void(Index row, Index column, Type_ value)`,
+     * @param store Function with the signature `void(Index_ row, Index_ column, Type_ value)`,
      * which is passed the corresponding values at each line.
      * Both `row` and `column` will be 1-based indices; for `Object::VECTOR`, `column` will be set to 1.
      * Alternatively, this may return `bool`, where a `false` indicates that the scanning should terminate early and a `true` indicates that the scanning should continue.
@@ -1496,9 +1513,10 @@ public:
     template<typename Type_ = int, class Store_>
     bool scan_integer(Store_ store) {
         check_preamble();
+        static_assert(std::is_integral<Type_>::value);
 
-        auto wrapped_store = [&](Index r, Index c, Type_ val) -> bool {
-            if constexpr(std::is_same<typename std::invoke_result<Store_, Index, Index, Type_>::type, bool>::value) {
+        auto wrapped_store = [&](Index_ r, Index_ c, Type_ val) -> bool {
+            if constexpr(std::is_same<typename std::invoke_result<Store_, Index_, Index_, Type_>::type, bool>::value) {
                 return store(r, c, val);
             } else {
                 store(r, c, val);
@@ -1523,332 +1541,94 @@ public:
 
 private:
     template<bool last_, typename Type_, typename Input2_>
-    static typename std::conditional<last_, ParseInfo<Type_>, Type_>::type parse_special(Input2_& input, bool negative, bool check_inf, Index overall_line_count) {
-        auto what = [&]() -> std::string {
-            if (check_inf) {
-                return std::string("infinity");
-            } else {
-                return std::string("NaN");
-            }
-        };
-
-        auto check = [&](char lower, char upper) -> void {
-            if (!input.advance()) {
-                throw std::runtime_error("unexpected termination of " + what() + " on line " + std::to_string(overall_line_count + 1));
-            }
-            char current = input.get();
-            if (current != lower && current != upper) {
-                throw std::runtime_error("unexpected character when parsing " + what() + " on line " + std::to_string(overall_line_count + 1));
-            }
-        };
-
-        bool remaining = true;
-        if (check_inf) {
-            // We already know that we're starting with 'i', so we can proceed to the remaining two letters.
-            check('n', 'N');
-            check('f', 'F');
-
-            // Checking if there's any more letters.
-            remaining = input.advance();
-            if (remaining) {
-                char current = input.get();
-                if (current != '\n' && current != ' ' && current != '\t' && current != '\r') {
-                    if (current != 'i' && current != 'I') {
-                        throw std::runtime_error("unexpected character when parsing " + what() + " on line " + std::to_string(overall_line_count + 1));
-                    }
-                    check('n', 'N');
-                    check('i', 'I');
-                    check('t', 'T');
-                    check('y', 'Y');
-                    remaining = input.advance();
-                }
-            }
-        } else {
-            // We already know that we're starting with 'n', so we can proceed to the remaining two letters.
-            check('a', 'A');
-            check('n', 'N');
-            remaining = input.advance();
-        }
-
-        if (remaining) {
-            // Using a switch for consistency with parse_real().
-            switch(input.get()) {
-                case ' ': case '\t': case '\r':
-                    if (!advance_and_chomp(input)) {
-                        if constexpr(last_) {
-                            remaining = false;
-                            break;
-                        }
-                        throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
-                    }
-                    if constexpr(last_) {
-                        if (input.get() != '\n') {
-                            throw std::runtime_error("more fields than expected on line " + std::to_string(overall_line_count + 1));
-                        }
-                        remaining = input.advance(); // advance past the newline
-                    }
-                    break;
-                case '\n':
-                    if constexpr(last_) {
-                        remaining = input.advance(); // advance past the newline.
-                        break;
-                    }
-                    throw std::runtime_error("unexpected newline on line " + std::to_string(overall_line_count + 1));
-                default:
-                    throw std::runtime_error("unexpected character when parsing " + what() + " on line " + std::to_string(overall_line_count + 1));
-            }
-        } else {
-            if constexpr(!last_) {
-                throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
-            }
-        }
-
-        Type_ value;
-        if (check_inf) {
-            if constexpr(!std::numeric_limits<Type_>::has_infinity) {
-                throw std::runtime_error("requested type does not support " + what());
-            }
-            value = std::numeric_limits<Type_>::infinity();
-        } else {
-            if constexpr(!std::numeric_limits<Type_>::has_quiet_NaN) {
-                throw std::runtime_error("requested type does not support " + what());
-            }
-            value = std::numeric_limits<Type_>::quiet_NaN();
-        }
-        if (negative) {
-            value *= -1;
-        }
-
-        if constexpr(last_) {
-            ParseInfo<Type_> output;
-            output.value = value;
-            output.remaining = remaining;
-            return output;
-        } else {
-            return value;
-        }
-    }
-
-    template<bool last_, typename Type_, typename Input2_>
-    static typename std::conditional<last_, ParseInfo<Type_>, Type_>::type parse_real(Input2_& input, Index overall_line_count) {
-        char firstchar = input.get();
-        bool negative = (firstchar == '-');
-        if (negative || firstchar == '+') {
-            if (!(input.advance())) {
-                throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
-            }
-        }
-
-        // Check for specials.
-        switch (input.get()) {
-            case 'i': case 'I':
-                return parse_special<last_, Type_>(input, negative, true, overall_line_count);
-            case 'n': case 'N':
-                return parse_special<last_, Type_>(input, negative, false, overall_line_count);
-        };
-
-        // Processing the integer component.
-        Type_ value = 0;
-        bool found = false;
-        bool remaining = true;
+    static ParseInfo<Type_> parse_real(Input2_& input, std::string& temporary, Index overall_line_count) {
+        temporary.clear();
+        ParseInfo<Type_> output(0, true);
 
         while (1) {
-            char val = input.get();
-            switch(val) {
-                case '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case '9':
-                    value *= 10;
-                    value += val - '0';
-                    found = true;
-                    break;
-                case ' ': case '\t': case '\r':
-                    if (!advance_and_chomp(input)) {
-                        if constexpr(last_) {
-                            remaining = false;
-                            goto final_processing;
-                        }
-                        throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
-                    }
-                    if constexpr(last_) {
-                        if (input.get() != '\n') {
-                            throw std::runtime_error("more fields than expected on line " + std::to_string(overall_line_count + 1));
-                        }
-                        remaining = input.advance(); // advance past the newline
-                    }
-                    goto final_processing; 
+            char x = input.get();
+            switch(x) {
                 case '\n':
                     if constexpr(last_) {
-                        remaining = input.advance(); // advance past the newline
-                        goto final_processing;
-                    }
-                    throw std::runtime_error("unexpected newline on line " + std::to_string(overall_line_count + 1));
-               case '.':
-                    if (!input.advance()) {
-                        if constexpr(last_) {
-                            remaining = false;
-                            goto final_processing;
+                        // This is actually the only place we need to check for an empty temporary;
+                        // it can be assumed that this function is only called after chomping to the next non-blank,
+                        // so if it's not a newline, it'll be handled by the default case, and subsequently temporary will be non-empty.
+                        if (temporary.empty()) {
+                            throw std::runtime_error("empty number field on line " + std::to_string(overall_line_count + 1));
                         }
-                        throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
+                        output.remaining = input.advance(); // move past the newline.
+                    } else {
+                        throw std::runtime_error("unexpected newline on line " + std::to_string(overall_line_count + 1));
                     }
-                    goto decimal_processing;
-                case 'e': case 'E':
-                    if (!input.advance()) {
-                        throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
+                    goto final_processing;
+
+                case ' ': case '\t': case '\r':
+                    if constexpr(last_) {
+                        if (!advance_and_chomp(input)) { // skipping past the current position before chomping.
+                            output.remaining = false;
+                        } else {
+                            if (input.get() != '\n') {
+                                throw std::runtime_error("more fields than expected on line " + std::to_string(overall_line_count + 1));
+                            }
+                            output.remaining = input.advance(); // move past the newline.
+                        }
+                    } else {
+                        if (!advance_and_chomp(input)) { // skipping past the current position before chomping.
+                            throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
+                        }
+                        if (input.get() == '\n') {
+                            throw std::runtime_error("unexpected newline on line " + std::to_string(overall_line_count + 1));
+                        }
                     }
-                    goto exponent_processing;
-                default:
-                    throw std::runtime_error("unrecognized character in real number on line " + std::to_string(overall_line_count + 1));
+                    goto final_processing;
+
+                default: 
+                    temporary += x;
+                    break;
             }
 
             if (!(input.advance())) {
                 if constexpr(last_) {
-                    remaining = input.advance();
+                    output.remaining = false;
                     goto final_processing;
                 }
                 throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
             }
         }
 
-        // Processing the decimal component.
-decimal_processing:
-        {
-            Type_ multiplier = 1; 
-            while (1) {
-                char val = input.get();
-                switch(val) {
-                    case '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case '9':
-                        multiplier *= 10;
-                        value += (val - '0') / multiplier;
-                        found = true;
-                        break;
-                    case ' ': case '\t': case '\r':
-                        if (!advance_and_chomp(input)) {
-                            if constexpr(last_) {
-                                remaining = false;
-                                goto final_processing;
-                            }
-                            throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
-                        }
-                        if constexpr(last_) {
-                            if (input.get() != '\n') {
-                                throw std::runtime_error("more fields than expected on line " + std::to_string(overall_line_count + 1));
-                            }
-                            remaining = input.advance(); // advance past the newline
-                        }
-                        goto final_processing; 
-                    case '\n':
-                        if constexpr(last_) {
-                            remaining = input.advance(); // advance past the newline
-                            goto final_processing;
-                        }
-                        throw std::runtime_error("unexpected newline on line " + std::to_string(overall_line_count + 1));
-                    case 'e': case 'E':
-                        if (!input.advance()) {
-                            throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
-                        }
-                        goto exponent_processing;
-                    default:
-                        throw std::runtime_error("unrecognized character in real number on line " + std::to_string(overall_line_count + 1));
-                }
-
-                if (!(input.advance())) {
-                    if constexpr(last_) {
-                        remaining = input.advance();
-                        goto final_processing;
-                    }
-                    throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
-                }
-            }
-        }
-
-        // Processing the exponent.
-exponent_processing:
-        {
-            bool expnegative = (input.get() == '-');
-            if (expnegative || input.get() == '+') {
-                if (!(input.advance())) {
-                    throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
-                }
-            }
-
-            Type_ exponent = 0;
-            bool expfound = false;
-            while (1) {
-                char val = input.get();
-                switch(val) {
-                    case '0': case '1': case '2': case '3': case '4': case '5': case '6': case '7': case '8': case '9':
-                        exponent *= 10;
-                        exponent += (val - '0');
-                        expfound = true;
-                        break;
-                    case ' ': case '\t': case '\r':
-                        if (!advance_and_chomp(input)) {
-                            if constexpr(last_) {
-                                remaining = false;
-                                goto exponent_processing_finish;
-                            }
-                            throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
-                        }
-                        if constexpr(last_) {
-                            if (input.get() != '\n') {
-                                throw std::runtime_error("more fields than expected on line " + std::to_string(overall_line_count + 1));
-                            }
-                            remaining = input.advance(); // advance past the newline
-                        }
-                        goto exponent_processing_finish; 
-                    case '\n':
-                        if constexpr(last_) {
-                            remaining = input.advance(); // advance past the newline
-                            goto exponent_processing_finish;
-                        }
-                        throw std::runtime_error("unexpected newline on line " + std::to_string(overall_line_count + 1));
-                    default:
-                        throw std::runtime_error("unrecognized character in real number on line " + std::to_string(overall_line_count + 1));
-                }
-
-                if (!(input.advance())) {
-                    if constexpr(last_) {
-                        remaining = input.advance();
-                        goto exponent_processing_finish;
-                    }
-                    throw std::runtime_error("unexpected end of file on line " + std::to_string(overall_line_count + 1));
-                }
-            }
-
-exponent_processing_finish:
-            if (!expfound) {
-                throw std::runtime_error("no digits in the decimal exponent on line " + std::to_string(overall_line_count + 1));
-            }
-            if (expnegative) {
-                exponent *= -1;
-            }
-            value *= std::pow(10.0, exponent);
-        }
-
 final_processing:
-        if (!found) {
-            throw std::runtime_error("no digits in real number on line " + std::to_string(overall_line_count + 1));
-        }
-        if (negative) {
-            value *= -1;
+        if (temporary.size() >= 2 && temporary[0] == '0' && (temporary[1] == 'x' || temporary[1] == 'X')) {
+            throw std::runtime_error("hexadecimal numbers are not allowed on line " + std::to_string(overall_line_count + 1));
         }
 
-        if constexpr(last_) {
-            ParseInfo<Type_> output;
-            output.value = value;
-            output.remaining = remaining;
-            return output;
-        } else {
-            return value;
+        std::size_t n = 0;
+        try {
+            if constexpr(std::is_same<Type_, float>::value) {
+                output.value = std::stof(temporary, &n);
+            } else if constexpr(std::is_same<Type_, long double>::value) {
+                output.value = std::stold(temporary, &n);
+            } else {
+                output.value = std::stod(temporary, &n);
+            }
+        } catch (std::invalid_argument& e) {
+            throw std::runtime_error("failed to convert value to a real number on line " + std::to_string(overall_line_count + 1));
         }
+
+        if (n != temporary.size()) {
+            throw std::runtime_error("failed to convert value to a real number on line " + std::to_string(overall_line_count + 1));
+        }
+        return output;
     }
 
     template<typename Type_>
     class RealFieldParser {
     public:
         template<class Input2_>
-        ParseInfo<Type_> operator()(Input2_& input, Index overall_line_count) {
-            return parse_real<true, Type_>(input, overall_line_count);
+        ParseInfo<Type_> operator()(Input2_& input, LineIndex overall_line_count) {
+            return parse_real<true, Type_>(input, my_temporary, overall_line_count);
         }
+    private:
+        std::string my_temporary;
     };
 
 public:
@@ -1858,7 +1638,7 @@ public:
      * @tparam Type_ Type to represent the real value.
      * @tparam Store_ Function to process each line.
      *
-     * @param store Function with the signature `void(Index row, Index column, Type_ value)`,
+     * @param store Function with the signature `void(Index_ row, Index_ column, Type_ value)`,
      * which is passed the corresponding values at each line.
      * Both `row` and `column` will be 1-based indices; for `Object::VECTOR`, `column` will be set to 1.
      * Alternatively, this function may return `bool`, where a `false` indicates that the scanning should terminate early and a `true` indicates that the scanning should continue.
@@ -1868,9 +1648,10 @@ public:
     template<typename Type_ = double, class Store_>
     bool scan_real(Store_&& store) {
         check_preamble();
+        static_assert(std::is_floating_point<Type_>::value);
 
-        auto store_real = [&](Index r, Index c, Type_ val) -> bool {
-            if constexpr(std::is_same<typename std::invoke_result<Store_, Index, Index, Type_>::type, bool>::value) {
+        auto store_real = [&](Index_ r, Index_ c, Type_ val) -> bool {
+            if constexpr(std::is_same<typename std::invoke_result<Store_, Index_, Index_, Type_>::type, bool>::value) {
                 return store(r, c, val);
             } else {
                 store(r, c, val);
@@ -1900,7 +1681,7 @@ public:
      * @tparam Type_ Type to represent the double-precision value.
      * @tparam Store_ Function to process each line.
      *
-     * @param store Function with the signature `void(Index row, Index column, Type_ value)`,
+     * @param store Function with the signature `void(Index_ row, Index_ column, Type_ value)`,
      * which is passed the corresponding values at each line.
      * Both `row` and `column` will be 1-based indices; for `Object::VECTOR`, `column` will be set to 1.
      * Alternatively, this function may return `bool`, where a `false` indicates that the scanning should terminate early and a `true` indicates that the scanning should continue.
@@ -1917,15 +1698,17 @@ private:
     class ComplexFieldParser {
     public:
         template<typename Input2_>
-        ParseInfo<std::complex<InnerType_> > operator()(Input2_& input, Index overall_line_count) {
-            auto first = parse_real<false, InnerType_>(input, overall_line_count);
-            auto second = parse_real<true, InnerType_>(input, overall_line_count);
+        ParseInfo<std::complex<InnerType_> > operator()(Input2_& input, LineIndex overall_line_count) {
+            auto first = parse_real<false, InnerType_>(input, my_temporary, overall_line_count);
+            auto second = parse_real<true, InnerType_>(input, my_temporary, overall_line_count);
             ParseInfo<std::complex<InnerType_> > output;
-            output.value.real(first);
+            output.value.real(first.value);
             output.value.imag(second.value);
             output.remaining = second.remaining;
             return output;
         }
+    private:
+        std::string my_temporary;
     };
 
 public:
@@ -1935,7 +1718,7 @@ public:
      * @tparam Type_ Type to represent the real and imaginary parts of the complex value.
      * @tparam Store_ Function to process each line.
      *
-     * @param store Function with the signature `void(Index row, Index column, std::complex<Type_> value)`,
+     * @param store Function with the signature `void(Index_ row, Index_ column, std::complex<Type_> value)`,
      * which is passed the corresponding values at each line.
      * Both `row` and `column` will be 1-based indices; for `Object::VECTOR`, `column` will be set to 1.
      * Alternatively, this function may return `bool`, where a `false` indicates that the scanning should terminate early and a `true` indicates that the scanning should continue.
@@ -1945,10 +1728,11 @@ public:
     template<typename Type_ = double, class Store_>
     bool scan_complex(Store_ store) {
         check_preamble();
+        static_assert(std::is_floating_point<Type_>::value);
 
         typedef std::complex<Type_> FullType;
-        auto store_comp = [&](Index r, Index c, FullType val) -> bool {
-            if constexpr(std::is_same<typename std::invoke_result<Store_, Index, Index, FullType>::type, bool>::value) {
+        auto store_comp = [&](Index_ r, Index_ c, FullType val) -> bool {
+            if constexpr(std::is_same<typename std::invoke_result<Store_, Index_, Index_, FullType>::type, bool>::value) {
                 return store(r, c, val);
             } else {
                 store(r, c, val);
@@ -1978,7 +1762,7 @@ public:
      * @tparam Type_ Type to represent the presence of a non-zero entry.
      * @tparam Store_ Function to process each line.
      *
-     * @param store Function with the signature `void(Index row, Index column, Type_ value)`,
+     * @param store Function with the signature `void(Index_ row, Index_ column, Type_ value)`,
      * which is passed the corresponding values at each line.
      * Both `row` and `column` will be 1-based indices; for `Object::VECTOR`, `column` will be set to 1.
      * `value` will always be `true` and can be ignored; it is only required here for consistency with the other methods.
@@ -1993,8 +1777,8 @@ public:
             throw std::runtime_error("'array' format for 'pattern' field is not supported");
         }
 
-        auto store_pat = [&](Index r, Index c) -> bool {
-            if constexpr(std::is_same<typename std::invoke_result<Store_, Index, Index, bool>::type, bool>::value) {
+        auto store_pat = [&](Index_ r, Index_ c) -> bool {
+            if constexpr(std::is_same<typename std::invoke_result<Store_, Index_, Index_, bool>::type, bool>::value) {
                 return store(r, c, true);
             } else {
                 store(r, c, true);

@@ -39,10 +39,14 @@ struct ParseTextFileOptions {
 
 /**
  * Parse a Matrix Market text file.
+ *
+ * @tparam Index_ Integer type of the row/column indices.
+ *
  * @param path Pointer to a string containing a path to an uncompressed Matrix Market file.
  * @param options Further options.
  */
-inline Parser<byteme::PerByteSerial<char> > parse_text_file(const char* path, const ParseTextFileOptions& options) {
+template<typename Index_ = unsigned long long>
+Parser<std::unique_ptr<byteme::PerByteSerial<char> >, Index_> parse_text_file(const char* path, const ParseTextFileOptions& options) {
     ParserOptions popt;
     popt.num_threads = options.num_threads;
     popt.block_size = options.block_size;
@@ -51,7 +55,7 @@ inline Parser<byteme::PerByteSerial<char> > parse_text_file(const char* path, co
     topt.buffer_size = options.buffer_size;
     auto reader = std::make_unique<byteme::RawFileReader>(path, topt);
     auto pb = std::make_unique<byteme::PerByteSerial<char> >(std::move(reader));
-    return Parser<byteme::PerByteSerial<char> >(std::move(pb), popt);
+    return Parser<std::unique_ptr<byteme::PerByteSerial<char> >, Index_>(std::move(pb), popt);
 }
 
 /**
@@ -72,18 +76,22 @@ struct ParseTextBufferOptions {
 
 /**
  * Parse a Matrix Market text buffer.
+ *
+ * @tparam Index_ Integer type of the row/column indices.
+ *
  * @param buffer Pointer to an array containing the contents of an uncompressed Matrix Market file.
  * @param len Length of the array referenced by `buffer`.
  * @param options Further options.
  */
-inline Parser<byteme::PerByteSerial<char> > parse_text_buffer(const unsigned char* buffer, std::size_t len, const ParseTextBufferOptions& options) {
+template<typename Index_ = unsigned long long>
+Parser<std::unique_ptr<byteme::PerByteSerial<char> >, Index_> parse_text_buffer(const unsigned char* buffer, std::size_t len, const ParseTextBufferOptions& options) {
     ParserOptions popt;
     popt.num_threads = options.num_threads;
     popt.block_size = options.block_size;
 
     auto reader = std::make_unique<byteme::RawBufferReader>(buffer, len);
     auto pb = std::make_unique<byteme::PerByteSerial<char> >(std::move(reader));
-    return Parser<byteme::PerByteSerial<char> >(std::move(pb), popt);
+    return Parser<std::unique_ptr<byteme::PerByteSerial<char> >, Index_>(std::move(pb), popt);
 }
 
 }

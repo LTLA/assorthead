@@ -5,8 +5,10 @@
 #include <limits>
 #include <algorithm>
 #include <type_traits>
+#include <cstddef>
 
 #include "tatami/tatami.hpp"
+#include "sanisizer/sanisizer.hpp"
 
 #include "find_median_mad.hpp"
 #include "per_cell_qc_metrics.hpp"
@@ -148,7 +150,7 @@ struct ComputeAdtQcMetricsResults {
  *
  * @return An object containing the QC metrics.
  */
-template<typename Sum_ = double, typename Detected_ = int, typename Value_ = double, typename Index_ = int, typename Subset_ = const uint8_t*>
+template<typename Sum_ = double, typename Detected_ = int, typename Value_, typename Index_, typename Subset_>
 ComputeAdtQcMetricsResults<Sum_, Detected_> compute_adt_qc_metrics(
     const tatami::Matrix<Value_, Index_>& mat,
     const std::vector<Subset_>& subsets,
@@ -158,25 +160,25 @@ ComputeAdtQcMetricsResults<Sum_, Detected_> compute_adt_qc_metrics(
     ComputeAdtQcMetricsBuffers<Sum_, Detected_> x;
     ComputeAdtQcMetricsResults<Sum_, Detected_> output;
 
-    output.sum.resize(NC
+    tatami::resize_container_to_Index_size(output.sum, NC
 #ifdef SCRAN_QC_TEST_INIT
         , SCRAN_QC_TEST_INIT
 #endif
     );
     x.sum = output.sum.data();
 
-    output.detected.resize(NC
+    tatami::resize_container_to_Index_size(output.detected, NC
 #ifdef SCRAN_QC_TEST_INIT
         , SCRAN_QC_TEST_INIT
 #endif
     );
     x.detected = output.detected.data();
 
-    size_t nsubsets = subsets.size();
-    x.subset_sum.resize(nsubsets);
-    output.subset_sum.resize(nsubsets);
-    for (size_t s = 0; s < nsubsets; ++s) {
-        output.subset_sum[s].resize(NC
+    auto nsubsets = subsets.size();
+    x.subset_sum.resize(sanisizer::cast<decltype(x.subset_sum.size())>(nsubsets));
+    output.subset_sum.resize(sanisizer::cast<decltype(output.subset_sum.size())>(nsubsets));
+    for (decltype(nsubsets) s = 0; s < nsubsets; ++s) {
+        tatami::resize_container_to_Index_size(output.subset_sum[s], NC
 #ifdef SCRAN_QC_TEST_INIT
             , SCRAN_QC_TEST_INIT
 #endif
@@ -217,13 +219,13 @@ struct ComputeAdtQcFiltersOptions {
 namespace internal {
 
 template<typename Float_, class Host_, typename Sum_, typename Detected_, typename BlockSource_>
-void adt_populate(Host_& host, size_t n, const ComputeAdtQcMetricsBuffers<Sum_, Detected_>& res, BlockSource_ block, const ComputeAdtQcFiltersOptions& options) {
+void adt_populate(Host_& host, std::size_t n, const ComputeAdtQcMetricsBuffers<Sum_, Detected_>& res, BlockSource_ block, const ComputeAdtQcFiltersOptions& options) {
     constexpr bool unblocked = std::is_same<BlockSource_, bool>::value;
     auto buffer = [&]{
         if constexpr(unblocked) {
-            return std::vector<Float_>(n);
+            return sanisizer::create<std::vector<Float_> >(n);
         } else {
-            return FindMedianMadWorkspace<Float_, size_t>(n, block);
+            return FindMedianMadWorkspace<Float_>(n, block);
         }
     }();
 
@@ -243,15 +245,16 @@ void adt_populate(Host_& host, size_t n, const ComputeAdtQcMetricsBuffers<Sum_, 
     }
 
     {
-        size_t nsubsets = res.subset_sum.size();
-        host.get_subset_sum().resize(nsubsets);
+        auto nsubsets = res.subset_sum.size();
+        auto& host_subsets = host.get_subset_sum();
+        host_subsets.resize(sanisizer::cast<decltype(host_subsets.size())>(nsubsets));
 
         ChooseFilterThresholdsOptions opts;
         opts.num_mads = options.subset_sum_num_mads;
         opts.log = true;
         opts.lower = false;
 
-        for (size_t s = 0; s < nsubsets; ++s) {
+        for (decltype(nsubsets) s = 0; s < nsubsets; ++s) {
             auto sub = res.subset_sum[s];
             host.get_subset_sum()[s] = [&]{
                 if constexpr(unblocked) {
@@ -265,12 +268,12 @@ void adt_populate(Host_& host, size_t n, const ComputeAdtQcMetricsBuffers<Sum_, 
 }
 
 template<class Host_, typename Sum_, typename Detected_, typename BlockSource_, typename Output_>
-void adt_filter(const Host_& host, size_t n, const ComputeAdtQcMetricsBuffers<Sum_, Detected_>& metrics, BlockSource_ block, Output_* output) {
+void adt_filter(const Host_& host, std::size_t n, const ComputeAdtQcMetricsBuffers<Sum_, Detected_>& metrics, BlockSource_ block, Output_* output) {
     constexpr bool unblocked = std::is_same<BlockSource_, bool>::value;
     std::fill_n(output, n, 1);
 
     const auto& detected = host.get_detected();
-    for (size_t i = 0; i < n; ++i) {
+    for (decltype(n) i = 0; i < n; ++i) {
         auto thresh = [&]{
             if constexpr(unblocked) {
                 return detected;
@@ -281,11 +284,11 @@ void adt_filter(const Host_& host, size_t n, const ComputeAdtQcMetricsBuffers<Su
         output[i] = output[i] && (metrics.detected[i] >= thresh);
     }
 
-    size_t nsubsets = metrics.subset_sum.size();
-    for (size_t s = 0; s < nsubsets; ++s) {
+    auto nsubsets = metrics.subset_sum.size();
+    for (decltype(nsubsets) s = 0; s < nsubsets; ++s) {
         auto sub = metrics.subset_sum[s];
         const auto& sthresh = host.get_subset_sum()[s];
-        for (size_t i = 0; i < n; ++i) {
+        for (decltype(n) i = 0; i < n; ++i) {
             auto thresh = [&]{
                 if constexpr(unblocked) {
                     return sthresh;
@@ -372,7 +375,7 @@ public:
      * On output, this is truthy for cells considered to be of high quality, and false otherwise.
      */
     template<typename Sum_, typename Detected_, typename Output_>
-    void filter(size_t num, const ComputeAdtQcMetricsBuffers<Sum_, Detected_>& metrics, Output_* output) const {
+    void filter(std::size_t num, const ComputeAdtQcMetricsBuffers<Sum_, Detected_>& metrics, Output_* output) const {
         internal::adt_filter(*this, num, metrics, false, output);
     }
 
@@ -401,9 +404,9 @@ public:
      *
      * @return Vector of length `num`, containing the high-quality calls.
      */
-    template<typename Output_ = uint8_t, typename Sum_ = double, typename Detected_ = int>
+    template<typename Output_ = unsigned char, typename Sum_, typename Detected_>
     std::vector<Output_> filter(const ComputeAdtQcMetricsResults<Sum_, Detected_>& metrics) const {
-        std::vector<Output_> output(metrics.detected.size()
+        auto output = sanisizer::create<std::vector<Output_> >(metrics.detected.size()
 #ifdef SCRAN_QC_TEST_INIT
             , SCRAN_QC_TEST_INIT
 #endif
@@ -435,7 +438,7 @@ public:
  * @return An object containing the filter thresholds.
  */
 template<typename Float_ = double, typename Sum_, typename Detected_>
-AdtQcFilters<Float_> compute_adt_qc_filters(size_t num, const ComputeAdtQcMetricsBuffers<Sum_, Detected_>& metrics, const ComputeAdtQcFiltersOptions& options) {
+AdtQcFilters<Float_> compute_adt_qc_filters(std::size_t num, const ComputeAdtQcMetricsBuffers<Sum_, Detected_>& metrics, const ComputeAdtQcFiltersOptions& options) {
     AdtQcFilters<Float_> output;
     internal::adt_populate<Float_>(output, num, metrics, false, options);
     return output;
@@ -519,8 +522,8 @@ public:
      * @param[out] output Pointer to an array of length `num`.
      * On output, this is truthy for cells considered to be of high quality, and false otherwise.
      */
-    template<typename Index_, typename Sum_, typename Detected_, typename Block_, typename Output_>
-    void filter(Index_ num, const ComputeAdtQcMetricsBuffers<Sum_, Detected_>& metrics, const Block_* block, Output_* output) const {
+    template<typename Sum_, typename Detected_, typename Block_, typename Output_>
+    void filter(std::size_t num, const ComputeAdtQcMetricsBuffers<Sum_, Detected_>& metrics, const Block_* block, Output_* output) const {
         internal::adt_filter(*this, num, metrics, block, output);
     }
 
@@ -555,9 +558,9 @@ public:
      *
      * @return Vector of length `num`, containing the high-quality calls.
      */
-    template<typename Output_ = uint8_t, typename Sum_ = double, typename Detected_ = int, typename Block_ = int>
+    template<typename Output_ = unsigned char, typename Sum_, typename Detected_, typename Block_>
     std::vector<Output_> filter(const ComputeAdtQcMetricsResults<Sum_, Detected_>& metrics, const Block_* block) const {
-        std::vector<Output_> output(metrics.detected.size()
+        auto output = sanisizer::create<std::vector<Output_> >(metrics.detected.size()
 #ifdef SCRAN_QC_TEST_INIT
             , SCRAN_QC_TEST_INIT
 #endif
@@ -586,7 +589,7 @@ public:
  */
 template<typename Float_ = double, typename Sum_, typename Detected_, typename Block_>
 AdtQcBlockedFilters<Float_> compute_adt_qc_filters_blocked(
-    size_t num,
+    std::size_t num,
     const ComputeAdtQcMetricsBuffers<Sum_, Detected_>& metrics,
     const Block_* block,
     const ComputeAdtQcFiltersOptions& options)

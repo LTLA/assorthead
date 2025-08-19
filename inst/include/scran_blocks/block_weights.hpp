@@ -1,6 +1,12 @@
 #ifndef SCRAN_BLOCKS_BLOCK_WEIGHTS_HPP
 #define SCRAN_BLOCKS_BLOCK_WEIGHTS_HPP
 
+#include <vector>
+#include <cstddef>
+#include <algorithm>
+
+#include "sanisizer/sanisizer.hpp"
+
 /**
  * @file block_weights.hpp
  * @brief Calculation of per-block weights.
@@ -81,15 +87,15 @@ inline double compute_variable_weight(double s, const VariableWeightParameters& 
  * On output, this is filled with the weight of each block.
  */
 template<typename Size_, typename Weight_>
-void compute_weights(size_t num_blocks, const Size_* sizes, WeightPolicy policy, const VariableWeightParameters& variable, Weight_* weights) {
+void compute_weights(std::size_t num_blocks, const Size_* sizes, WeightPolicy policy, const VariableWeightParameters& variable, Weight_* weights) {
     if (policy == WeightPolicy::NONE) {
         std::copy_n(sizes, num_blocks, weights);
     } else if (policy == WeightPolicy::EQUAL) {
-        for (size_t s = 0; s < num_blocks; ++s) {
+        for (decltype(num_blocks) s = 0; s < num_blocks; ++s) {
             weights[s] = sizes[s] > 0;
         }
     } else {
-        for (size_t s = 0; s < num_blocks; ++s) {
+        for (decltype(num_blocks) s = 0; s < num_blocks; ++s) {
             weights[s] = compute_variable_weight(sizes[s], variable);
         }
     }
@@ -109,7 +115,7 @@ void compute_weights(size_t num_blocks, const Size_* sizes, WeightPolicy policy,
  */
 template<typename Weight_ = double, typename Size_>
 std::vector<Weight_> compute_weights(const std::vector<Size_>& sizes, WeightPolicy policy, const VariableWeightParameters& variable) {
-    std::vector<Weight_> output(sizes.size());
+    auto output = sanisizer::create<std::vector<Weight_> >(sizes.size());
     compute_weights(sizes.size(), sizes.data(), policy, variable, output.data());
     return output;
 }

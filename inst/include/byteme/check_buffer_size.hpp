@@ -3,9 +3,19 @@
 
 #include <vector>
 #include <limits>
+#include <type_traits>
+#include <cstddef>
+
+/**
+ * @file check_buffer_size.hpp
+ * @brief Utilities to check the buffer sizes.
+ */
 
 namespace byteme {
 
+/**
+ * @cond
+ */
 template<typename Type_>
 constexpr typename std::make_unsigned<Type_>::type unsigned_max() {
     return std::numeric_limits<Type_>::max();
@@ -13,7 +23,12 @@ constexpr typename std::make_unsigned<Type_>::type unsigned_max() {
 
 template<typename Cap_>
 bool exceeds_cap(std::size_t buffer_size) {
-    return buffer_size > unsigned_max<Cap_>();
+    constexpr auto cap = unsigned_max<Cap_>();
+    if constexpr(std::numeric_limits<std::size_t>::max() > cap) {
+        return buffer_size > cap;
+    } else {
+        return false;
+    }
 }
 
 template<typename Cap_>
@@ -47,6 +62,30 @@ void safe_write(const Buffer_* buffer, BufSize_ n, Func_ fun) {
     }
 
     fun(buffer, n);
+}
+/**
+ * @endcond
+ */
+
+/**
+ * Cap an input integer at the largest value that can be represented by a specified output type, typically a `std::size_t`.
+ * This avoids silent integer overflows, especially in the defaults of the various `*Options` classes.
+ *
+ * @tparam Output_ Unsigned integer type of the output.
+ * @tparam Input_ Integer type of the input.
+ *
+ * @param size Non-negative integer specifying some kind of buffer size.
+ *
+ * @return `size` if it fits in an `Output_`, otherwise the largest value of an `Output_`.
+ */
+template<typename Output_, typename Size_>
+constexpr Output_ cap(Size_ size) {
+    constexpr auto cap = std::numeric_limits<Output_>::max();
+    if (static_cast<typename std::make_unsigned<Size_>::type>(size) > cap) {
+        return cap;
+    } else {
+        return size;
+    }
 }
 
 }

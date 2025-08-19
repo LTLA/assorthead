@@ -4,6 +4,7 @@
 #include "summarize_comparisons.hpp"
 
 #include <vector>
+#include <cstddef>
 
 /**
  * @file summarize_effects.hpp
@@ -95,7 +96,7 @@ struct SummarizeEffectsOptions {
  *
  * All choices of summary statistics are enumerated by `Summary`.
  *
- * @tparam Index_ Integer type for the number of genes.
+ * @tparam Gene_ Integer type for the number of genes.
  * @tparam Stat_ Floating-point type for the statistics.
  * @tparam Rank_ Numeric type for the minimum rank.
  *
@@ -109,8 +110,8 @@ struct SummarizeEffectsOptions {
  * or be NULL to indicate that the corresponding summary statistic should not be computed for that group.
  * @param options Further options.
  */
-template<typename Index_, typename Stat_, typename Rank_>
-void summarize_effects(Index_ ngenes, size_t ngroups, const Stat_* effects, const std::vector<SummaryBuffers<Stat_, Rank_> >& summaries, const SummarizeEffectsOptions& options) {
+template<typename Gene_, typename Stat_, typename Rank_>
+void summarize_effects(Gene_ ngenes, std::size_t ngroups, const Stat_* effects, const std::vector<SummaryBuffers<Stat_, Rank_> >& summaries, const SummarizeEffectsOptions& options) {
     internal::compute_min_rank_pairwise(ngenes, ngroups, effects, summaries, options.num_threads);
     internal::summarize_comparisons(ngenes, ngroups, effects, summaries, options.num_threads); 
 }
@@ -118,7 +119,7 @@ void summarize_effects(Index_ ngenes, size_t ngroups, const Stat_* effects, cons
 /**
  * Overload of `summarize_effects()` that allocates memory for the output summary statistics.
  *
- * @tparam Index_ Integer type for the number of genes.
+ * @tparam Gene_ Integer type for the number of genes.
  * @tparam Stat Floating point type for the statistics.
  * @tparam Rank_ Numeric type for the minimum rank.
  *
@@ -131,8 +132,8 @@ void summarize_effects(Index_ ngenes, size_t ngroups, const Stat_* effects, cons
  * @return A vector of length equal to the number of groups.
  * Each `SummaryResults` corresponds to a group and contains the summary statistics (depending on `options`) for that group.
  */
-template<typename Stat_ = double, typename Rank_ = int, typename Index_>
-std::vector<SummaryResults<Stat_, Rank_> > summarize_effects(Index_ ngenes, size_t ngroups, const Stat_* effects, const SummarizeEffectsOptions& options) {
+template<typename Stat_ = double, typename Rank_ = int, typename Gene_>
+std::vector<SummaryResults<Stat_, Rank_> > summarize_effects(Gene_ ngenes, std::size_t ngroups, const Stat_* effects, const SummarizeEffectsOptions& options) {
     std::vector<SummaryResults<Stat_, Rank_> > output;
     auto ptrs = internal::fill_summary_results(
         ngenes,

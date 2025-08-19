@@ -5,6 +5,7 @@
 #include <limits>
 #include <algorithm>
 #include <type_traits>
+#include <cstddef>
 
 #include "tatami/tatami.hpp"
 
@@ -96,7 +97,7 @@ void compute_rna_qc_metrics(
     const ComputeRnaQcMetricsOptions& options)
 {
     auto NC = mat.ncol();
-    size_t nsubsets = subsets.size();
+    auto nsubsets = subsets.size();
 
     PerCellQcMetricsBuffers<Sum_, Detected_, Value_, Index_> tmp;
     tmp.sum = output.sum;
@@ -110,11 +111,11 @@ void compute_rna_qc_metrics(
         if constexpr(same_type) {
             tmp.subset_sum = output.subset_proportion;
         } else {
-            placeholder_subset.resize(nsubsets);
-            tmp.subset_sum.resize(nsubsets);
-            for (size_t s = 0; s < nsubsets; ++s) {
+            placeholder_subset.resize(sanisizer::cast<decltype(placeholder_subset.size())>(nsubsets));
+            tmp.subset_sum.resize(sanisizer::cast<decltype(tmp.subset_sum.size())>(nsubsets));
+            for (decltype(nsubsets) s = 0; s < nsubsets; ++s) {
                 auto& b = placeholder_subset[s];
-                b.resize(NC);
+                tatami::resize_container_to_Index_size(b, NC);
                 tmp.subset_sum[s] = b.data();
             }
         }
@@ -124,7 +125,7 @@ void compute_rna_qc_metrics(
     opt.num_threads = options.num_threads;
     per_cell_qc_metrics(mat, subsets, tmp, opt);
 
-    for (size_t s = 0 ; s < nsubsets; ++s) {
+    for (decltype(nsubsets) s = 0 ; s < nsubsets; ++s) {
         auto dest = output.subset_proportion[s];
         if (dest) {
             auto src = tmp.subset_sum[s];
@@ -179,39 +180,39 @@ struct ComputeRnaQcMetricsResults {
  * @return An object containing the QC metrics.
  * Subset proportions are returned depending on the `subsets`.
  */
-template<typename Sum_ = double, typename Detected_ = int, typename Proportion_ = double, typename Value_ = double, typename Index_ = int, typename Subset_ = const uint8_t*>
+template<typename Sum_ = double, typename Detected_ = int, typename Proportion_ = double, typename Value_, typename Index_, typename Subset_>
 ComputeRnaQcMetricsResults<Sum_, Detected_, Proportion_> compute_rna_qc_metrics(const tatami::Matrix<Value_, Index_>& mat, const std::vector<Subset_>& subsets, const ComputeRnaQcMetricsOptions& options) {
     auto NC = mat.ncol();
-    ComputeRnaQcMetricsBuffers<Sum_, Detected_, Proportion_> x;
+    ComputeRnaQcMetricsBuffers<Sum_, Detected_, Proportion_> buffers;
     ComputeRnaQcMetricsResults<Sum_, Detected_, Proportion_> output;
 
-    output.sum.resize(NC
+    tatami::resize_container_to_Index_size(output.sum, NC
 #ifdef SCRAN_QC_TEST_INIT
         , SCRAN_QC_TEST_INIT
 #endif
     );
-    x.sum = output.sum.data();
+    buffers.sum = output.sum.data();
 
-    output.detected.resize(NC
+    tatami::resize_container_to_Index_size(output.detected, NC
 #ifdef SCRAN_QC_TEST_INIT
         , SCRAN_QC_TEST_INIT
 #endif
     );
-    x.detected = output.detected.data();
+    buffers.detected = output.detected.data();
 
-    size_t nsubsets = subsets.size();
-    x.subset_proportion.resize(nsubsets);
-    output.subset_proportion.resize(nsubsets);
-    for (size_t s = 0; s < nsubsets; ++s) {
-        output.subset_proportion[s].resize(NC
+    auto nsubsets = subsets.size();
+    buffers.subset_proportion.resize(sanisizer::cast<decltype(buffers.subset_proportion.size())>(nsubsets));
+    output.subset_proportion.resize(sanisizer::cast<decltype(output.subset_proportion.size())>(nsubsets));
+    for (decltype(nsubsets) s = 0; s < nsubsets; ++s) {
+        tatami::resize_container_to_Index_size(output.subset_proportion[s], NC
 #ifdef SCRAN_QC_TEST_INIT
             , SCRAN_QC_TEST_INIT
 #endif
         );
-        x.subset_proportion[s] = output.subset_proportion[s].data();
+        buffers.subset_proportion[s] = output.subset_proportion[s].data();
     }
 
-    compute_rna_qc_metrics(mat, subsets, x, options);
+    compute_rna_qc_metrics(mat, subsets, buffers, options);
     return output;
 }
 
@@ -244,13 +245,13 @@ struct ComputeRnaQcFiltersOptions {
 namespace internal {
 
 template<typename Float_, class Host_, typename Sum_, typename Detected_, typename Proportion_, typename BlockSource_>
-void rna_populate(Host_& host, size_t n, const ComputeRnaQcMetricsBuffers<Sum_, Detected_, Proportion_>& res, BlockSource_ block, const ComputeRnaQcFiltersOptions& options) {
+void rna_populate(Host_& host, std::size_t n, const ComputeRnaQcMetricsBuffers<Sum_, Detected_, Proportion_>& res, BlockSource_ block, const ComputeRnaQcFiltersOptions& options) {
     constexpr bool unblocked = std::is_same<BlockSource_, bool>::value;
     auto buffer = [&]{
         if constexpr(unblocked) {
-            return std::vector<Float_>(n);
+            return sanisizer::create<std::vector<Float_> >(n);
         } else {
-            return FindMedianMadWorkspace<Float_, size_t>(n, block);
+            return FindMedianMadWorkspace<Float_>(n, block);
         }
     }();
 
@@ -287,11 +288,12 @@ void rna_populate(Host_& host, size_t n, const ComputeRnaQcMetricsBuffers<Sum_, 
         opts.num_mads = options.subset_proportion_num_mads;
         opts.lower = false;
 
-        size_t nsubsets = res.subset_proportion.size();
-        host.get_subset_proportion().resize(nsubsets);
-        for (size_t s = 0; s < nsubsets; ++s) {
+        auto nsubsets = res.subset_proportion.size();
+        auto& subhost = host.get_subset_proportion();
+        subhost.resize(sanisizer::cast<decltype(subhost.size())>(nsubsets));
+        for (decltype(nsubsets) s = 0; s < nsubsets; ++s) {
             auto sub = res.subset_proportion[s];
-            host.get_subset_proportion()[s] = [&]{
+            subhost[s] = [&]{
                 if constexpr(unblocked) {
                     return choose_filter_thresholds(n, sub, buffer.data(), opts).upper;
                 } else {
@@ -303,12 +305,12 @@ void rna_populate(Host_& host, size_t n, const ComputeRnaQcMetricsBuffers<Sum_, 
 }
 
 template<class Host_, typename Sum_, typename Detected_, typename Proportion_, typename BlockSource_, typename Output_>
-void rna_filter(const Host_& host, size_t n, const ComputeRnaQcMetricsBuffers<Sum_, Detected_, Proportion_>& metrics, BlockSource_ block, Output_* output) {
+void rna_filter(const Host_& host, std::size_t n, const ComputeRnaQcMetricsBuffers<Sum_, Detected_, Proportion_>& metrics, BlockSource_ block, Output_* output) {
     constexpr bool unblocked = std::is_same<BlockSource_, bool>::value;
     std::fill_n(output, n, 1);
 
     const auto& sum = host.get_sum();
-    for (size_t i = 0; i < n; ++i) {
+    for (decltype(n) i = 0; i < n; ++i) {
         auto thresh = [&]{
             if constexpr(unblocked) {
                 return sum;
@@ -320,7 +322,7 @@ void rna_filter(const Host_& host, size_t n, const ComputeRnaQcMetricsBuffers<Su
     }
 
     const auto& detected = host.get_detected();
-    for (size_t i = 0; i < n; ++i) {
+    for (decltype(n) i = 0; i < n; ++i) {
         auto thresh = [&]{
             if constexpr(unblocked) {
                 return detected;
@@ -331,11 +333,11 @@ void rna_filter(const Host_& host, size_t n, const ComputeRnaQcMetricsBuffers<Su
         output[i] = output[i] && (metrics.detected[i] >= thresh);
     }
 
-    size_t nsubsets = metrics.subset_proportion.size();
-    for (size_t s = 0; s < nsubsets; ++s) {
+    auto nsubsets = metrics.subset_proportion.size();
+    for (decltype(nsubsets) s = 0; s < nsubsets; ++s) {
         auto sub = metrics.subset_proportion[s];
         const auto& sthresh = host.get_subset_proportion()[s];
-        for (size_t i = 0; i < n; ++i) {
+        for (decltype(n) i = 0; i < n; ++i) {
             auto thresh = [&]{
                 if constexpr(unblocked) {
                     return sthresh;
@@ -434,7 +436,7 @@ public:
      * On output, this is truthy for cells considered to be of high quality, and false otherwise.
      */
     template<typename Sum_, typename Detected_, typename Proportion_, typename Output_>
-    void filter(size_t num, const ComputeRnaQcMetricsBuffers<Sum_, Detected_, Proportion_>& metrics, Output_* output) const {
+    void filter(std::size_t num, const ComputeRnaQcMetricsBuffers<Sum_, Detected_, Proportion_>& metrics, Output_* output) const {
         internal::rna_filter(*this, num, metrics, false, output);
     }
 
@@ -462,9 +464,9 @@ public:
      * The feature subsets should be the same as those used in the `metrics` supplied to `compute_rna_qc_filters()`.
      * @return Vector of length `num`, containing the high-quality calls.
      */
-    template<typename Output_ = uint8_t, typename Sum_ = double, typename Detected_ = int, typename Proportion_ = double>
+    template<typename Output_ = unsigned char, typename Sum_, typename Detected_, typename Proportion_>
     std::vector<Output_> filter(const ComputeRnaQcMetricsResults<Sum_, Detected_, Proportion_>& metrics) const {
-        std::vector<Output_> output(metrics.sum.size()
+        auto output = sanisizer::create<std::vector<Output_> >(metrics.sum.size()
 #ifdef SCRAN_QC_TEST_INIT
             , SCRAN_QC_TEST_INIT
 #endif
@@ -491,8 +493,8 @@ public:
  * 
  * @return An object containing the filter thresholds.
  */
-template<typename Float_ = double, typename Sum_ = double, typename Detected_ = int, typename Proportion_ = double>
-RnaQcFilters<Float_> compute_rna_qc_filters(size_t num, const ComputeRnaQcMetricsBuffers<Sum_, Detected_, Proportion_>& metrics, const ComputeRnaQcFiltersOptions& options) {
+template<typename Float_ = double, typename Sum_, typename Detected_, typename Proportion_>
+RnaQcFilters<Float_> compute_rna_qc_filters(std::size_t num, const ComputeRnaQcMetricsBuffers<Sum_, Detected_, Proportion_>& metrics, const ComputeRnaQcFiltersOptions& options) {
     RnaQcFilters<Float_> output;
     internal::rna_populate<Float_>(output, num, metrics, false, options);
     return output;
@@ -513,7 +515,7 @@ RnaQcFilters<Float_> compute_rna_qc_filters(size_t num, const ComputeRnaQcMetric
  *
  * @return An object containing the filter thresholds.
  */
-template<typename Float_ = double, typename Sum_ = double, typename Detected_ = int, typename Proportion_ = double>
+template<typename Float_ = double, typename Sum_, typename Detected_, typename Proportion_>
 RnaQcFilters<Float_> compute_rna_qc_filters(const ComputeRnaQcMetricsResults<Sum_, Detected_, Proportion_>& metrics, const ComputeRnaQcFiltersOptions& options) {
     return compute_rna_qc_filters(metrics.sum.size(), internal::to_buffer(metrics), options);
 }
@@ -596,8 +598,8 @@ public:
      * @param[out] output Pointer to an array of length `num`.
      * On output, this is truthy for cells considered to be of high quality, and false otherwise.
      */
-    template<typename Index_, typename Sum_, typename Detected_, typename Proportion_, typename Block_, typename Output_>
-    void filter(Index_ num, const ComputeRnaQcMetricsBuffers<Sum_, Detected_, Proportion_>& metrics, const Block_* block, Output_* output) const {
+    template<typename Sum_, typename Detected_, typename Proportion_, typename Block_, typename Output_>
+    void filter(std::size_t num, const ComputeRnaQcMetricsBuffers<Sum_, Detected_, Proportion_>& metrics, const Block_* block, Output_* output) const {
         internal::rna_filter(*this, num, metrics, block, output);
     }
 
@@ -634,9 +636,9 @@ public:
      *
      * @return Vector of length `num`, containing the high-quality calls.
      */
-    template<typename Output_ = uint8_t, typename Sum_ = double, typename Detected_ = int, typename Proportion_ = double, typename Block_ = int>
+    template<typename Output_ = unsigned char, typename Sum_, typename Detected_, typename Proportion_, typename Block_>
     std::vector<Output_> filter(const ComputeRnaQcMetricsResults<Sum_, Detected_, Proportion_>& metrics, const Block_* block) const {
-        std::vector<Output_> output(metrics.sum.size()
+        auto output = sanisizer::create<std::vector<Output_> >(metrics.sum.size()
 #ifdef SCRAN_QC_TEST_INIT
             , SCRAN_QC_TEST_INIT
 #endif
@@ -662,7 +664,7 @@ public:
  */
 template<typename Float_ = double, typename Sum_, typename Detected_, typename Proportion_, typename Block_>
 RnaQcBlockedFilters<Float_> compute_rna_qc_filters_blocked(
-    size_t num,
+    std::size_t num,
     const ComputeRnaQcMetricsBuffers<Sum_, Detected_, Proportion_>& metrics,
     const Block_* block,
     const ComputeRnaQcFiltersOptions& options) 

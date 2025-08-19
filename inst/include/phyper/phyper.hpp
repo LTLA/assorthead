@@ -109,15 +109,14 @@ double compute(Count_ drawn_inside, Count_ num_inside, Count_ num_outside, Count
         --drawn_inside;
     }
 
-    // We flip the tail to reduce the number of iterations during the
-    // cumulative sum.  Note that 'alt_drawn_inside' is guaranteed to be
-    // non-negative due to edge case protection, keeping in mind we already
-    // decremented drawn_inside when upper_tail = true.
+    // We flip the problem to ensure that we're always computing the smaller tail for accuracy.
+    // If that's the tail that we wanted, then great; we can compute it directly without worrying about loss of precision from '1 - [some larger tail]'.
+    // If it's not the tail we wanted, then we compute '1 - [this smaller tail]' and we don't have to worry about accumulation of errors from summation.
+    // The smaller tail is usually also faster to compute but this is a secondary effect.
     bool needs_upper = options.upper_tail;
-    Count_ alt_drawn_inside = num_drawn - drawn_inside - 1;
-    if (drawn_inside > alt_drawn_inside) {
+    if (static_cast<double>(drawn_inside) * static_cast<double>(num_inside + num_outside) > static_cast<double>(num_drawn) * static_cast<double>(num_inside)) {
         std::swap(num_inside, num_outside);
-        drawn_inside = alt_drawn_inside;
+        drawn_inside = num_drawn - drawn_inside - 1; // Guaranteed to be non-negative due to edge case protection; we already decremented drawn_inside when upper_tail = true.
         needs_upper = !needs_upper;
     }
 

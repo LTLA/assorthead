@@ -5,9 +5,10 @@
 #include <limits>
 #include <cmath>
 #include <algorithm>
-#include <cstdint>
+#include <cstddef>
 
 #include "tatami_stats/tatami_stats.hpp"
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file find_median_mad.hpp
@@ -64,7 +65,6 @@ struct FindMedianMadResults {
  * Pretty much as it says on the can; calculates the median of an array of values first,
  * and uses the median to then compute the median absolute deviation (MAD) from that array.
  *
- * @tparam Index_ Integer type for array indices.
  * @tparam Float_ Floating-point type for input and output.
  *
  * @param num Number of observations.
@@ -75,13 +75,13 @@ struct FindMedianMadResults {
  *
  * @return Median and MAD for `metrics`, possibly after log-transformation.
  */
-template<typename Index_, typename Float_> 
-FindMedianMadResults<Float_> find_median_mad(Index_ num, Float_* metrics, const FindMedianMadOptions& options) {
+template<typename Float_> 
+FindMedianMadResults<Float_> find_median_mad(std::size_t num, Float_* metrics, const FindMedianMadOptions& options) {
     static_assert(std::is_floating_point<Float_>::value);
 
     // Rotate all the NaNs to the front of the buffer and ignore them.
-    Index_ lost = 0;
-    for (Index_ i = 0; i < num; ++i) {
+    decltype(num) lost = 0;
+    for (decltype(num) i = 0; i < num; ++i) {
         if (std::isnan(metrics[i])) {
             std::swap(metrics[i], metrics[lost]);
             ++lost;
@@ -91,12 +91,12 @@ FindMedianMadResults<Float_> find_median_mad(Index_ num, Float_* metrics, const 
     num -= lost;
 
     if (options.log) {
-        auto copy = metrics;
-        for (Index_ i = 0; i < num; ++i, ++copy) {
-            if (*copy > 0) {
-                *copy = std::log(*copy);
-            } else if (*copy == 0) {
-                *copy = -std::numeric_limits<double>::infinity();
+        for (decltype(num) i = 0; i < num; ++i) {
+            auto& val = metrics[i];
+            if (val > 0) {
+                val = std::log(val);
+            } else if (val == 0) {
+                val = -std::numeric_limits<double>::infinity();
             } else {
                 throw std::runtime_error("cannot log-transform negative values");
             }
@@ -122,9 +122,8 @@ FindMedianMadResults<Float_> find_median_mad(Index_ num, Float_* metrics, const 
     // metrics in as floats in the first place. Technically the first sort
     // could be done with an integer buffer but then we'd need an extra argument.
 
-    auto copy = metrics;
-    for (Index_ i = 0; i < num; ++i, ++copy) {
-        *copy = std::abs(*copy - median);
+    for (decltype(num) i = 0; i < num; ++i) {
+        metrics[i] = std::abs(metrics[i] - median);
     }
     auto mad = tatami_stats::medians::direct<Float_>(metrics, num, /* skip_nan = */ false);
     mad *= 1.4826; // for equivalence with the standard deviation under normality.
@@ -135,7 +134,6 @@ FindMedianMadResults<Float_> find_median_mad(Index_ num, Float_* metrics, const 
 /**
  * Overload of `find_median_mad()` that uses an auxiliary buffer to avoid mutating the input array of values.
  *
- * @tparam Index_ Integer type for array indices.
  * @tparam Value_ Type for the input.
  * @tparam Float_ Floating-point type for output.
  *
@@ -149,16 +147,16 @@ FindMedianMadResults<Float_> find_median_mad(Index_ num, Float_* metrics, const 
  *
  * @return Median and MAD for `metrics`, possibly after log-transformation.
  */
-template<typename Float_ = double, typename Index_, typename Value_> 
-FindMedianMadResults<Float_> find_median_mad(Index_ num, const Value_* metrics, Float_* buffer, const FindMedianMadOptions& options) {
-    std::unique_ptr<std::vector<Float_> > xbuffer;
+template<typename Float_ = double, typename Value_> 
+FindMedianMadResults<Float_> find_median_mad(std::size_t num, const Value_* metrics, Float_* buffer, const FindMedianMadOptions& options) {
+    std::vector<Float_> xbuffer;
     if (buffer == NULL) {
-        xbuffer = std::make_unique<std::vector<Float_> >(num
+        xbuffer.resize(sanisizer::cast<decltype(xbuffer.size())>(num)
 #ifdef SCRAN_QC_TEST_INIT
             , SCRAN_QC_TEST_INIT
 #endif
         );
-        buffer = xbuffer->data();
+        buffer = xbuffer.data();
     }
     std::copy_n(metrics, num, buffer);
     return find_median_mad(num, buffer, options);
@@ -170,9 +168,8 @@ FindMedianMadResults<Float_> find_median_mad(Index_ num, const Value_* metrics, 
  * This can be re-used across multiple `find_median_mad_blocked()` calls to avoid reallocation.
  *
  * @tparam Float_ Floating-point type for buffering.
- * @tparam Index_ Integer type for array indices.
  */
-template<typename Float_, typename Index_>
+template<typename Float_>
 class FindMedianMadWorkspace {
 public:
     /**
@@ -183,7 +180,7 @@ public:
      * Values should be integer IDs in \f$[0, N)\f$ where \f$N\f$ is the number of blocks.
      */
     template<typename Block_>
-    FindMedianMadWorkspace(Index_ num, const Block_* block) : my_buffer(num) {
+    FindMedianMadWorkspace(std::size_t num, const Block_* block) : my_buffer(num) {
         set(num, block);
     }
 
@@ -200,32 +197,36 @@ public:
      * Values should be integer IDs in \f$[0, N)\f$ where \f$N\f$ is the number of blocks.
      */
     template<typename Block_>
-    void set(Index_ num, const Block_* block) {
+    void set(std::size_t num, const Block_* block) {
         my_block_starts.clear();
 
         if (block) { 
-            for (Index_ i = 0; i < num; ++i) {
-                size_t candidate = block[i];
-                if (candidate >= my_block_starts.size()) {
-                    my_block_starts.resize(candidate + 1);
+            for (decltype(num) i = 0; i < num; ++i) {
+                auto candidate = block[i];
+                if (sanisizer::is_greater_than_or_equal(candidate, my_block_starts.size())) {
+                    my_block_starts.resize(sanisizer::sum<decltype(my_block_starts.size())>(candidate, 1));
                 }
                 ++my_block_starts[candidate];
             }
 
-            Index_ sofar = 0;
+            std::size_t sofar = 0;
             for (auto& s : my_block_starts) {
-                Index_ last = sofar;
+                auto last = sofar;
                 sofar += s;
                 s = last;
             }
         }
 
-        my_buffer.resize(num
+        my_buffer.resize(sanisizer::cast<decltype(my_buffer.size())>(num)
 #ifdef SCRAN_QC_TEST_INIT
             , SCRAN_QC_TEST_INIT
 #endif
         );
-        my_block_ends.resize(my_block_starts.size());
+        my_block_ends.resize(my_block_starts.size()
+#ifdef SCRAN_QC_TEST_INIT
+            , SCRAN_QC_TEST_INIT
+#endif
+        );
     }
 
 /**
@@ -235,8 +236,8 @@ public:
     // Can't figure out how to make compute_blocked() a friend,
     // so these puppies are public for simplicity.
     std::vector<Float_> my_buffer;
-    std::vector<Index_> my_block_starts;
-    std::vector<Index_> my_block_ends;
+    std::vector<std::size_t> my_block_starts;
+    std::vector<std::size_t> my_block_ends;
 /**
  * @endcond
  */
@@ -247,7 +248,6 @@ public:
  * It is equivalent to calling `find_median_mad()` separately on all observations from each block.
  *
  * @tparam Output_ Floating-point type for the output.
- * @tparam Index_ Integer type for array indices.
  * @tparam Block_ Integer type, containing the block IDs.
  * @tparam Value_ Numeric type for the input.
  *
@@ -265,17 +265,17 @@ public:
  *
  * @return Vector of length \f$N\f$, where each entry contains the median and MAD for each block in `block`.
  */
-template<typename Output_ = double, typename Index_, typename Value_, typename Block_>
+template<typename Output_ = double, typename Value_, typename Block_>
 std::vector<FindMedianMadResults<Output_> > find_median_mad_blocked(
-    Index_ num,
+    std::size_t num,
     const Value_* metrics, 
     const Block_* block,
-    FindMedianMadWorkspace<Output_, Index_>* workspace,
+    FindMedianMadWorkspace<Output_>* workspace,
     const FindMedianMadOptions& options)
 {
-    std::unique_ptr<FindMedianMadWorkspace<Output_, Index_> > xworkspace;
+    std::unique_ptr<FindMedianMadWorkspace<Output_> > xworkspace;
     if (workspace == NULL) {
-        xworkspace = std::make_unique<FindMedianMadWorkspace<Output_, Index_> >(num, block);
+        xworkspace = std::make_unique<FindMedianMadWorkspace<Output_> >(num, block);
         workspace = xworkspace.get();
     }
 
@@ -291,16 +291,16 @@ std::vector<FindMedianMadResults<Output_> > find_median_mad_blocked(
     const auto& starts = workspace->my_block_starts;
     auto& ends = workspace->my_block_ends;
     std::copy(starts.begin(), starts.end(), ends.begin());
-    for (Index_ i = 0; i < num; ++i) {
+    for (decltype(num) i = 0; i < num; ++i) {
         auto& pos = ends[block[i]];
         buffer[pos] = metrics[i];
         ++pos;
     }
 
     // Using the ranges on the buffer.
-    size_t nblocks = starts.size();
+    auto nblocks = starts.size();
     output.reserve(nblocks);
-    for (size_t g = 0; g < nblocks; ++g) {
+    for (decltype(nblocks) g = 0; g < nblocks; ++g) {
         output.push_back(find_median_mad(ends[g] - starts[g], buffer.data() + starts[g], options));
     }
 

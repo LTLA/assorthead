@@ -156,7 +156,6 @@ ChooseFilterThresholdsResults<Float_> choose_filter_thresholds(const FindMedianM
 /**
  * This overload computes the median and MAD via `find_median_mad()` before deriving thresholds with `choose_filter_thresholds()`.
  *
- * @tparam Index_ Integer type for the array indices. 
  * @tparam Float_ Floating-point type for the metrics and thresholds.
  *
  * @param num Number of cells.
@@ -166,8 +165,8 @@ ChooseFilterThresholdsResults<Float_> choose_filter_thresholds(const FindMedianM
  *
  * @return The upper and lower thresholds derived from `metrics`.
  */
-template<typename Index_, typename Float_>
-ChooseFilterThresholdsResults<Float_> choose_filter_thresholds(Index_ num, Float_* metrics, const ChooseFilterThresholdsOptions& options) {
+template<typename Float_>
+ChooseFilterThresholdsResults<Float_> choose_filter_thresholds(std::size_t num, Float_* metrics, const ChooseFilterThresholdsOptions& options) {
     FindMedianMadOptions fopt;
     fopt.log = options.log;
     auto mm = find_median_mad(num, metrics, fopt);
@@ -177,7 +176,6 @@ ChooseFilterThresholdsResults<Float_> choose_filter_thresholds(Index_ num, Float
 /**
  * Overload of `choose_filter_thresholds()` that uses an auxiliary buffer to avoid mutating `metrics`.
  *
- * @tparam Index_ Integer type for the array indices. 
  * @tparam Value_ Type for the input data.
  * @tparam Float_ Floating-point type for the metrics and thresholds.
  *
@@ -189,8 +187,8 @@ ChooseFilterThresholdsResults<Float_> choose_filter_thresholds(Index_ num, Float
  *
  * @return The upper and lower thresholds derived from `metrics`.
  */
-template<typename Index_, typename Value_, typename Float_>
-ChooseFilterThresholdsResults<Float_> choose_filter_thresholds(Index_ num, const Value_* metrics, Float_* buffer, const ChooseFilterThresholdsOptions& options) {
+template<typename Value_, typename Float_>
+ChooseFilterThresholdsResults<Float_> choose_filter_thresholds(std::size_t num, const Value_* metrics, Float_* buffer, const ChooseFilterThresholdsOptions& options) {
     FindMedianMadOptions fopt;
     fopt.log = options.log;
     auto mm = find_median_mad(num, metrics, buffer, fopt);
@@ -215,7 +213,7 @@ ChooseFilterThresholdsResults<Float_> choose_filter_thresholds(Index_ num, const
  */
 template<typename Float_>
 std::vector<ChooseFilterThresholdsResults<Float_> > choose_filter_thresholds_blocked(
-    const std::vector<FindMedianMadResults<Float_> > mms,
+    const std::vector<FindMedianMadResults<Float_> >& mms,
     const ChooseFilterThresholdsOptions& options)
 {
     std::vector<ChooseFilterThresholdsResults<Float_> > output;
@@ -230,7 +228,6 @@ std::vector<ChooseFilterThresholdsResults<Float_> > choose_filter_thresholds_blo
  * This overload computes the median and MAD for each block via `find_median_mad_blocked()` 
  * before deriving thresholds in each block with `choose_filter_thresholds_blocked()`.
  *
- * @tparam Index_ Integer type for the array indices. 
  * @tparam Value_ Type for the input data.
  * @tparam Float_ Floating-point type for the metrics and thresholds.
  *
@@ -242,12 +239,12 @@ std::vector<ChooseFilterThresholdsResults<Float_> > choose_filter_thresholds_blo
  *
  * @return A vector containing the upper and lower thresholds for each block.
  */
-template<typename Index_, typename Value_, typename Block_, typename Float_>
+template<typename Value_, typename Block_, typename Float_>
 std::vector<ChooseFilterThresholdsResults<Float_> > choose_filter_thresholds_blocked(
-    Index_ num,
+    std::size_t num,
     const Value_* metrics,
     const Block_* block,
-    FindMedianMadWorkspace<Float_, Index_>* workspace,
+    FindMedianMadWorkspace<Float_>* workspace,
     const ChooseFilterThresholdsOptions& options)
 {
     FindMedianMadOptions fopt;

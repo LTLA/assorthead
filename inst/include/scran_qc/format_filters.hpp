@@ -3,7 +3,9 @@
 
 #include <vector>
 #include <algorithm>
-#include <cstdint>
+#include <cstddef>
+
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file format_filters.hpp
@@ -18,17 +20,17 @@ namespace scran_qc {
  * This is most easily done by using `tatami::make_DelayedSubset()` to subset the `tatami::Matrix` with the indices of the high-quality cells.
  * For this purpose, we can use `filter_index()` to convert the boolean filtering vector into a vector of sorted and unique column indices.
  *
- * @tparam Index_ Integer type for array indices.
  * @tparam Keep_ Boolean type for the filter.
+ * @tparam Index_ Integer type for array indices.
  *
  * @param num Number of cells in the dataset.
  * @param[in] filter Pointer to an array of length `num`, indicating whether a cell is of high quality.
  * @param[out] output On output, a vector of sorted and unique indices of the cells considered to be high quality.
  */
-template<typename Index_, typename Keep_>
-void filter_index(Index_ num, const Keep_* filter, std::vector<Index_>& output) {
+template<typename Keep_, typename Index_>
+void filter_index(std::size_t num, const Keep_* filter, std::vector<Index_>& output) {
     output.clear();
-    for (Index_ i = 0; i < num; ++i) {
+    for (decltype(num) i = 0; i < num; ++i) {
         if (filter[i]) {
             output.push_back(i);
         }
@@ -47,7 +49,7 @@ void filter_index(Index_ num, const Keep_* filter, std::vector<Index_>& output) 
  * @return Vector of sorted and unique indices of the cells considered to be high quality.
  */
 template<typename Index_, typename Keep_>
-std::vector<Index_> filter_index(Index_ num, const Keep_* filter) {
+std::vector<Index_> filter_index(std::size_t num, const Keep_* filter) {
     std::vector<Index_> output;
 #ifdef SCRAN_QC_TEST_INIT
     output.resize(10, SCRAN_QC_TEST_INIT);
@@ -71,11 +73,12 @@ std::vector<Index_> filter_index(Index_ num, const Keep_* filter) {
  * On output, this is filled with truthy values only for cells that are high quality in all modalities.
  */
 template<typename Keep_, typename Output_>
-void combine_filters(size_t num, const std::vector<Keep_*>& filters, Output_* output) {
+void combine_filters(std::size_t num, const std::vector<Keep_*>& filters, Output_* output) {
     std::copy_n(filters.front(), num, output);
-    for (size_t f = 1, nfilters = filters.size(); f < nfilters; ++f) {
+    auto nfilters = filters.size();
+    for (decltype(nfilters) f = 1; f < nfilters; ++f) {
         auto filt = filters[f];
-        for (size_t i = 0; i < num; ++i) {
+        for (decltype(num) i = 0; i < num; ++i) {
             output[i] = output[i] && filt[i];
         }
     }
@@ -93,9 +96,9 @@ void combine_filters(size_t num, const std::vector<Keep_*>& filters, Output_* ou
  *
  * @return Vector of length `num`, indicating which cells are high quality in all modalities.
  */
-template<typename Output_ = uint8_t, typename Keep_ = uint8_t>
-std::vector<Output_> combine_filters(size_t num, const std::vector<const Keep_*>& filters) {
-    std::vector<Output_> output(num
+template<typename Output_ = unsigned char, typename Keep_>
+std::vector<Output_> combine_filters(std::size_t num, const std::vector<const Keep_*>& filters) {
+    auto output = sanisizer::create<std::vector<Output_> >(num
 #ifdef SCRAN_QC_TEST_INIT
         , SCRAN_QC_TEST_INIT
 #endif
@@ -107,7 +110,6 @@ std::vector<Output_> combine_filters(size_t num, const std::vector<const Keep_*>
 /**
  * This has the same behavior as `combine_filters()` followed by `filter_index()`.
  *
- * @tparam Index_ Integer type for array indices.
  * @tparam Keep_ Boolean type for each filter modality.
  *
  * @param num Number of cells in the dataset.
@@ -119,10 +121,10 @@ template<typename Index_, typename Keep_>
 void combine_filters_index(Index_ num, const std::vector<const Keep_*>& filters, std::vector<Index_>& output) {
     output.clear();
 
-    size_t nfilters = filters.size();
-    for (Index_ i = 0; i < num; ++i) {
+    auto nfilters = filters.size();
+    for (decltype(num) i = 0; i < num; ++i) {
         bool keep = true;
-        for (size_t f = 0; f < nfilters; ++f) {
+        for (decltype(nfilters) f = 0; f < nfilters; ++f) {
             if (!filters[f][i]) {
                 keep = false;
                 break;

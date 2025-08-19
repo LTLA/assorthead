@@ -4,6 +4,9 @@
 #include <unordered_map>
 #include <vector>
 #include <algorithm>
+#include <cstddef>
+
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file clean_factor.hpp
@@ -30,10 +33,10 @@ namespace scran_aggregate {
  * For any observation `i`, it is guaranteed that `output[cleaned[i]] == factor[i]`.
  */
 template<typename Factor_, typename Output_>
-std::vector<Factor_> clean_factor(size_t n, const Factor_* factor, Output_* cleaned) {
+std::vector<Factor_> clean_factor(std::size_t n, const Factor_* factor, Output_* cleaned) {
     auto unique = [&]{ // scoping this in an IIFE to release map memory sooner.
         std::unordered_map<Factor_, Output_> mapping;
-        for (size_t i = 0; i < n; ++i) {
+        for (decltype(n) i = 0; i < n; ++i) {
             auto current = factor[i];
             auto mIt = mapping.find(current);
             if (mIt != mapping.end()) {
@@ -49,16 +52,16 @@ std::vector<Factor_> clean_factor(size_t n, const Factor_* factor, Output_* clea
 
     // Remapping to a sorted set.
     std::sort(unique.begin(), unique.end());
-    size_t nuniq = unique.size();
-    std::vector<Output_> remapping(nuniq);
-    std::vector<Factor_> output(nuniq);
-    for (size_t u = 0; u < nuniq; ++u) {
+    auto nuniq = unique.size();
+    auto remapping = sanisizer::create<std::vector<Output_> >(nuniq);
+    auto output = sanisizer::create<std::vector<Factor_> >(nuniq);
+    for (decltype(nuniq) u = 0; u < nuniq; ++u) {
         remapping[unique[u].second] = u;
         output[u] = unique[u].first;
     }
 
     // Mapping each cell to its sorted factor.
-    for (size_t i = 0; i < n; ++i) {
+    for (decltype(n) i = 0; i < n; ++i) {
         cleaned[i] = remapping[cleaned[i]];
     }
 

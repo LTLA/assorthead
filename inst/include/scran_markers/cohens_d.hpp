@@ -5,8 +5,11 @@
 #include <limits>
 #include <cmath>
 #include <type_traits>
+#include <cstddef>
 
 #include "PrecomputedPairwiseWeights.hpp"
+
+#include "sanisizer/sanisizer.hpp"
 
 namespace scran_markers {
 
@@ -49,12 +52,12 @@ Stat_ cohen_denominator(Stat_ left_var, Stat_ right_var) {
 // where groups are the faster-changing dimension and the blocks are slower.
 template<typename Stat_, typename Weight_, class Output_>
 void compute_pairwise_cohens_d_internal(
-    size_t g1,
-    size_t g2,
+    std::size_t g1,
+    std::size_t g2,
     const Stat_* means,
     const Stat_* vars,
-    size_t ngroups,
-    size_t nblocks,
+    std::size_t ngroups,
+    std::size_t nblocks,
     const PrecomputedPairwiseWeights<Weight_>& preweights,
     Stat_ threshold,
     Output_& output)
@@ -66,11 +69,11 @@ void compute_pairwise_cohens_d_internal(
     if (total_weight != 0) {
         total_weight = 0; // need to calculate it more dynamically if there are NaN variances.
 
-        for (size_t b = 0; b < nblocks; ++b) {
+        for (decltype(nblocks) b = 0; b < nblocks; ++b) {
             auto weight = winfo.first[b];
             if (weight) {
-                size_t offset1 = b * ngroups + g1; // no need to cast, everything's already a size_t.
-                size_t offset2 = b * ngroups + g2; // no need to cast, everything's already a size_t.
+                auto offset1 = sanisizer::nd_offset<std::size_t>(g1, ngroups, b); // remember, 'groups' is the faster-changing dimension.
+                auto offset2 = sanisizer::nd_offset<std::size_t>(g2, ngroups, b);
                 auto left_var = vars[offset1];
                 auto right_var = vars[offset2];
                 Stat_ denom = cohen_denominator(left_var, right_var);
@@ -118,12 +121,12 @@ void compute_pairwise_cohens_d_internal(
 
 template<typename Stat_, typename Weight_>
 Stat_ compute_pairwise_cohens_d_one_sided(
-    size_t g1,
-    size_t g2,
+    std::size_t g1,
+    std::size_t g2,
     const Stat_* means,
     const Stat_* vars,
-    size_t ngroups,
-    size_t nblocks,
+    std::size_t ngroups,
+    std::size_t nblocks,
     const PrecomputedPairwiseWeights<Weight_>& preweights,
     Stat_ threshold)
 {
@@ -134,12 +137,12 @@ Stat_ compute_pairwise_cohens_d_one_sided(
 
 template<typename Stat_, typename Weight_>
 std::pair<Stat_, Stat_> compute_pairwise_cohens_d_two_sided(
-    size_t g1,
-    size_t g2,
+    std::size_t g1,
+    std::size_t g2,
     const Stat_* means,
     const Stat_* vars,
-    size_t ngroups,
-    size_t nblocks,
+    std::size_t ngroups,
+    std::size_t nblocks,
     const PrecomputedPairwiseWeights<Weight_>& preweights,
     Stat_ threshold)
 {
@@ -152,19 +155,19 @@ template<typename Stat_, typename Weight_>
 void compute_pairwise_cohens_d(
     const Stat_* means,
     const Stat_* vars,
-    size_t ngroups,
-    size_t nblocks,
+    std::size_t ngroups,
+    std::size_t nblocks,
     const PrecomputedPairwiseWeights<Weight_>& preweights,
     Stat_ threshold,
     Stat_* output)
 {
-    for (size_t g1 = 0; g1 < ngroups; ++g1) {
-        for (size_t g2 = 0; g2 < g1; ++g2) {
+    for (decltype(ngroups) g1 = 0; g1 < ngroups; ++g1) {
+        for (decltype(g1) g2 = 0; g2 < g1; ++g2) {
             auto tmp = compute_pairwise_cohens_d_two_sided(g1, g2, means, vars, ngroups, nblocks, preweights, threshold);
-            output[g1 * ngroups + g2] = tmp.first;
-            output[g2 * ngroups + g1] = tmp.second;
+            output[sanisizer::nd_offset<std::size_t>(g2, ngroups, g1)] = tmp.first;
+            output[sanisizer::nd_offset<std::size_t>(g1, ngroups, g2)] = tmp.second;
         }
-        output[g1 * ngroups + g1] = 0; // zero the diagonals for consistency.
+        output[sanisizer::nd_offset<std::size_t>(g1, ngroups, g1)] = 0; // zero the diagonals for consistency.
     }
 }
 

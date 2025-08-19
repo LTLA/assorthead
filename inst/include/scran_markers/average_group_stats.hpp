@@ -3,28 +3,30 @@
 
 #include <vector>
 #include <limits>
+#include <cstddef>
+
+#include "sanisizer/sanisizer.hpp"
 
 namespace scran_markers {
 
 namespace internal {
 
 template<typename Weight_>
-std::vector<Weight_> compute_total_weight_per_group(size_t ngroups, size_t nblocks, const Weight_* combo_weights) {
-    std::vector<Weight_> output(ngroups);
-    for (size_t b = 0; b < nblocks; ++b) {
-        for (size_t g = 0; g < ngroups; ++g) {
-            output[g] += *combo_weights;
-            ++combo_weights;
+std::vector<Weight_> compute_total_weight_per_group(std::size_t ngroups, std::size_t nblocks, const Weight_* combo_weights) {
+    auto output = sanisizer::create<std::vector<Weight_> >(ngroups);
+    for (decltype(nblocks) b = 0; b < nblocks; ++b) {
+        for (decltype(ngroups) g = 0; g < ngroups; ++g) {
+            output[g] += combo_weights[sanisizer::nd_offset<std::size_t>(g, ngroups, b)];
         }
     }
     return output;
 }
 
-template<typename Stat_, typename Weight_>
+template<typename Gene_, typename Stat_, typename Weight_>
 void average_group_stats(
-    size_t gene, 
-    size_t ngroups,
-    size_t nblocks,
+    Gene_ gene,
+    std::size_t ngroups,
+    std::size_t nblocks,
     const Stat_* tmp_means,
     const Stat_* tmp_detected,
     const Weight_* combo_weights,
@@ -32,7 +34,7 @@ void average_group_stats(
     const std::vector<Stat_*>& means,
     const std::vector<Stat_*>& detected)
 {
-    for (size_t g = 0; g < ngroups; ++g) {
+    for (decltype(ngroups) g = 0; g < ngroups; ++g) {
         auto& gmean = means[g][gene];
         auto& gdet = detected[g][gene];
 
@@ -46,9 +48,9 @@ void average_group_stats(
         gmean = 0;
         gdet = 0;
 
-        for (size_t b = 0; b < nblocks; ++b) {
+        for (decltype(nblocks) b = 0; b < nblocks; ++b) {
             // Remember, blocks are the slower changing dimension, so we need to jump by 'ngroups'.
-            size_t offset = b * ngroups + g; // already size_t's.
+            auto offset = sanisizer::nd_offset<std::size_t>(g, ngroups, b);
             const auto& curweight = combo_weights[offset];
             if (curweight) {
                 gmean += curweight * tmp_means[offset];
@@ -61,22 +63,33 @@ void average_group_stats(
     }
 }
 
-template<typename Stat_>
+template<typename Gene_, typename Stat_>
 void fill_average_results(
-    size_t ngenes,
-    size_t ngroups,
+    Gene_ ngenes,
+    std::size_t ngroups,
     std::vector<std::vector<Stat_> >& mean_res, 
     std::vector<std::vector<Stat_> >& detected_res, 
     std::vector<Stat_*>& mean_ptrs,
     std::vector<Stat_*>& detected_ptrs)
 {
     mean_res.reserve(ngroups);
+    auto mrngenes = sanisizer::cast<decltype(mean_res.front().size())>(ngenes);
     detected_res.reserve(ngroups);
+    auto drngenes = sanisizer::cast<decltype(detected_res.front().size())>(ngenes);
     mean_ptrs.reserve(ngroups);
     detected_ptrs.reserve(ngroups);
-    for (size_t g = 0; g < ngroups; ++g) {
-        mean_res.emplace_back(ngenes);
-        detected_res.emplace_back(ngenes);
+
+    for (decltype(ngroups) g = 0; g < ngroups; ++g) {
+        mean_res.emplace_back(mrngenes
+#ifdef SCRAN_MARKERS_TEST_INIT
+            , SCRAN_MARKERS_TEST_INIT
+#endif
+        );
+        detected_res.emplace_back(drngenes
+#ifdef SCRAN_MARKERS_TEST_INIT
+            , SCRAN_MARKERS_TEST_INIT
+#endif
+        );
         mean_ptrs.emplace_back(mean_res.back().data());
         detected_ptrs.emplace_back(detected_res.back().data());
     }

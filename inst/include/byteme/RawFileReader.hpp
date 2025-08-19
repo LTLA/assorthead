@@ -27,14 +27,14 @@ struct RawFileReaderOptions {
      * Size of the buffer in which to store the loaded file contents.
      * Larger values usually reduce computational time at the cost of increased memory usage.
      */
-    std::size_t buffer_size = 65536;
+    std::size_t buffer_size = cap<std::size_t>(65536);
 
     /**
      * Size of the internal buffer used by `setvbuf()`.
      * Larger values usually reduce computational time at the cost of increased memory usage.
      * If no value is supplied, the default buffer size is not changed.
      */
-    std::optional<unsigned> bufsiz;
+    std::optional<std::size_t> bufsiz;
 };
 
 /**
