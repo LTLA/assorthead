@@ -214,7 +214,7 @@ void run_sparse(
             const auto& values = emat.get_values();
             for (Index_ g = start, end = start + length; g < end; ++g) {
                 auto offset = pointers[g];
-                auto next_offset = pointers[sanisizer::sum_unsafe<decltype(pointers.size())>(g, 1)];
+                auto next_offset = pointers[g + 1]; // increment won't overflow as 'g + 1 <= end'.
                 Index_ num_nonzero = next_offset - offset;
                 auto results = tatami_stats::variances::direct(values.data() + offset, num_nonzero, ncells, /* skip_nan = */ false);
                 center_v.coeffRef(g) = results.first;

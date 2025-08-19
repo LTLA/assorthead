@@ -269,7 +269,7 @@ void compute_blockwise_mean_and_variance_realized_sparse(
 
         for (auto g = start, end = start + length; g < end; ++g) {
             auto offset = pointers[g];
-            auto next_offset = pointers[sanisizer::sum_unsafe<decltype(pointers.size())>(g, 1)];
+            auto next_offset = pointers[g + 1]; // increment won't overflow as 'g < end' and 'end' is of the same type. 
             compute_sparse_mean_and_variance_blocked(
                 static_cast<decltype(ncells)>(next_offset - offset),
                 values.data() + offset,
@@ -527,8 +527,7 @@ inline void project_matrix_realized_sparse(
         auto multipliers = sanisizer::create<Eigen::VectorXd>(rank);
         for (decltype(ngenes) g = 0; g < ngenes; ++g) {
             multipliers.noalias() = scaled_rotation.row(g);
-            auto start = pointers[g];
-            auto end = pointers[sanisizer::sum_unsafe<decltype(pointers.size())>(g, 1)];
+            auto start = pointers[g], end = pointers[g + 1]; // increment is safe as 'g + 1 <= ngenes'.
             for (auto i = start; i < end; ++i) {
                 components.col(indices[i]).noalias() += values[i] * multipliers;
             }
@@ -538,7 +537,7 @@ inline void project_matrix_realized_sparse(
         const auto& row_nonzero_starts = emat.get_secondary_nonzero_starts();
         irlba::parallelize(nthreads, [&](int t) -> void { 
             const auto& starts = row_nonzero_starts[t];
-            const auto& ends = row_nonzero_starts[sanisizer::sum_unsafe<decltype(row_nonzero_starts.size())>(t, 1)];
+            const auto& ends = row_nonzero_starts[t + 1]; // increment is safe as 't + 1 <= nthreads'.
             auto multipliers = sanisizer::create<Eigen::VectorXd>(rank);
 
             for (decltype(ngenes) g = 0; g < ngenes; ++g) {
