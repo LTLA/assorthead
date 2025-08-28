@@ -19,7 +19,7 @@ knncolle_annoy,https://github.com/knncolle/knncolle_annoy,v0.2.0,"**knncolle** e
 knncolle_hnsw,https://github.com/knncolle/knncolle_hnsw,v0.2.1,"**knncolle** extension for HNSW"
 knncolle_kmknn,https://github.com/knncolle/knncolle_kmknn,v0.1.0,"**knncolle** extension for HNSW"
 kaori,https://github.com/crisprverse/kaori,v1.1.2,"Sequence alignment and counting for CRISPR guides"
-nenesub,https://github.com/libscran/nenesub,v0.2.0,"Subsampling based on nearest neighbors"
+nenesub,https://github.com/libscran/nenesub,v0.2.1,"Subsampling based on nearest neighbors"
 raiigraph,https://github.com/LTLA/raiigraph,v1.1.0,"C++ wrappers around **igraph** data structures"
 scran_qc,https://github.com/libscran/scran_qc,v0.2.0,"Simple quality control for single-cell data"
 scran_norm,https://github.com/libscran/scran_norm,v0.2.0,"Scaling normalization for single-cell data"
