@@ -5,6 +5,7 @@
 
 #include "cast.hpp"
 #include "comparisons.hpp"
+#include "utils.hpp"
 
 /**
  * @file arithmetic.hpp

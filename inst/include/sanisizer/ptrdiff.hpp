@@ -2,10 +2,10 @@
 #define SANISIZER_PTRDIFF_HPP
 
 #include <limits>
-#include <type_traits>
+#include <utility>
 
 #include "comparisons.hpp"
-#include "cast.hpp"
+#include "utils.hpp"
 
 /**
  * @file ptrdiff.hpp
@@ -25,7 +25,7 @@ namespace sanisizer {
  */
 template<typename Iterator_, typename MaxDiff_>
 void can_ptrdiff(MaxDiff_ max_diff) {
-    typedef decltype(std::declval<Iterator_>() - std::declval<Iterator_>()) Diff;
+    typedef decltype(I(std::declval<Iterator_>() - std::declval<Iterator_>())) Diff;
     constexpr auto theoretical_max_diff = std::numeric_limits<Diff>::max();
     if constexpr(!is_greater_than_or_equal(theoretical_max_diff, std::numeric_limits<MaxDiff_>::max())) {
         if (!is_greater_than_or_equal(theoretical_max_diff, max_diff)) {

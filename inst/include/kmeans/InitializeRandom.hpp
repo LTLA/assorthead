@@ -5,10 +5,11 @@
 #include <cstdint>
 #include <random>
 
+#include "sanisizer/sanisizer.hpp"
+#include "aarand/aarand.hpp"
+
 #include "Initialize.hpp"
 #include "copy_into_array.hpp"
-
-#include "aarand/aarand.hpp"
 
 /**
  * @file InitializeRandom.hpp
@@ -19,25 +20,30 @@
 namespace kmeans {
 
 /**
- * @brief Options to use for `InitializeRandom`.
+ * Type of the pseudo-random number generator for `InitializeRandom`.
+ */
+typedef std::mt19937_64 InitializeRandomRng;
+
+/**
+ * @brief Options for `InitializeRandom`.
  */
 struct InitializeRandomOptions {
     /**
      * Random seed to use to construct the PRNG prior to sampling.
      */
-    uint64_t seed = 6523u;
+    typename InitializeRandomRng::result_type seed = sanisizer::cap<InitializeRandomRng::result_type>(6523);
 };
 
 /**
  * @brief Initialize by sampling random observations without replacement.
  *
- * @tparam Index_ Integer type for the observation indices in the input dataset.
- * @tparam Data_ Numeric type for the input dataset.
- * @tparam Cluster_ Integer type for the cluster assignments.
- * @tparam Float_ Floating-point type for the centroids.
- * This will also be used for any internal distance calculations.
- * @tparam Matrix_ Class of the input data matrix.
- * This should satisfy the `Matrix` interface.
+ * @tparam Index_ Integer type of the observation indices. 
+ * This should be the same as the index type of `Matrix_`.
+ * @tparam Data_ Numeric type of the input dataset.
+ * This should be the same as the data type of `Matrix_`.
+ * @tparam Cluster_ Integer type of the cluster assignments.
+ * @tparam Float_ Floating-point type of the centroids.
+ * @tparam Matrix_ Class satisfying the `Matrix` interface.
  */
 template<typename Index_, typename Data_, typename Cluster_, typename Float_, class Matrix_ = Matrix<Index_, Data_> >
 class InitializeRandom final : public Initialize<Index_, Data_, Cluster_, Float_, Matrix_> { 
@@ -57,8 +63,8 @@ public:
 
 public:
     /**
-     * @return Options for random initialization,
-     * to be modified prior to calling `run()`.
+     * @return Options for random initialization.
+     * This can be modified prior to calling `run()`.
      */
     InitializeRandomOptions& get_options() {
         return my_options;
@@ -68,13 +74,14 @@ public:
     /**
      * @cond
      */
-    Cluster_ run(const Matrix_& data, Cluster_ ncenters, Float_* centers) const {
-        std::mt19937_64 eng(my_options.seed);
-        auto nobs = data.num_observations();
-        std::vector<Index_> chosen(std::min(nobs, static_cast<Index_>(ncenters)));
-        aarand::sample(nobs, ncenters, chosen.begin(), eng);
+    Cluster_ run(const Matrix_& data, const Cluster_ ncenters, Float_* const centers) const {
+        InitializeRandomRng eng(my_options.seed);
+        const auto nobs = data.num_observations();
+        const decltype(I(nobs)) nchosen = sanisizer::min(nobs, ncenters);
+        auto chosen = sanisizer::create<std::vector<Index_> >(nchosen);
+        aarand::sample(nobs, nchosen, chosen.begin(), eng);
         internal::copy_into_array(data, chosen, centers);
-        return chosen.size();
+        return nchosen;
     }
     /**
      * @endcond

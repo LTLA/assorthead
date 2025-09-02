@@ -1,10 +1,10 @@
 #ifndef SANISIZER_CAST_HPP
 #define SANISIZER_CAST_HPP
 
-#include "comparisons.hpp"
+#include <limits>
 
-#include <stdexcept>
-#include <utility>
+#include "comparisons.hpp"
+#include "utils.hpp"
 
 /**
  * @file cast.hpp
@@ -12,23 +12,6 @@
  */
 
 namespace sanisizer {
-
-/**
- * @brief Error from an integer overflow.
- *
- * This allow callers of various **sanisizer** functions to catch overflows and handle them accordingly.
- */
-class OverflowError final : public std::runtime_error {
-public:
-    /**
-     * @cond
-     */
-    template<typename ... Args_>
-    OverflowError(Args_&&... args) : std::runtime_error(std::forward<Args_>(args)...) {}
-    /**
-     * @endcond
-     */
-};
 
 /**
  * Cast `x` to the type of the size of a C-style array or STL container.
@@ -74,25 +57,6 @@ Input_ can_cast(Input_ x) {
         }
     }
     return x;
-}
-
-/**
- * Create a new container of a specified size.
- * This protects against overflow when casting the integer size to the container's size type.
- *
- * @tparam Container_ Container class with a `size()` method and a constructor that accepts the size as the first argument.
- * @tparam Input_ Integer type of the input size.
- * @tparam Args_ Further arguments to pass to the container's constructor.
- *
- * @param x Non-negative value representing the desired container size.
- * @param args Additional arguments to pass to the `Container_` constructor after the size.
- *
- * @return An instance of the container, constructed to be of size `x`.
- * If overflow would occur, an `OverflowError` is raised.
- */
-template<class Container_, typename Input_, typename ... Args_>
-Container_ create(Input_ x, Args_&&... args) {
-    return Container_(cast<decltype(std::declval<Container_>().size())>(x), std::forward<Args_>(args)...);
 }
 
 }
