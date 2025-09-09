@@ -1,9 +1,8 @@
-#ifndef UMAPPP_UTILS_HPP
-#define UMAPPP_UTILS_HPP
+#ifndef UMAPPP_PARALLELIZE_HPP
+#define UMAPPP_PARALLELIZE_HPP
 
 /**
- * @file utils.hpp
- *
+ * @file parallelize.hpp
  * @brief Utilities for parallelization.
  */
 
@@ -14,7 +13,7 @@
 namespace umappp {
 
 /**
- * @tparam Task_ Integer type for the number of tasks.
+ * @tparam Task_ Integer type of the number of tasks.
  * @tparam Run_ Function to execute a range of tasks.
  *
  * @param num_workers Number of workers.
@@ -26,7 +25,7 @@ namespace umappp {
  * Any user-defined macro should accept the same arguments as `subpar::parallelize_range()`.
  */
 template<typename Task_, class Run_>
-void parallelize(int num_workers, Task_ num_tasks, Run_ run_task_range) {
+void parallelize(const int num_workers, const Task_ num_tasks, Run_ run_task_range) {
 #ifndef UMAPPP_CUSTOM_PARALLEL
     // Don't make this nothrow_ = true, there's too many allocations and the
     // derived methods for the nearest neighbors search could do anything...

@@ -36,7 +36,7 @@ gsdecon,https://github.com/libscran/gsdecon,v0.1.0,"Compute gene set scores via 
 clrm1,https://github.com/libscran/clrm1,v0.2.0,"Compute gene set scores via eigengenes"
 mnncorrect,https://github.com/libscran/mnncorrect,v3.0.0,"Batch correction with mutual nearest neighbors"
 qdtsne,https://github.com/libscran/qdtsne,v3.0.0,"Quick-and-dirty t-SNE in C++"
-umappp,https://github.com/libscran/umappp,v3.0.0,"C++ implementation of the UMAP algorithm"
+umappp,https://github.com/libscran/umappp,v3.1.0,"C++ implementation of the UMAP algorithm"
 mumosa,https://github.com/libscran/mumosa,v0.2.0,"Simple multi-modal analyses of single-cell data"
 phyper,https://github.com/libscran/phyper,v0.1.1,"Hypergeometric tail calculations for enrichment testing"
 subpar,https://github.com/LTLA/subpar,v0.4.1,"Substitutable parallelization for C++ libraries"
