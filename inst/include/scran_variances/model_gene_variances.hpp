@@ -1,8 +1,6 @@
 #ifndef SCRAN_MODEL_GENE_VARIANCES_H
 #define SCRAN_MODEL_GENE_VARIANCES_H
 
-#include "fit_variance_trend.hpp"
-
 #include <algorithm>
 #include <vector>
 #include <limits>
@@ -12,6 +10,9 @@
 #include "tatami_stats/tatami_stats.hpp"
 #include "scran_blocks/scran_blocks.hpp"
 #include "sanisizer/sanisizer.hpp"
+
+#include "fit_variance_trend.hpp"
+#include "utils.hpp"
 
 /**
  * @file model_gene_variances.hpp
@@ -32,11 +33,17 @@ struct ModelGeneVariancesOptions {
     /**
      * Policy to use for weighting the contribution from each block when computing the average for each statistic.
      * Only relevant to `model_gene_variances_blocked()` overloads where averaged outputs are requested.
+     *
+     * The default of `scran_blocks::WeightPolicy::VARIABLE` is to define equal weights for blocks once they reach a certain size (see `ModelGeneVariancesOptions::variable_block_weight_parameters`).
+     * For smaller blocks, the weight is linearly proportional to its size to avoid outsized contributions from very small blocks.
+     *
+     * Other options include `scran_blocks::WeightPolicy::EQUAL`, where all blocks are equally weighted regardless of size;
+     * and `scran_blocks::WeightPolicy::NONE`, where the contribution of each block is proportional to its size.
      */
     scran_blocks::WeightPolicy block_weight_policy = scran_blocks::WeightPolicy::VARIABLE;
 
     /**
-     * Parameters for the variable block weights.
+     * Parameters for the variable block weights, including the threshold at which blocks are considered to be large enough to have equal weight.
      * Only relevant to `model_gene_variances_blocked()` overloads where averaged outputs are requested
      * and `ModelGeneVariancesOptions::block_weight_policy = scran_blocks::WeightPolicy::VARIABLE`.
      */
@@ -44,20 +51,20 @@ struct ModelGeneVariancesOptions {
 
     /**
      * Whether to compute the average of each statistic across blocks.
-     * Note that this only affects the `model_gene_variances_blocked()` method that returns a `ModelGeneVariancesBlockedResults` object.
+     * This only affects the `model_gene_variances_blocked()` method that returns a `ModelGeneVariancesBlockedResults` object.
      */
     bool compute_average = true;
 
     /**
-     * Number of threads to use. 
-     * The parallelization scheme is defined by `tatami::parallelize()` and `FitVarianceTrendOptions::num_threads`.
+     * Number of threads to use for the variance calculations and trend fitting. 
+     * The parallelization scheme is defined by `tatami::parallelize()`. 
      */
     int num_threads = 1;
 };
 
 /**
  * @brief Buffers for `model_gene_variances()` and friends.
- * @tparam Stat_ Floating-point type for the output statistics.
+ * @tparam Stat_ Floating-point type of the output statistics.
  *
  * In general, the pointers in this class should _not_ be set to `NULL`.
  * The only exception is for instances of this class that are used as `ModelGeneVariancesBlockedBuffers::average`,
@@ -88,7 +95,7 @@ struct ModelGeneVariancesBuffers {
 
 /**
  * @brief Results of `model_gene_variances()`. 
- * @tparam Stat_ Floating-point type for the output statistics.
+ * @tparam Stat_ Floating-point type of the output statistics.
  */
 template<typename Stat_>
 struct ModelGeneVariancesResults {
@@ -98,23 +105,23 @@ struct ModelGeneVariancesResults {
     ModelGeneVariancesResults() = default;
 
     template<typename Ngenes_>
-    ModelGeneVariancesResults(Ngenes_ ngenes) :
-        means(sanisizer::cast<decltype(means.size())>(ngenes)
+    ModelGeneVariancesResults(const Ngenes_ ngenes) :
+        means(sanisizer::cast<decltype(I(means.size()))>(ngenes)
 #ifdef SCRAN_VARIANCES_TEST_INIT
             , SCRAN_VARIANCES_TEST_INIT
 #endif
         ),
-        variances(sanisizer::cast<decltype(variances.size())>(ngenes)
+        variances(sanisizer::cast<decltype(I(variances.size()))>(ngenes)
 #ifdef SCRAN_VARIANCES_TEST_INIT
             , SCRAN_VARIANCES_TEST_INIT
 #endif
         ),
-        fitted(sanisizer::cast<decltype(fitted.size())>(ngenes)
+        fitted(sanisizer::cast<decltype(I(fitted.size()))>(ngenes)
 #ifdef SCRAN_VARIANCES_TEST_INIT
             , SCRAN_VARIANCES_TEST_INIT
 #endif
         ),
-        residuals(sanisizer::cast<decltype(residuals.size())>(ngenes)
+        residuals(sanisizer::cast<decltype(I(residuals.size()))>(ngenes)
 #ifdef SCRAN_VARIANCES_TEST_INIT
             , SCRAN_VARIANCES_TEST_INIT
 #endif
@@ -147,7 +154,7 @@ struct ModelGeneVariancesResults {
 
 /**
  * @brief Buffers for `model_gene_variances_blocked()`.
- * @tparam Stat_ Floating-point type for the output statistics.
+ * @tparam Stat_ Floating-point type of the output statistics.
  */
 template<typename Stat_>
 struct ModelGeneVariancesBlockedBuffers {
@@ -166,7 +173,7 @@ struct ModelGeneVariancesBlockedBuffers {
 
 /**
  * @brief Results of `model_gene_variances_blocked()`.
- * @tparam Stat_ Floating-point type for the output statistics.
+ * @tparam Stat_ Floating-point type of the output statistics.
  */
 template<typename Stat_>
 struct ModelGeneVariancesBlockedResults {
@@ -176,9 +183,9 @@ struct ModelGeneVariancesBlockedResults {
     ModelGeneVariancesBlockedResults() = default;
 
     template<typename Ngenes_, typename Nblocks_>
-    ModelGeneVariancesBlockedResults(Ngenes_ ngenes, Nblocks_ nblocks, bool compute_average) : average(compute_average ? ngenes : 0) {
+    ModelGeneVariancesBlockedResults(Ngenes_ ngenes, Nblocks_ nblocks, const bool compute_average) : average(compute_average ? ngenes : 0) {
         per_block.reserve(nblocks);
-        for (decltype(nblocks) b = 0; b < nblocks; ++b) {
+        for (decltype(I(nblocks)) b = 0; b < nblocks; ++b) {
             per_block.emplace_back(ngenes);
         }
     }
@@ -207,15 +214,15 @@ template<typename Value_, typename Index_, typename Stat_, typename Block_>
 void compute_variances_dense_row(
     const tatami::Matrix<Value_, Index_>& mat,
     const std::vector<ModelGeneVariancesBuffers<Stat_> >& buffers,
-    const Block_* block,
+    const Block_* const block,
     const std::vector<Index_>& block_size,
-    int num_threads)
+    const int num_threads)
 {
-    bool blocked = (block != NULL);
-    auto nblocks = block_size.size();
-    auto NR = mat.nrow(), NC = mat.ncol();
+    const bool blocked = (block != NULL);
+    const auto nblocks = block_size.size();
+    const auto NR = mat.nrow(), NC = mat.ncol();
 
-    tatami::parallelize([&](int, Index_ start, Index_ length) -> void {
+    tatami::parallelize([&](const int, const Index_ start, const Index_ length) -> void {
         auto tmp_means = sanisizer::create<std::vector<Stat_> >(blocked ? nblocks : 0);
         auto tmp_vars = sanisizer::create<std::vector<Stat_> >(blocked ? nblocks : 0);
 
@@ -236,12 +243,12 @@ void compute_variances_dense_row(
                     false,
                     static_cast<Index_*>(NULL)
                 );
-                for (decltype(nblocks) b = 0; b < nblocks; ++b) {
+                for (decltype(I(nblocks)) b = 0; b < nblocks; ++b) {
                     buffers[b].means[r] = tmp_means[b];
                     buffers[b].variances[r] = tmp_vars[b];
                 }
             } else {
-                auto stat = tatami_stats::variances::direct(ptr, NC, false);
+                const auto stat = tatami_stats::variances::direct(ptr, NC, false);
                 buffers[0].means[r] = stat.first;
                 buffers[0].variances[r] = stat.second;
             }
@@ -253,24 +260,26 @@ template<typename Value_, typename Index_, typename Stat_, typename Block_>
 void compute_variances_sparse_row(
     const tatami::Matrix<Value_, Index_>& mat,
     const std::vector<ModelGeneVariancesBuffers<Stat_> >& buffers,
-    const Block_* block,
+    const Block_* const block,
     const std::vector<Index_>& block_size,
-    int num_threads)
+    const int num_threads)
 {
-    bool blocked = (block != NULL);
-    auto nblocks = block_size.size();
-    auto NR = mat.nrow(), NC = mat.ncol();
+    const bool blocked = (block != NULL);
+    const auto nblocks = block_size.size();
+    const auto NR = mat.nrow(), NC = mat.ncol();
 
-    tatami::parallelize([&](int, Index_ start, Index_ length) -> void {
+    tatami::parallelize([&](const int, const Index_ start, const Index_ length) -> void {
         auto tmp_means = sanisizer::create<std::vector<Stat_> >(nblocks);
         auto tmp_vars = sanisizer::create<std::vector<Stat_> >(nblocks);
         auto tmp_nzero = sanisizer::create<std::vector<Index_> >(nblocks);
 
         auto vbuffer = tatami::create_container_of_Index_size<std::vector<Value_> >(NC);
         auto ibuffer = tatami::create_container_of_Index_size<std::vector<Index_> >(NC);
-        tatami::Options opt;
-        opt.sparse_ordered_index = false;
-        auto ext = tatami::consecutive_extractor<true>(mat, true, start, length, opt);
+        auto ext = tatami::consecutive_extractor<true>(mat, true, start, length, [&]{
+            tatami::Options opt;
+            opt.sparse_ordered_index = false;
+            return opt;
+        }());
 
         for (Index_ r = start, end = start + length; r < end; ++r) {
             auto range = ext->fetch(vbuffer.data(), ibuffer.data());
@@ -289,12 +298,12 @@ void compute_variances_sparse_row(
                     false,
                     static_cast<Index_*>(NULL)
                 );
-                for (decltype(nblocks) b = 0; b < nblocks; ++b) {
+                for (decltype(I(nblocks)) b = 0; b < nblocks; ++b) {
                     buffers[b].means[r] = tmp_means[b];
                     buffers[b].variances[r] = tmp_vars[b];
                 }
             } else {
-                auto stat = tatami_stats::variances::direct(range.value, range.number, NC, false);
+                const auto stat = tatami_stats::variances::direct(range.value, range.number, NC, false);
                 buffers[0].means[r] = stat.first;
                 buffers[0].variances[r] = stat.second;
             }
@@ -306,15 +315,15 @@ template<typename Value_, typename Index_, typename Stat_, typename Block_>
 void compute_variances_dense_column(
     const tatami::Matrix<Value_, Index_>& mat,
     const std::vector<ModelGeneVariancesBuffers<Stat_> >& buffers,
-    const Block_* block,
+    const Block_* const block,
     const std::vector<Index_>& block_size,
-    int num_threads)
+    const int num_threads)
 {
-    bool blocked = (block != NULL);
-    auto nblocks = block_size.size();
-    auto NR = mat.nrow(), NC = mat.ncol();
+    const bool blocked = (block != NULL);
+    const auto nblocks = block_size.size();
+    const auto NR = mat.nrow(), NC = mat.ncol();
 
-    tatami::parallelize([&](int thread, Index_ start, Index_ length) -> void {
+    tatami::parallelize([&](const int thread, const Index_ start, const Index_ length) -> void {
         auto buffer = tatami::create_container_of_Index_size<std::vector<Value_> >(length);
         auto ext = tatami::consecutive_extractor<false>(mat, false, static_cast<Index_>(0), NC, start, length);
 
@@ -325,23 +334,23 @@ void compute_variances_dense_column(
 
         std::vector<tatami_stats::variances::RunningDense<Stat_, Value_, Index_> > runners;
         runners.reserve(nblocks);
-        for (decltype(nblocks) b = 0; b < nblocks; ++b) {
+        for (decltype(I(nblocks)) b = 0; b < nblocks; ++b) {
             runners.emplace_back(length, local_means.data(b), local_vars.data(b), false);
         }
 
         if (blocked) {
-            for (decltype(NC) c = 0; c < NC; ++c) {
+            for (decltype(I(NC)) c = 0; c < NC; ++c) {
                 auto ptr = ext->fetch(buffer.data());
                 runners[block[c]].add(ptr);
             }
         } else {
-            for (decltype(NC) c = 0; c < NC; ++c) {
+            for (decltype(I(NC)) c = 0; c < NC; ++c) {
                 auto ptr = ext->fetch(buffer.data());
                 runners[0].add(ptr);
             }
         }
 
-        for (decltype(nblocks) b = 0; b < nblocks; ++b) {
+        for (decltype(I(nblocks)) b = 0; b < nblocks; ++b) {
             runners[b].finish();
         }
         local_vars.transfer();
@@ -353,24 +362,26 @@ template<typename Value_, typename Index_, typename Stat_, typename Block_>
 void compute_variances_sparse_column(
     const tatami::Matrix<Value_, Index_>& mat,
     const std::vector<ModelGeneVariancesBuffers<Stat_> >& buffers,
-    const Block_* block,
+    const Block_* const block,
     const std::vector<Index_>& block_size,
-    int num_threads) 
+    const int num_threads) 
 {
-    bool blocked = (block != NULL);
-    auto nblocks = block_size.size();
-    auto NR = mat.nrow(), NC = mat.ncol();
+    const bool blocked = (block != NULL);
+    const auto nblocks = block_size.size();
+    const auto NR = mat.nrow(), NC = mat.ncol();
     auto nonzeros = sanisizer::create<std::vector<std::vector<Index_> > >(
         nblocks,
         tatami::create_container_of_Index_size<std::vector<Index_> >(NR)
     );
 
-    tatami::parallelize([&](int thread, Index_ start, Index_ length) -> void {
+    tatami::parallelize([&](const int thread, const Index_ start, const Index_ length) -> void {
         auto vbuffer = tatami::create_container_of_Index_size<std::vector<Value_> >(length);
         auto ibuffer = tatami::create_container_of_Index_size<std::vector<Index_> >(length);
-        tatami::Options opt;
-        opt.sparse_ordered_index = false;
-        auto ext = tatami::consecutive_extractor<true>(mat, false, static_cast<Index_>(0), NC, start, length, opt);
+        auto ext = tatami::consecutive_extractor<true>(mat, false, static_cast<Index_>(0), NC, start, length, [&]{
+            tatami::Options opt;
+            opt.sparse_ordered_index = false;
+            return opt;
+        }());
 
         auto get_var = [&](Index_ b) -> Stat_* { return buffers[b].variances; };
         tatami_stats::LocalOutputBuffers<Stat_, decltype(get_var)> local_vars(thread, nblocks, start, length, std::move(get_var));
@@ -379,23 +390,23 @@ void compute_variances_sparse_column(
 
         std::vector<tatami_stats::variances::RunningSparse<Stat_, Value_, Index_> > runners;
         runners.reserve(nblocks);
-        for (decltype(nblocks) b = 0; b < nblocks; ++b) {
+        for (decltype(I(nblocks)) b = 0; b < nblocks; ++b) {
             runners.emplace_back(length, local_means.data(b), local_vars.data(b), false, start);
         }
 
         if (blocked) {
-            for (decltype(NC) c = 0; c < NC; ++c) {
+            for (decltype(I(NC)) c = 0; c < NC; ++c) {
                 auto range = ext->fetch(vbuffer.data(), ibuffer.data());
                 runners[block[c]].add(range.value, range.index, range.number);
             }
         } else {
-            for (decltype(NC) c = 0; c < NC; ++c) {
+            for (decltype(I(NC)) c = 0; c < NC; ++c) {
                 auto range = ext->fetch(vbuffer.data(), ibuffer.data());
                 runners[0].add(range.value, range.index, range.number);
             }
         }
 
-        for (decltype(nblocks) b = 0; b < nblocks; ++b) {
+        for (decltype(I(nblocks)) b = 0; b < nblocks; ++b) {
             runners[b].finish();
         }
         local_vars.transfer();
@@ -407,9 +418,9 @@ template<typename Value_, typename Index_, typename Stat_, typename Block_>
 void compute_variances(
     const tatami::Matrix<Value_, Index_>& mat,
     const std::vector<ModelGeneVariancesBuffers<Stat_> >& buffers,
-    const Block_* block,
+    const Block_* const block,
     const std::vector<Index_>& block_size,
-    int num_threads) 
+    const int num_threads) 
 {
     if (mat.prefer_rows()) {
         if (mat.sparse()) {
@@ -428,15 +439,15 @@ void compute_variances(
 
 template<typename Index_, typename Stat_, class Function_>
 void compute_average(
-    Index_ ngenes, 
+    const Index_ ngenes, 
     const std::vector<ModelGeneVariancesBuffers<Stat_> >& per_block, 
     const std::vector<Index_>& block_size,
     const std::vector<Stat_>& block_weights,
-    Index_ min_size,
-    Function_ fun,
+    const Index_ min_size,
+    const Function_ fun,
     std::vector<Stat_*>& tmp_pointers,
     std::vector<Stat_>& tmp_weights,
-    Stat_* output) 
+    Stat_* const output) 
 {
     if (!output) {
         return;
@@ -444,7 +455,9 @@ void compute_average(
 
     tmp_pointers.clear();
     tmp_weights.clear();
-    for (decltype(per_block.size()) b = 0, nblocks = per_block.size(); b < nblocks; ++b) {
+
+    const auto nblocks = per_block.size();
+    for (decltype(I(nblocks)) b = 0; b < nblocks; ++b) {
         if (block_size[b] < min_size) { // skip blocks with insufficient cells.
             continue;
         }
@@ -461,8 +474,8 @@ void compute_average(
  */
 
 /** 
- * Compute and model the per-feature variances from a log-expression matrix with blocking.
- * The mean and variance of each gene is computed separately for all cells in each block, 
+ * Model the per-feature variances from a log-expression matrix with blocking.
+ * The mean and variance of each gene is computed separately for all cells in each block,
  * and a separate trend is fitted to each block to obtain residuals (see `model_gene_variances()`).
  * This ensures that sample and batch effects do not confound the variance estimates.
  *
@@ -470,11 +483,11 @@ void compute_average(
  * The average residual is particularly useful for feature selection with `choose_highly_variable_genes()`.
  *
  * @tparam Value_ Data type of the matrix.
- * @tparam Index_ Integer type for the row/column indices.
- * @tparam Block_ Integer type to hold the block IDs.
- * @tparam Stat_ Floating-point type for the output statistics.
+ * @tparam Index_ Integer type of the row/column indices.
+ * @tparam Block_ Integer type of the block IDs.
+ * @tparam Stat_ Floating-point type of the output statistics.
  *
- * @param mat A **tatami** matrix containing log-expression values.
+ * @param mat Matrix of expression values, typically after normalization and log-transformation.
  * Rows should be genes while columns should be cells.
  * @param[in] block Pointer to an array of length equal to the number of cells.
  * Each entry should be a 0-based block identifier in \f$[0, B)\f$ where \f$B\f$ is the total number of blocks.
@@ -486,11 +499,11 @@ void compute_average(
 template<typename Value_, typename Index_, typename Block_, typename Stat_>
 void model_gene_variances_blocked(
     const tatami::Matrix<Value_, Index_>& mat, 
-    const Block_* block, 
+    const Block_* const block, 
     const ModelGeneVariancesBlockedBuffers<Stat_>& buffers,
     const ModelGeneVariancesOptions& options)
 {
-    Index_ NR = mat.nrow(), NC = mat.ncol();
+    const Index_ NR = mat.nrow(), NC = mat.ncol();
     std::vector<Index_> block_size;
 
     if (block) {
@@ -500,12 +513,12 @@ void model_gene_variances_blocked(
         block_size.push_back(NC); // everything is one big block.
         internal::compute_variances(mat, buffers.per_block, block, block_size, options.num_threads);
     }
-    auto nblocks = block_size.size();
+    const auto nblocks = block_size.size();
 
     FitVarianceTrendWorkspace<Stat_> work;
     auto fopt = options.fit_variance_trend_options;
     fopt.num_threads = options.num_threads;
-    for (decltype(nblocks) b = 0; b < nblocks; ++b) {
+    for (decltype(I(nblocks)) b = 0; b < nblocks; ++b) {
         const auto& current = buffers.per_block[b];
         if (block_size[b] >= 2) {
             fit_variance_trend(NR, current.means, current.variances, current.fitted, current.residuals, work, fopt);
@@ -515,58 +528,92 @@ void model_gene_variances_blocked(
         }
     }
 
-    auto ave_means = buffers.average.means;
-    auto ave_variances = buffers.average.variances;
-    auto ave_fitted = buffers.average.fitted;
-    auto ave_residuals = buffers.average.residuals;
+    const auto ave_means = buffers.average.means;
+    const auto ave_variances = buffers.average.variances;
+    const auto ave_fitted = buffers.average.fitted;
+    const auto ave_residuals = buffers.average.residuals;
 
     if (ave_means || ave_variances || ave_fitted || ave_residuals) {
-        auto block_weight = scran_blocks::compute_weights<Stat_>(block_size, options.block_weight_policy, options.variable_block_weight_parameters);
+        const auto block_weight = scran_blocks::compute_weights<Stat_>(block_size, options.block_weight_policy, options.variable_block_weight_parameters);
 
         std::vector<Stat_*> tmp_pointers;
         std::vector<Stat_> tmp_weights;
         tmp_pointers.reserve(nblocks);
         tmp_weights.reserve(nblocks);
 
-        internal::compute_average(NR, buffers.per_block, block_size, block_weight,
+        internal::compute_average(
+            NR,
+            buffers.per_block,
+            block_size,
+            block_weight,
             /* min_size = */ static_cast<Index_>(1),  // skip blocks without enough cells to compute the mean.
-            [](const auto& x) -> Stat_* { return x.means; }, tmp_pointers, tmp_weights, ave_means);
+            [](const auto& x) -> Stat_* { return x.means; },
+            tmp_pointers,
+            tmp_weights,
+            ave_means
+        );
 
-        internal::compute_average(NR, buffers.per_block, block_size, block_weight,
+        internal::compute_average(
+            NR,
+            buffers.per_block,
+            block_size,
+            block_weight,
             /* min_size = */ static_cast<Index_>(2), // skip blocks without enough cells to compute the variance.
-            [](const auto& x) -> Stat_* { return x.variances; }, tmp_pointers, tmp_weights, ave_variances);
+            [](const auto& x) -> Stat_* { return x.variances; },
+            tmp_pointers,
+            tmp_weights,
+            ave_variances
+        );
 
-        internal::compute_average(NR, buffers.per_block, block_size, block_weight, 
+        internal::compute_average(
+            NR,
+            buffers.per_block,
+            block_size,
+            block_weight, 
             /* min_size = */ static_cast<Index_>(2), // ditto.
-            [](const auto& x) -> Stat_* { return x.fitted; }, tmp_pointers, tmp_weights, ave_fitted);
+            [](const auto& x) -> Stat_* { return x.fitted; },
+            tmp_pointers,
+            tmp_weights,
+            ave_fitted
+        );
 
-        internal::compute_average(NR, buffers.per_block, block_size, block_weight, 
+        internal::compute_average(
+            NR,
+            buffers.per_block,
+            block_size,
+            block_weight, 
             /* min_size = */ static_cast<Index_>(2), // ditto.
-            [](const auto& x) -> Stat_* { return x.residuals; }, tmp_pointers, tmp_weights, ave_residuals);
+            [](const auto& x) -> Stat_* { return x.residuals; },
+            tmp_pointers,
+            tmp_weights,
+            ave_residuals
+        );
     }
 }
 
 /** 
- * Here, we scan through a log-transformed normalized expression matrix and compute per-gene means and variances.
- * We then fit a trend to the variances with respect to the means using `fit_variance_trend()`.
+ * Model the per-gene variances as a function of the mean in single-cell expression data.
+ * We compute the mean and variance for each gene and fit a trend to the variances with respect to the means using `fit_variance_trend()`.
  * We assume that most genes at any given abundance are not highly variable, such that the fitted value of the trend is interpreted as the "uninteresting" variance - 
  * this is mostly attributed to technical variation like sequencing noise, but can also represent constitutive biological noise like transcriptional bursting.
- * Under this assumption, the residual can be treated as a measure of biologically interesting variation, and can be used to identify relevant features for downstream analyses.
+ * Under this assumption, the residual can be treated as a measure of biologically interesting variation.
+ * Genes with large residuals can then be selected for downstream analyses, e.g., with `choose_highly_variable_genes()`.
  *
  * @tparam Value_ Data type of the matrix.
- * @tparam Index_ Integer type for the row/column indices.
- * @tparam Stat_ Floating-point type for the output statistics.
+ * @tparam Index_ Integer type of the row/column indices.
+ * @tparam Stat_ Floating-point type of the output statistics.
  *
- * @param mat A **tatami** matrix containing log-expression values.
+ * @param mat Matrix of expression values, typically after normalization and log-transformation.
  * Rows should be genes while columns should be cells.
  * @param buffers Collection of buffers in which to store the computed statistics.
  * @param options Further options.
  */
 template<typename Value_, typename Index_, typename Stat_> 
-void model_gene_variances(const tatami::Matrix<Value_, Index_>& mat, 
+void model_gene_variances(
+    const tatami::Matrix<Value_, Index_>& mat, 
     ModelGeneVariancesBuffers<Stat_> buffers, // yes, the lack of a const ref here is deliberate, we need to move it into bbuffers anyway.
-    const ModelGeneVariancesOptions& options) {
-
+    const ModelGeneVariancesOptions& options)
+{
     ModelGeneVariancesBlockedBuffers<Stat_> bbuffers;
     bbuffers.per_block.emplace_back(std::move(buffers));
 
@@ -581,11 +628,11 @@ void model_gene_variances(const tatami::Matrix<Value_, Index_>& mat,
 /** 
  * Overload of `model_gene_variances()` that allocates space for the output statistics.
  *
- * @tparam Stat_ Floating-point type for the output statistics.
+ * @tparam Stat_ Floating-point type of the output statistics.
  * @tparam Value_ Data type of the matrix.
- * @tparam Index_ Integer type for the row/column indices.
+ * @tparam Index_ Integer type of the row/column indices.
  *
- * @param mat A **tatami** matrix containing log-expression values.
+ * @param mat Matrix of expression values, typically after normalization and log-transformation.
  * Rows should be genes while columns should be cells.
  * @param options Further options.
  *
@@ -608,12 +655,12 @@ ModelGeneVariancesResults<Stat_> model_gene_variances(const tatami::Matrix<Value
 /** 
  * Overload of `model_gene_variances_blocked()` that allocates space for the output statistics.
  *
- * @tparam Stat_ Floating-point type for the output statistics.
+ * @tparam Stat_ Floating-point type of the output statistics.
  * @tparam Value_ Data type of the matrix.
- * @tparam Index_ Integer type for the row/column indices.
- * @tparam Block_ Integer type, to hold the block IDs.
+ * @tparam Index_ Integer type of the row/column indices.
+ * @tparam Block_ Integer type of the block IDs.
  *
- * @param mat A **tatami** matrix containing log-expression values.
+ * @param mat Matrix of expression values, typically after normalization and log-transformation.
  * Rows should be genes while columns should be cells.
  * @param[in] block Pointer to an array of length equal to the number of cells, containing 0-based block identifiers.
  * This may also be a `nullptr` in which case all cells are assumed to belong to the same block.
@@ -623,13 +670,13 @@ ModelGeneVariancesResults<Stat_> model_gene_variances(const tatami::Matrix<Value
  * An average for each statistic is also computed if `ModelGeneVariancesOptions::compute_average = true`.
  */
 template<typename Stat_ = double, typename Value_, typename Index_, typename Block_>
-ModelGeneVariancesBlockedResults<Stat_> model_gene_variances_blocked(const tatami::Matrix<Value_, Index_>& mat, const Block_* block, const ModelGeneVariancesOptions& options) {
-    auto nblocks = (block ? tatami_stats::total_groups(block, mat.ncol()) : 1);
+ModelGeneVariancesBlockedResults<Stat_> model_gene_variances_blocked(const tatami::Matrix<Value_, Index_>& mat, const Block_* const block, const ModelGeneVariancesOptions& options) {
+    const auto nblocks = (block ? tatami_stats::total_groups(block, mat.ncol()) : 1);
     ModelGeneVariancesBlockedResults<Stat_> output(mat.nrow(), nblocks, options.compute_average);
 
     ModelGeneVariancesBlockedBuffers<Stat_> buffers;
-    buffers.per_block.resize(nblocks);
-    for (decltype(nblocks) b = 0; b < nblocks; ++b) {
+    sanisizer::resize(buffers.per_block, nblocks);
+    for (decltype(I(nblocks)) b = 0; b < nblocks; ++b) {
         auto& current = buffers.per_block[b];
         current.means = output.per_block[b].means.data();
         current.variances = output.per_block[b].variances.data();

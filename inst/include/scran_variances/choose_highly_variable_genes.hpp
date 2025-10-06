@@ -2,8 +2,6 @@
 #define SCRAN_VARIANCES_CHOOSE_HIGHLY_VARIABLE_GENES_HPP
 
 #include <vector>
-#include <algorithm>
-#include <numeric>
 #include <cstddef>
 
 #include "sanisizer/sanisizer.hpp"
@@ -28,12 +26,12 @@ struct ChooseHighlyVariableGenesOptions {
      * - smaller than `top`, if `ChooseHighlyVariableGenesOptions::use_bound = true` and `top` is greater than `N`,
      *   where `N` is the number of genes in the dataset with statistics greater than `ChooseHighlyVariableGenesOptions::bound`
      *   (or less than the bound, if `ChosenHighlyVariableGenesOptions::larger = false`).
-     * - larger than `top`, if `ChooseHighlyVariableGenesOptions::keep_ties = true` and there are multiple ties at the `top`-th chosen gene.
+     * - larger than `top`, if `ChooseHighlyVariableGenesOptions::keep_ties = true` and there are multiple ties with the `top`-th chosen gene.
      */
     std::size_t top = 4000;
 
     /**
-     * Whether larger statistics correspond to higher variances.
+     * Whether larger statistics correspond to higher variability, i.e., the genes with the top `top` largest statistics should be chosen.
      */
     bool larger = true;
 
@@ -41,12 +39,15 @@ struct ChooseHighlyVariableGenesOptions {
      * Whether to consider an absolute bound on the statistic when choosing HVGs.
      * The value of the bound is determined by `ChooseHighlyVariableGenesOptions::bound`.
      */
-    bool use_bound = false;
+    bool use_bound = true;
 
     /**
      * A lower bound for the statistic, at or below which a gene will not be considered as highly variable even if it is among the top `top` genes.
-     * If `ChooseHighlyVariableGenesOptions::larger = false`, this is an upper bound instead.
      * Only used if `ChooseHighlyVariableGenesOptions::use_bound = true`.
+     * If `ChooseHighlyVariableGenesOptions::larger = false`, this is an upper bound instead.
+     *
+     * The default of zero assumes that the input statistics are residuals from a mean-variance trend (see `fit_variance_trend()`),
+     * in which case all chosen HVGs should have positive residuals.
      */
     double bound = 0;
 
@@ -83,12 +84,13 @@ topicks::PickTopGenesOptions<Stat_> translate_options(const ChooseHighlyVariable
  *
  * @param n Number of genes.
  * @param[in] statistic Pointer to an array of length `n` containing the per-gene variance statistics.
- * @param[out] output Pointer to an array of length `n`. 
- * On output, this is filled with `true` if the gene is to be retained and `false` otherwise.
+ * This is typically the residuals from `model_gene_variances()`.
+ * @param[out] output Pointer to an array of length `n`.
+ * On output, the `i`-th entry is `true` if the `i`-th gene is to be retained and `false` otherwise.
  * @param options Further options.
  */
 template<typename Stat_, typename Bool_>
-void choose_highly_variable_genes(std::size_t n, const Stat_* statistic, Bool_* output, const ChooseHighlyVariableGenesOptions& options) {
+void choose_highly_variable_genes(const std::size_t n, const Stat_* const statistic, Bool_* const output, const ChooseHighlyVariableGenesOptions& options) {
     topicks::pick_top_genes(n, statistic, options.top, options.larger, output, internal::translate_options<Stat_>(options));
 }
 
@@ -98,12 +100,13 @@ void choose_highly_variable_genes(std::size_t n, const Stat_* statistic, Bool_* 
  *
  * @param n Number of genes.
  * @param[in] statistic Pointer to an array of length `n` containing the per-gene variance statistics.
+ * This is typically the residuals from `model_gene_variances()`.
  * @param options Further options.
  *
  * @return A vector of booleans of length `n`, indicating whether each gene is to be retained.
  */
 template<typename Bool_ = char, typename Stat_>
-std::vector<Bool_> choose_highly_variable_genes(std::size_t n, const Stat_* statistic, const ChooseHighlyVariableGenesOptions& options) {
+std::vector<Bool_> choose_highly_variable_genes(const std::size_t n, const Stat_* const statistic, const ChooseHighlyVariableGenesOptions& options) {
     auto output = sanisizer::create<std::vector<Bool_> >(n
 #ifdef SCRAN_VARIANCES_TEST_INIT
         , SCRAN_VARIANCES_TEST_INIT
@@ -119,13 +122,14 @@ std::vector<Bool_> choose_highly_variable_genes(std::size_t n, const Stat_* stat
  *
  * @param n Number of genes.
  * @param[in] statistic Pointer to an array of length `n` containing the per-gene variance statistics.
+ * This is typically the residuals from `model_gene_variances()`.
  * @param options Further options.
  *
  * @return Vector of sorted and unique indices for the chosen genes.
  * All indices are guaranteed to be non-negative and less than `n`.
  */
 template<typename Index_, typename Stat_>
-std::vector<Index_> choose_highly_variable_genes_index(Index_ n, const Stat_* statistic, const ChooseHighlyVariableGenesOptions& options) {
+std::vector<Index_> choose_highly_variable_genes_index(const Index_ n, const Stat_* const statistic, const ChooseHighlyVariableGenesOptions& options) {
     return topicks::pick_top_genes_index<Index_>(n, statistic, options.top, options.larger, internal::translate_options<Stat_>(options));
 }
 

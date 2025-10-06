@@ -34,11 +34,11 @@
 #define QDTSNE_STATUS_HPP
 
 #include <vector>
-#include <cmath>
+#include <array>
 #include <algorithm>
-#include <type_traits>
-#include <limits>
 #include <cstddef>
+
+#include "sanisizer/sanisizer.hpp"
 
 #include "SPTree.hpp"
 #include "Options.hpp"
@@ -69,18 +69,20 @@ public:
      */
     Status(NeighborList<Index_, Float_> neighbors, Options options) :
         my_neighbors(std::move(neighbors)),
-        my_tree(my_neighbors.size(), options.max_depth),
+        my_tree(sanisizer::cast<internal::SPTreeIndex>(my_neighbors.size()), options.max_depth),
         my_options(std::move(options))
     {
-        std::size_t full_size = static_cast<std::size_t>(my_neighbors.size()) * num_dim_; // cast to avoid overflow.
-        my_dY.resize(full_size);
-        my_uY.resize(full_size);
-        my_gains.resize(full_size, static_cast<Float_>(1));
-        my_pos_f.resize(full_size);
-        my_neg_f.resize(full_size);
+        const auto nobs = sanisizer::cast<Index_>(my_neighbors.size()); // use Index_ to check safety of cast in num_observations().
+        const std::size_t buffer_size = sanisizer::product<std::size_t>(nobs, num_dim_);
+
+        sanisizer::resize(my_dY, buffer_size);
+        sanisizer::resize(my_uY, buffer_size);
+        sanisizer::resize(my_gains, buffer_size, static_cast<Float_>(1));
+        sanisizer::resize(my_pos_f, buffer_size);
+        sanisizer::resize(my_neg_f, buffer_size);
 
         if (options.num_threads > 1) {
-            my_parallel_buffer.resize(my_neighbors.size());
+            sanisizer::resize(my_parallel_buffer, nobs);
         }
     }
     /**
@@ -90,6 +92,7 @@ public:
 private:
     NeighborList<Index_, Float_> my_neighbors; 
     std::vector<Float_> my_dY, my_uY, my_gains, my_pos_f, my_neg_f;
+    Float_ my_non_edge_sum = 0;
 
     internal::SPTree<num_dim_, Float_> my_tree;
     std::vector<Float_> my_parallel_buffer; // Buffer to hold parallel-computed results prior to reduction.
@@ -97,7 +100,7 @@ private:
     Options my_options;
     int my_iter = 0;
 
-    typename decltype(my_tree)::LeafApproxWorkspace my_leaf_workspace;
+    typename decltype(I(my_tree))::LeafApproxWorkspace my_leaf_workspace;
 
 public:
     /**
@@ -108,8 +111,7 @@ public:
     }
 
     /**
-     * @return The maximum number of iterations. 
-     * This can be modified to `run()` the algorithm for more iterations.
+     * @return The maximum number of iterations, as specified in `Options::max_iterations`.
      */
     int max_iterations() const {
         return my_options.max_iterations;
@@ -118,8 +120,8 @@ public:
     /**
      * @return The number of observations in the dataset.
      */
-    std::size_t num_observations() const {
-        return my_neighbors.size();
+    Index_ num_observations() const {
+        return my_neighbors.size(); // safety of the cast to Index_ is already checked in the constructor.
     }
 
 #ifndef NDEBUG
@@ -146,49 +148,47 @@ public:
      * The actual number of iterations performed will be the difference between `limit` and `iteration()`, i.e., `iteration()` will be equal to `limit` on completion.
      * `limit` may be greater than `max_iterations()`, to run the algorithm for more iterations than specified during construction of this `Status` object.
      */
-    void run(Float_* Y, int limit) {
-        Float_ multiplier = (my_iter < my_options.stop_lying_iter ? my_options.exaggeration_factor : 1);
-        Float_ momentum = (my_iter < my_options.mom_switch_iter ? my_options.start_momentum : my_options.final_momentum);
+    void run(Float_* const Y, const int limit) {
+        Float_ multiplier = (my_iter < my_options.early_exaggeration_iterations ? my_options.exaggeration_factor : 1);
+        Float_ momentum = (my_iter < my_options.momentum_switch_iterations ? my_options.start_momentum : my_options.final_momentum);
 
         for(; my_iter < limit; ++my_iter) {
-            // Stop lying about the P-values after a while, and switch momentum
-            if (my_iter == my_options.stop_lying_iter) {
+            if (my_iter == my_options.early_exaggeration_iterations) {
                 multiplier = 1;
             }
-            if (my_iter == my_options.mom_switch_iter) {
+            if (my_iter == my_options.momentum_switch_iterations) {
                 momentum = my_options.final_momentum;
             }
-
             iterate(Y, multiplier, momentum);
         }
     }
 
     /**
      * Run the algorithm to the maximum number of iterations.
-     * If `run()` has already been invoked with an iteration limit, this method will only perform the remaining iterations required for `iteration()` to reach `max_iter()`.
-     * If `iteration()` is already greater than `max_iter()`, this method is a no-op.
+     * If `run()` has already been invoked with an iteration limit, this method will only perform the remaining iterations required for `iteration()` to reach `max_iterations()`.
+     * If `iteration()` is already greater than `max_iterations()`, this method is a no-op.
      *
      * @param[in, out] Y Pointer to a array containing a column-major matrix with number of rows and columns equal to `num_dim_` and `num_observations()`, respectively.
      * Each row corresponds to a dimension of the embedding while each column corresponds to an observation.
-     * On input, this should contain the initial location of each observation; on output, it is updated to the t-SNE location at the specified number of iterations.
+     * On input, this should contain the initial location of each observation; on output, it is updated to the t-SNE location at the maximum number of iterations.
      */
-    void run(Float_* Y) {
+    void run(Float_* const Y) {
         run(Y, my_options.max_iterations);
     }
 
 private:
-    static Float_ sign(Float_ x) { 
+    static Float_ sign(const Float_ x) { 
         constexpr Float_ zero = 0;
         constexpr Float_ one = 1;
         return (x == zero ? zero : (x < zero ? -one : one));
     }
 
-    void iterate(Float_* Y, Float_ multiplier, Float_ momentum) {
+    void iterate(Float_* const Y, const Float_ multiplier, const Float_ momentum) {
         compute_gradient(Y, multiplier);
 
         // Update gains
-        auto ngains = my_gains.size(); 
-        for (decltype(ngains) i = 0; i < ngains; ++i) {
+        const auto buffer_size = my_gains.size(); 
+        for (decltype(I(buffer_size)) i = 0; i < buffer_size; ++i) {
             Float_& g = my_gains[i];
             constexpr Float_ lower_bound = 0.01;
             constexpr Float_ to_add = 0.2;
@@ -197,25 +197,25 @@ private:
         }
 
         // Perform gradient update (with momentum and gains)
-        for (decltype(ngains) i = 0; i < ngains; ++i) {
+        for (decltype(I(buffer_size)) i = 0; i < buffer_size; ++i) {
             my_uY[i] = momentum * my_uY[i] - my_options.eta * my_gains[i] * my_dY[i];
             Y[i] += my_uY[i];
         }
 
         // Make solution zero-mean for each dimension
         std::array<Float_, num_dim_> means{};
-        std::size_t num_obs = num_observations();
-        for (std::size_t i = 0; i < num_obs; ++i) {
+        const Index_ num_obs = num_observations();
+        for (Index_ i = 0; i < num_obs; ++i) {
             for (std::size_t d = 0; d < num_dim_; ++d) {
-                means[d] += Y[d + i * num_dim_]; // all of these are already size_t to avoid overflow.
+                means[d] += Y[sanisizer::nd_offset<std::size_t>(d, num_dim_, i)];
             }
         }
         for (std::size_t d = 0; d < num_dim_; ++d) {
             means[d] /= num_obs;
         }
-        for (std::size_t i = 0; i < num_obs; ++i) {
+        for (Index_ i = 0; i < num_obs; ++i) {
             for (std::size_t d = 0; d < num_dim_; ++d) {
-                Y[d + i * num_dim_] -= means[d]; // again, everything here is already a size_t.
+                Y[sanisizer::nd_offset<std::size_t>(d, num_dim_, i)] -= means[d];
             }
         }
 
@@ -223,37 +223,35 @@ private:
     }
 
 private:
-    void compute_gradient(const Float_* Y, Float_ multiplier) {
+    void compute_gradient(const Float_* const Y, const Float_ multiplier) {
         my_tree.set(Y);
         compute_edge_forces(Y, multiplier);
 
-        std::size_t num_obs = num_observations();
         std::fill(my_neg_f.begin(), my_neg_f.end(), 0);
-        Float_ sum_Q = compute_non_edge_forces();
+        compute_non_edge_forces();
 
-        // Compute final t-SNE gradient
-        std::size_t ntotal = num_obs * num_dim_; // already size_t's to avoid overflow.
-        for (std::size_t i = 0; i < ntotal; ++i) {
-            my_dY[i] = my_pos_f[i] - (my_neg_f[i] / sum_Q);
+        const auto buffer_size = my_dY.size();
+        for (decltype(I(buffer_size)) i = 0; i < buffer_size; ++i) {
+            my_dY[i] = my_pos_f[i] - (my_neg_f[i] / my_non_edge_sum);
         }
     }
 
-    void compute_edge_forces(const Float_* Y, Float_ multiplier) {
+    void compute_edge_forces(const Float_* const Y, Float_ multiplier) {
         std::fill(my_pos_f.begin(), my_pos_f.end(), 0);
-        std::size_t num_obs = num_observations();
+        const Index_ num_obs = num_observations();
 
-        parallelize(my_options.num_threads, num_obs, [&](int, std::size_t start, std::size_t length) -> void {
-            for (std::size_t i = start, end = start + length; i < end; ++i) {
+        parallelize(my_options.num_threads, num_obs, [&](const int, const Index_ start, const Index_ length) -> void {
+            for (Index_ i = start, end = start + length; i < end; ++i) {
                 const auto& current = my_neighbors[i];
-                size_t offset = i * num_dim_; // already size_t's to avoid overflow.
-                const Float_* self = Y + offset;
-                Float_* pos_out = my_pos_f.data() + offset;
+                const auto offset = sanisizer::product_unsafe<std::size_t>(i, num_dim_);
+                const auto self = Y + offset;
+                const auto pos_out = my_pos_f.data() + offset;
 
                 for (const auto& x : current) {
                     Float_ sqdist = 0; 
-                    const Float_* neighbor = Y + static_cast<std::size_t>(x.first) * num_dim_; // cast to avoid overflow.
+                    const auto neighbor = Y + sanisizer::product_unsafe<std::size_t>(x.first, num_dim_);
                     for (std::size_t d = 0; d < num_dim_; ++d) {
-                        Float_ delta = self[d] - neighbor[d];
+                        const Float_ delta = self[d] - neighbor[d];
                         sqdist += delta * delta;
                     }
 
@@ -268,18 +266,18 @@ private:
         return;
     }
 
-    Float_ compute_non_edge_forces() {
+    void compute_non_edge_forces() {
         if (my_options.leaf_approximation) {
             my_tree.compute_non_edge_forces_for_leaves(my_options.theta, my_leaf_workspace, my_options.num_threads);
         }
 
-        std::size_t num_obs = num_observations();
+        const Index_ num_obs = num_observations();
         if (my_options.num_threads > 1) {
             // Don't use reduction methods, otherwise we get numeric imprecision
             // issues (and stochastic results) based on the order of summation.
-            parallelize(my_options.num_threads, num_obs, [&](int, std::size_t start, std::size_t length) -> void {
-                for (std::size_t i = start, end = start + length; i < end; ++i) {
-                    auto neg_ptr = my_neg_f.data() + i * num_dim_; // already size_t's to avoid overflow.
+            parallelize(my_options.num_threads, num_obs, [&](const int, const Index_ start, const Index_ length) -> void {
+                for (Index_ i = start, end = start + length; i < end; ++i) {
+                    const auto neg_ptr = my_neg_f.data() + sanisizer::product_unsafe<std::size_t>(i, num_dim_);
                     if (my_options.leaf_approximation) {
                         my_parallel_buffer[i] = my_tree.compute_non_edge_forces_from_leaves(i, neg_ptr, my_leaf_workspace);
                     } else {
@@ -287,19 +285,61 @@ private:
                     }
                 }
             });
-            return std::accumulate(my_parallel_buffer.begin(), my_parallel_buffer.end(), static_cast<Float_>(0));
+
+            my_non_edge_sum = std::accumulate(my_parallel_buffer.begin(), my_parallel_buffer.end(), static_cast<Float_>(0));
+            return;
         }
 
-        Float_ sum_Q = 0;
-        for (std::size_t i = 0; i < num_obs; ++i) {
-            auto neg_ptr = my_neg_f.data() + i * num_dim_; // already size_ts to avoid overflow.
+        my_non_edge_sum = 0;
+        for (Index_ i = 0; i < num_obs; ++i) {
+            const auto neg_ptr = my_neg_f.data() + sanisizer::product_unsafe<std::size_t>(i, num_dim_);
             if (my_options.leaf_approximation) {
-                sum_Q += my_tree.compute_non_edge_forces_from_leaves(i, neg_ptr, my_leaf_workspace);
+                my_non_edge_sum += my_tree.compute_non_edge_forces_from_leaves(i, neg_ptr, my_leaf_workspace);
             } else {
-                sum_Q += my_tree.compute_non_edge_forces(i, my_options.theta, neg_ptr);
+                my_non_edge_sum += my_tree.compute_non_edge_forces(i, my_options.theta, neg_ptr);
             }
         }
-        return sum_Q;
+    }
+
+public:
+    /**
+     * @param[in] Y Pointer to a array containing a column-major matrix with number of rows and columns equal to `num_dim_` and `num_observations()`, respectively.
+     * This should contain the location of each observation. 
+     *
+     * @return The Kullback-Leibler divergence for the current embedding.
+     *
+     * This method is not `const` as it re-uses some of the pre-allocated buffers in the `Status` object for efficiency.
+     * Calling `cost()` at any time will not affect the results of subsequent calls to `run()`.
+     *
+     * This method does not consider any exaggeration of the conditional probabilities for iterations at or before `Options::early_exaggeration_iterations`.
+     * That is, all probabilities used here will not be exaggerated, regardless of the iteration.
+     */
+    Float_ cost(const Float_* const Y) {
+        my_tree.set(Y);
+        std::fill(my_neg_f.begin(), my_neg_f.end(), 0);
+        compute_non_edge_forces();
+
+        const Index_ num_obs = num_observations();
+        Float_ total = 0;
+        for (Index_ i = 0; i < num_obs; ++i) {
+            const auto& cur_neighbors = my_neighbors[i];
+            const auto self = Y + sanisizer::product_unsafe<std::size_t>(i, num_dim_);
+
+            for (const auto& x : cur_neighbors) {
+                const auto neighbor = Y + sanisizer::product_unsafe<std::size_t>(x.first, num_dim_);
+                Float_ sqdist = 0;
+                for (std::size_t d = 0; d < num_dim_; ++d) {
+                    const Float_ delta = self[d] - neighbor[d];
+                    sqdist += delta * delta;
+                }
+
+                const Float_ qprob = (static_cast<Float_>(1) / (static_cast<Float_>(1) + sqdist)) / my_non_edge_sum;
+                constexpr Float_ lim = std::numeric_limits<Float_>::min();
+                total += x.second * std::log(std::max(lim, x.second) / std::max(lim, qprob));
+            }
+        }
+
+        return total;
     }
 };
 

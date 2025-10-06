@@ -6,8 +6,11 @@
 #include <numeric>
 #include <stdexcept>
 
+#include "sanisizer/sanisizer.hpp"
+
 #include "Options.hpp"
 #include "parallelize.hpp"
+#include "utils.hpp"
 
 /**
  * @file window.hpp
@@ -38,22 +41,22 @@ namespace internal {
  * degree of approximation in the final lowess calculation).
  */
 template<typename Data_>
-Data_ derive_delta(size_t num_anchors, size_t num_points, const Data_* x) {
-    size_t points_m1 = num_points - 1;
-    std::vector<Data_> diffs(points_m1);
-    for (size_t i = 0; i < points_m1; ++i) {
+Data_ derive_delta(const std::size_t num_anchors, const std::size_t num_points, const Data_* const x) {
+    const auto points_m1 = num_points - 1;
+    auto diffs = sanisizer::create<std::vector<Data_> >(points_m1);
+    for (I<decltype(points_m1)> i = 0; i < points_m1; ++i) {
         diffs[i] = x[i + 1] - x[i];
     }
 
     std::sort(diffs.begin(), diffs.end());
-    for (size_t i = 1; i < points_m1; ++i) {
+    for (I<decltype(points_m1)> i = 1; i < points_m1; ++i) {
         diffs[i] += diffs[i-1];            
     }
 
     Data_ lowest_delta = diffs.back();
     if (num_anchors > 1) {
-        size_t max_skips = std::min(points_m1, num_anchors - 1);
-        for (size_t nskips = 0; nskips < max_skips; ++nskips) {
+        auto max_skips = sanisizer::min(num_anchors - 1, points_m1);
+        for (I<decltype(max_skips)> nskips = 0; nskips < max_skips; ++nskips) {
             Data_ candidate_delta = diffs[points_m1 - nskips - 1] / (num_anchors - nskips);
             lowest_delta = std::min(candidate_delta, lowest_delta);
         }
@@ -72,13 +75,13 @@ Data_ derive_delta(size_t num_anchors, size_t num_points, const Data_* x) {
  * always included as an anchor to ensure we have exactness at the ends.
  */
 template<typename Data_>
-void find_anchors(size_t num_points, const Data_* x, Data_ delta, std::vector<size_t>& anchors) {
+void find_anchors(const std::size_t num_points, const Data_* x, Data_ delta, std::vector<std::size_t>& anchors) {
     anchors.clear();
     anchors.push_back(0);
 
-    size_t last_pt = 0;
-    size_t points_m1 = num_points - 1;
-    for (size_t pt = 1; pt < points_m1; ++pt) {
+    std::size_t last_pt = 0;
+    const std::size_t points_m1 = num_points - 1;
+    for (I<decltype(points_m1)> pt = 1; pt < points_m1; ++pt) {
         if (x[pt] - x[last_pt] > delta) {
             anchors.push_back(pt);
             last_pt = pt;
@@ -91,7 +94,7 @@ void find_anchors(size_t num_points, const Data_* x, Data_ delta, std::vector<si
 
 template<typename Data_>
 struct Window {
-    size_t left, right;
+    std::size_t left, right;
     Data_ distance;
 };
 
@@ -107,23 +110,24 @@ struct Window {
  */
 template<typename Data_>
 std::vector<Window<Data_> > find_limits(
-    const std::vector<size_t>& anchors, 
-    Data_ span_weight,
-    size_t num_points,
-    const Data_* x, 
-    const Data_* weights,
-    Data_ min_width,
-    [[maybe_unused]] int nthreads = 1)
+    const std::vector<std::size_t>& anchors, 
+    const Data_ span_weight,
+    const std::size_t num_points,
+    const Data_* const x, 
+    const Data_* const weights,
+    const Data_ min_width,
+    int nthreads = 1)
 {
-    const size_t nanchors = anchors.size();
-    std::vector<Window<Data_> > limits(nanchors);
-    auto half_min_width = min_width / 2;
-    auto points_m1 = num_points - 1;
+    const auto nanchors = anchors.size();
+    auto limits = sanisizer::create<std::vector<Window<Data_> > >(nanchors);
+    const auto half_min_width = min_width / 2;
+    const auto points_m1 = num_points - 1;
 
-    WEIGHTEDLOWESS_CUSTOM_PARALLEL(nthreads, nanchors, [&](size_t, size_t start, size_t length) {
-        for (size_t s = start, end = start + length; s < end; ++s) {
-            auto curpt = anchors[s], left = curpt, right = curpt;
-            auto curx = x[curpt];
+    parallelize(nthreads, nanchors, [&](const int, const I<decltype(nanchors)> start, const I<decltype(nanchors)> length) {
+        for (I<decltype(start)> s = start, end = start + length; s < end; ++s) {
+            const auto curpt = anchors[s];
+            const auto curx = x[curpt];
+            auto left = curpt, right = curpt;
             Data_ curw = (weights == NULL ? 1 : weights[curpt]);
 
             // First expanding in both directions, choosing the one that
@@ -222,7 +226,7 @@ std::vector<Window<Data_> > find_limits(
 /**
  * @brief Precomputed windows for LOWESS smoothing.
  *
- * @tparam Data_ Floating-point type for the data.
+ * @tparam Data_ Floating-point type of the data.
  *
  * Instances of this class are typically created by `define_windows()` prior to `compute()`.
  */
@@ -231,7 +235,7 @@ struct PrecomputedWindows {
     /**
      * @cond
      */
-    std::vector<size_t> anchors;
+    std::vector<std::size_t> anchors;
     const Data_* freq_weights = NULL;
     Data_ total_weight = 0;
     std::vector<internal::Window<Data_> > limits;
@@ -241,13 +245,13 @@ struct PrecomputedWindows {
 };
 
 /**
- * Precompute the window locations prior to fitting of different `y` via the corresponding `compute()` overload.
- * This avoids wasting time in unnecessarily recomputing the same windows for each `compute()` call.
+ * Identify anchor points and precompute the associated windows prior to LOWESS smoothing via `compute()`. 
+ * This avoids wasting time in unnecessarily recomputing the same windows for the same `x` but different `y` in multiple `compute()` calls.
  *
- * @tparam Data_ Floating-point type for the data.
+ * @tparam Data_ Floating-point type of the data.
  * 
  * @param num_points Number of points.
- * @param[in] x Pointer to an array of `num_points` x-values, sorted in increasing order.
+ * @param[in] x Pointer to an array of `num_points` x-coordinates, sorted in increasing order.
  * (Consider using `SortBy` to permute the array in-place before calling this function.)
  * @param opt Further options.
  * Only a subset of options are actually used here, namely
@@ -260,7 +264,7 @@ struct PrecomputedWindows {
  * and `Options::minimum_width`.
  */
 template<typename Data_>
-PrecomputedWindows<Data_> define_windows(size_t num_points, const Data_* x, const Options<Data_>& opt) {
+PrecomputedWindows<Data_> define_windows(const std::size_t num_points, const Data_* const x, const Options<Data_>& opt) {
     PrecomputedWindows<Data_> output;
 
     if (num_points) {
@@ -271,7 +275,7 @@ PrecomputedWindows<Data_> define_windows(size_t num_points, const Data_* x, cons
         // Finding the anchors.
         auto& anchors = output.anchors;
         if (opt.delta == 0 || (opt.delta < 0 && opt.anchors >= num_points)) {
-            anchors.resize(num_points);
+            sanisizer::resize(anchors, num_points);
             std::iota(anchors.begin(), anchors.end(), 0);
         } else if (opt.delta < 0) {
             Data_ eff_delta = internal::derive_delta(opt.anchors, num_points, x);
@@ -283,7 +287,7 @@ PrecomputedWindows<Data_> define_windows(size_t num_points, const Data_* x, cons
         /* Computing the span weight that each window must achieve. */
         output.freq_weights = (opt.frequency_weights ? opt.weights : NULL);
         output.total_weight = (output.freq_weights != NULL ? std::accumulate(output.freq_weights, output.freq_weights + num_points, static_cast<Data_>(0)) : num_points);
-        Data_ span_weight = (opt.span_as_proportion ? opt.span * output.total_weight : opt.span);
+        const Data_ span_weight = (opt.span_as_proportion ? opt.span * output.total_weight : opt.span);
         output.limits = internal::find_limits(anchors, span_weight, num_points, x, output.freq_weights, opt.minimum_width, opt.num_threads); 
     }
 
