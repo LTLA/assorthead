@@ -6,6 +6,7 @@
 #include <optional>
 #include <limits>
 #include <cmath>
+#include <cstddef>
 
 #include "sanisizer/sanisizer.hpp"
 
@@ -52,6 +53,13 @@ struct TopQueueOptions {
      * If `false`, it is assumed that no NaNs will be added to the queue.
      */
     bool check_nan = false;
+
+    /**
+     * Memory to reserve for the underlying storage during `TopQueue` construction.
+     * If not provided, memory is automatically reserved for `top` elements to prevent any reallocation upon `TopQueue::push()`.
+     * Setting this value to zero will disable preallocation.
+     */
+    std::optional<std::size_t> reserve;
 };
 
 /**
@@ -202,7 +210,13 @@ public:
         my_open_bound(options.open_bound),
         my_keep_ties(options.keep_ties),
         my_check_nan(options.check_nan)
-    {}
+    {
+        if (options.reserve.has_value()) {
+            my_queue.reserve(*(options.reserve));
+        } else {
+            my_queue.reserve(my_top);
+        }
+    }
 
     /**
      * @param gene The statistic and the index of a gene.
