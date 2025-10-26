@@ -13,7 +13,7 @@ aarand,https://github.com/LTLA/aarand,v1.1.0,"Lightweight random distribution fu
 powerit,https://github.com/LTLA/powerit,v2.0.1,"Power iterations"
 irlba,https://github.com/LTLA/CppIrlba,v2.0.2,"C++ port of IRLBA, based on the **irlba** R package"
 WeightedLowess,https://github.com/LTLA/CppWeightedLowess,v2.1.4,"Lowess trend fitting with weights, à la `limma::weightedLowess`"
-kmeans,https://github.com/LTLA/CppKmeans,v4.0.3,"C++ port of `stats::kmeans` with various initialization methods"
+kmeans,https://github.com/LTLA/CppKmeans,v4.0.4,"C++ port of `stats::kmeans` with various initialization methods"
 knncolle,https://github.com/knncolle/knncolle,v3.0.0,"C++ API for nearest-neighbor searches"
 knncolle_annoy,https://github.com/knncolle/knncolle_annoy,v0.2.0,"**knncolle** extension for Annoy"
 knncolle_hnsw,https://github.com/knncolle/knncolle_hnsw,v0.2.1,"**knncolle** extension for HNSW"

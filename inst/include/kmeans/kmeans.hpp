@@ -21,6 +21,7 @@
 #include "RefineMiniBatch.hpp"
 
 #include "compute_wcss.hpp"
+#include "remove_unused_centers.hpp"
 
 /** 
  * @file kmeans.hpp
@@ -110,7 +111,7 @@ struct Results {
      * @cond
      */
     Results(const std::size_t num_dimensions, const Index_ num_observations, const Cluster_ num_centers) : 
-        centers(sanisizer::product<decltype(I(centers.size()))>(num_dimensions, num_centers)),
+        centers(sanisizer::product<I<decltype(centers.size())> >(num_dimensions, num_centers)),
         clusters(num_observations)
     {}
 
@@ -165,7 +166,7 @@ Results<Index_, Cluster_, Float_> compute(
 {
     Results<Index_, Cluster_, Float_> output;
     sanisizer::resize(output.clusters, data.num_observations());
-    output.centers.resize(sanisizer::product<decltype(I(output.centers.size()))>(num_centers, data.num_dimensions()));
+    output.centers.resize(sanisizer::product<I<decltype(output.centers.size())> >(num_centers, data.num_dimensions()));
     output.details = compute(data, initialize, refine, num_centers, output.centers.data(), output.clusters.data());
     return output;
 }
