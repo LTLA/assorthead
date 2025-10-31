@@ -18,13 +18,13 @@ namespace raiigraph {
  * This class has ownership of the underlying `igraph_t` object, handling both its initialization and destruction.
  * Users should only pass instances of this class to **igraph** functions that accept an already-initialized graph.
  * Users should not attempt to destroy the graph manually as this is done automatically when the `Graph` goes out of scope.
+ *
+ * It is assumed that users have already called `igraph_setup()` before constructing a instance of this class.
  */
 class Graph {
 private:
-    void setup(igraph_integer_t num_vertices, igraph_bool_t directed) {
-        if (igraph_empty(&my_graph, num_vertices, directed)) {
-            throw std::runtime_error("failed to initialize an empty igraph graph object"); 
-        } 
+    void setup(igraph_int_t num_vertices, igraph_bool_t directed) {
+        check_code(igraph_empty(&my_graph, num_vertices, directed));
     }
 
 public:
@@ -34,7 +34,7 @@ public:
      * @param num_vertices Number of vertices.
      * @param directed Whether the graph is directed.
      */
-    Graph(igraph_integer_t num_vertices = 0, igraph_bool_t directed = false) {
+    Graph(igraph_int_t num_vertices = 0, igraph_bool_t directed = false) {
         setup(num_vertices, directed);
     }
 
@@ -46,7 +46,7 @@ public:
      * This should be greater than the largest index in `edges`.
      * @param directed Whether the graph is directed.
      */
-    Graph(const IntVector& edges, igraph_integer_t num_vertices, igraph_bool_t directed) : Graph(edges.get(), num_vertices, directed) {} 
+    Graph(const IntVector& edges, igraph_int_t num_vertices, igraph_bool_t directed) : Graph(edges.get(), num_vertices, directed) {} 
 
     /**
      * @param edges Edges between vertices, stored as a vector of non-negative vertex indices of length equal to twice the number of edges.
@@ -55,10 +55,8 @@ public:
      * This should be greater than the largest index in `edges`.
      * @param directed Whether the graph is directed.
      */
-    Graph(const igraph_vector_int_t* edges, igraph_integer_t num_vertices, igraph_bool_t directed) { 
-        if (igraph_create(&my_graph, edges, num_vertices, directed)) {
-            throw std::runtime_error("failed to initialize an igraph graph object"); 
-        }
+    Graph(const igraph_vector_int_t* edges, igraph_int_t num_vertices, igraph_bool_t directed) { 
+        check_code(igraph_create(&my_graph, edges, num_vertices, directed));
     }
 
     /**
@@ -66,13 +64,12 @@ public:
      */
     Graph(igraph_t&& graph) : my_graph(std::move(graph)) {}
 
+public:
     /**
      * @param other Graph to be copy-constructed from.
      */
     Graph(const Graph& other) {
-        if (igraph_copy(&my_graph, &(other.my_graph))) {
-            throw std::runtime_error("failed to copy-construct an igraph graph object"); 
-        }
+        check_code(igraph_copy(&my_graph, &(other.my_graph)));
     }
 
     /**
@@ -80,9 +77,7 @@ public:
      */
     Graph& operator=(const Graph& other) {
         if (this != &other) {
-            if (igraph_copy(&my_graph, &(other.my_graph))) {
-                throw std::runtime_error("failed to copy-assign an igraph graph object"); 
-            }
+            check_code(igraph_copy(&my_graph, &(other.my_graph)));
         }
         return *this;
     }
@@ -118,14 +113,14 @@ public:
     /**
      * @return Number of vertices in the graph.
      */
-    igraph_integer_t vcount() const {
+    igraph_int_t vcount() const {
         return igraph_vcount(&my_graph);
     }
 
     /**
      * @return Number of edges in the graph.
      */
-    igraph_integer_t ecount() const {
+    igraph_int_t ecount() const {
         return igraph_ecount(&my_graph);
     }
 
@@ -162,11 +157,14 @@ public:
     }
 
     /**
+     * @param directed Whether to consider the directions of edges.
+     * This can be either `IGRAPH_UNDIRECTED` or `IGRAPH_DIRECTED`.
+     * Ignored for undirected graphs.
      * @return Whether the graph is simple, i.e., no loops or multiple edges.
      */
-    igraph_bool_t is_simple() const {
+    igraph_bool_t is_simple(igraph_bool_t directed) const {
         igraph_bool_t res;
-        check_code(igraph_is_simple(&my_graph, &res));
+        check_code(igraph_is_simple(&my_graph, &res, directed));
         return res;
     }
 

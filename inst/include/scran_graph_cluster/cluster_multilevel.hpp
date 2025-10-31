@@ -5,6 +5,8 @@
 #include <algorithm>
 
 #include "raiigraph/raiigraph.hpp"
+#include "sanisizer/sanisizer.hpp"
+
 #include "igraph.h"
 
 /**
@@ -22,12 +24,12 @@ struct ClusterMultilevelOptions {
      * Resolution of the clustering, must be non-negative.
      * Lower values favor fewer, larger communities; higher values favor more, smaller communities.
      */
-    double resolution = 1;
+    igraph_real_t resolution = 1;
 
     /**
      * Seed for the **igraph** random number generator.
      */
-    int seed = 42;
+    igraph_uint_t seed = 42;
 
     /**
      * Whether to report the multi-level clusterings in `Results::memberships`.
@@ -44,12 +46,6 @@ struct ClusterMultilevelOptions {
  * @brief Result of `cluster_multilevel()`.
  */
 struct ClusterMultilevelResults {
-    /** 
-     * Output status.
-     * A value of zero indicates that the algorithm completed successfully.
-     */
-    int status = 0;
-
     /**
      * Vector of length equal to the number of cells, containing 0-indexed cluster identities.
      * This is the same as the row of `levels` with the maximum `modularity`.
@@ -75,7 +71,10 @@ struct ClusterMultilevelResults {
  * Run the multi-level community detection algorithm on a pre-constructed graph to obtain communities of highly inter-connected nodes.
  * See [here](https://igraph.org/c/doc/igraph-Community.html#igraph_community_multilevel) for more details on the multi-level algorithm. 
  *
- * @param graph An existing graph.
+ * It is assumed that `igraph_setup()` or `raiigraph::initialize()` has already been called before running this function.
+ *
+ * @param graph A graph.
+ * Typically, the nodes are cells and edges are formed between similar cells.
  * @param weights Pointer to an array of weights of length equal to the number of edges in `graph`. 
  * This should be in the same order as the edge list in `graph`.
  * Alternatively `NULL`, if the graph is unweighted.
@@ -84,13 +83,13 @@ struct ClusterMultilevelResults {
  * The input value is ignored, so this object can be re-used across multiple calls to `cluster_multilevel()`.
  */
 inline void cluster_multilevel(const igraph_t* graph, const igraph_vector_t* weights, const ClusterMultilevelOptions& options, ClusterMultilevelResults& output) {
-    raiigraph::RNGScope rngs(options.seed);
+    const raiigraph::RNGScope rngs(options.seed);
 
-    auto modularity = (options.report_modularity ? output.modularity.get() : NULL);
-    auto membership = output.membership.get();
-    auto memberships = (options.report_levels ? output.levels.get() : NULL);
+    const auto modularity = (options.report_modularity ? output.modularity.get() : static_cast<igraph_vector_t*>(NULL));
+    const auto membership = output.membership.get();
+    const auto memberships = (options.report_levels ? output.levels.get() : static_cast<igraph_matrix_int_t*>(NULL));
 
-    output.status = igraph_community_multilevel(
+    const auto status = igraph_community_multilevel(
         graph,
         weights,
         options.resolution,
@@ -98,12 +97,15 @@ inline void cluster_multilevel(const igraph_t* graph, const igraph_vector_t* wei
         memberships, 
         modularity
     );
+
+    raiigraph::check_code(status);
 }
 
 /**
  * Overload of `cluster_multilevel()` that accepts C++ containers instead of the raw **igraph** pointers.
  *
- * @param graph An existing graph.
+ * @param graph A graph.
+ * Typically, the nodes are cells and edges are formed between similar cells.
  * @param weights Vector of weights of length equal to the number of edges in `graph`. 
  * This should be in the same order as the edge list in `graph`.
  * @param options Further options.
@@ -112,8 +114,7 @@ inline void cluster_multilevel(const igraph_t* graph, const igraph_vector_t* wei
  */
 inline ClusterMultilevelResults cluster_multilevel(const raiigraph::Graph& graph, const std::vector<igraph_real_t>& weights, const ClusterMultilevelOptions& options) {
     // No need to free this, as it's just a view.
-    igraph_vector_t weight_view;
-    igraph_vector_view(&weight_view, weights.data(), weights.size());
+    const auto weight_view = igraph_vector_view(weights.data(), sanisizer::cast<igraph_int_t>(weights.size()));
 
     ClusterMultilevelResults output;
     cluster_multilevel(graph.get(), &weight_view, options, output);

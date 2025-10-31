@@ -16,6 +16,8 @@ namespace raiigraph {
  *
  * When an instance of this class is created, it will replace the global default **igraph** RNG with its own.
  * When it is destroyed, it will restore the default to the RNG that was present before its construction.
+ *
+ * It is assumed that users have already called `igraph_setup()` before constructing a instance of this class.
  */
 class RNGScope {
 public:
@@ -41,8 +43,7 @@ public:
             throw IgraphError(errcode);
         }
 
-        previous = *(igraph_rng_default());
-        igraph_rng_set_default(&current);
+        previous = igraph_rng_set_default(&current);
     }
 
     /**
@@ -52,8 +53,7 @@ public:
      */
     RNGScope(const igraph_rng_type_t* type) {
         check_code(igraph_rng_init(&current, type));
-        previous = *(igraph_rng_default());
-        igraph_rng_set_default(&current);
+        previous = igraph_rng_set_default(&current);
     }
 
     /**
@@ -72,7 +72,7 @@ public:
     RNGScope& operator=(RNGScope&&) = delete;
 
     ~RNGScope() {
-        igraph_rng_set_default(&previous);
+        igraph_rng_set_default(previous);
         igraph_rng_destroy(&current);
     }
     /**
@@ -80,7 +80,7 @@ public:
      */
 
 private:
-    igraph_rng_t previous;
+    igraph_rng_t* previous;
     igraph_rng_t current;
 };
 

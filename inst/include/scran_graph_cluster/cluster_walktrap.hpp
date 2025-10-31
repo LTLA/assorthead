@@ -5,6 +5,8 @@
 #include <algorithm>
 
 #include "raiigraph/raiigraph.hpp"
+#include "sanisizer/sanisizer.hpp"
+
 #include "igraph.h"
 
 /**
@@ -20,9 +22,12 @@ namespace scran_graph_cluster {
 struct ClusterWalktrapOptions {
     /**
      * Number of steps of the random walk.
+     * This determines the ability of the Walktrap algorithm to distinguish highly interconnected communities from the rest of the graph.
+     * Ideally, a random walk of the specified length from a node should easily reach any other node in the same community but not a node of a different community
+     * (i.e., it is "trapped" in the same community, hence the name of the method).
      * The default is based on the example in the **igraph** documentation.
      */
-    int steps = 4;
+    igraph_int_t steps = 4;
 
     /**
      * Whether to report the merge steps in `Results::merges`.
@@ -39,12 +44,6 @@ struct ClusterWalktrapOptions {
  * @brief Result of `cluster_walktrap()`.
  */
 struct ClusterWalktrapResults {
-    /** 
-     * Output status.
-     * A value of zero indicates that the algorithm completed successfully.
-     */
-    int status = 0;
-    
     /**
      * Vector of length equal to the number of cells, containing 0-indexed cluster identities.
      */
@@ -70,8 +69,11 @@ struct ClusterWalktrapResults {
 /**
  * Run the Walktrap community detection algorithm on a pre-constructed graph to obtain communities of highly inter-connected nodes.
  * See [here](https://igraph.org/c/doc/igraph-Community.html#igraph_community_walktrap) for more details on the Walktrap algorithm. 
+ *
+ * It is assumed that `igraph_setup()` or `raiigraph::initialize()` has already been called before running this function.
  * 
- * @param graph An existing graph.
+ * @param graph A graph.
+ * Typically, the nodes are cells and edges are formed between similar cells.
  * @param weights Pointer to an array of weights of length equal to the number of edges in `graph`. 
  * This should be in the same order as the edge list in `graph`.
  * Alternatively `NULL`, if the graph is unweighted.
@@ -80,16 +82,19 @@ struct ClusterWalktrapResults {
  * The input value is ignored, so this object can be re-used across multiple calls to `cluster_walktrap()`.
  */
 inline void cluster_walktrap(const igraph_t* graph, const igraph_vector_t* weights, const ClusterWalktrapOptions& options, ClusterWalktrapResults& output) {
-    auto membership = output.membership.get();
-    auto modularity = (options.report_modularity ? output.modularity.get() : NULL);
-    auto merges = (options.report_merges ? output.merges.get() : NULL);
-    output.status = igraph_community_walktrap(graph, weights, options.steps, merges, modularity, membership);
+    const auto membership = output.membership.get();
+    const auto modularity = (options.report_modularity ? output.modularity.get() : static_cast<igraph_vector_t*>(NULL));
+    const auto merges = (options.report_merges ? output.merges.get() : static_cast<igraph_matrix_int_t*>(NULL));
+
+    const auto status = igraph_community_walktrap(graph, weights, options.steps, merges, modularity, membership);
+    raiigraph::check_code(status);
 }
 
 /**
  * Overload of `cluster_walktrap()` that accepts C++ containers instead of the raw **igraph** pointers.
  *
- * @param graph An existing graph.
+ * @param graph A graph.
+ * Typically, the nodes are cells and edges are formed between similar cells.
  * @param weights Vector of weights of length equal to the number of edges in `graph`. 
  * This should be in the same order as the edge list in `graph`.
  * @param options Further options.
@@ -98,8 +103,7 @@ inline void cluster_walktrap(const igraph_t* graph, const igraph_vector_t* weigh
  */
 inline ClusterWalktrapResults cluster_walktrap(const raiigraph::Graph& graph, const std::vector<igraph_real_t>& weights, const ClusterWalktrapOptions& options) {
     // No need to free this, as it's just a view.
-    igraph_vector_t weight_view;
-    igraph_vector_view(&weight_view, weights.data(), weights.size());
+    const auto weight_view = igraph_vector_view(weights.data(), sanisizer::cast<igraph_int_t>(weights.size()));
 
     ClusterWalktrapResults output;
     cluster_walktrap(graph.get(), &weight_view, options, output);

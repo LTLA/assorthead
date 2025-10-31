@@ -3,6 +3,7 @@
 
 #include "igraph.h"
 #include "error.hpp"
+
 #include <algorithm>
 #include <initializer_list>
 #include <iterator>
@@ -21,14 +22,14 @@ namespace raiigraph {
  * This class has ownership of the underlying `igraph_vector_*_t` object, handling both its initialization and destruction.
  * Users should only pass instances of this class to **igraph** functions that accept an already-initialized vector.
  * Users should not attempt to destroy the vector manually as this is done automatically when the `Vector` goes out of scope.
+ *
+ * It is assumed that users have already called `igraph_setup()` before constructing a instance of this class.
  */
 template<class Ns_>
 class Vector {
 private:
-    void setup(igraph_integer_t size) {
-        if (Ns_::init(&my_vector, size)) {
-            throw std::runtime_error("failed to initialize igraph vector of size " + std::to_string(size));
-        }
+    void setup(igraph_int_t size) {
+        check_code(Ns_::init(&my_vector, size));
     }
 
 public:
@@ -55,12 +56,12 @@ public:
     /**
      * Integer type for the size of the vector.
      */
-    typedef igraph_integer_t size_type;
+    typedef igraph_int_t size_type;
 
     /**
      * Integer type for differences in positions within the vector.
      */
-    typedef igraph_integer_t difference_type;
+    typedef igraph_int_t difference_type;
 
     /**
      * Iterator for the vector contents. 
@@ -118,9 +119,7 @@ public:
      * This constructor will make a deep copy.
      */
     Vector(const Vector<Ns_>& other) {
-        if (Ns_::copy(&my_vector, &(other.my_vector))) {
-            throw std::runtime_error("failed to copy-construct integer igraph vector");
-        }
+        check_code(Ns_::copy(&my_vector, &(other.my_vector)));
     }
 
     /**
@@ -129,9 +128,8 @@ public:
      */
     Vector<Ns_>& operator=(const Vector<Ns_>& other) {
         if (this != &other) {
-            if (Ns_::update(&my_vector, &(other.my_vector))) { // my_vector should already be initialized before the assignment.
-                throw std::runtime_error("failed to copy-assign integer igraph vector");
-            }
+            // my_vector should already be initialized before the assignment.
+            check_code(Ns_::update(&my_vector, &(other.my_vector)));
         }
         return *this;
     }
@@ -338,7 +336,7 @@ public:
      * @param i Index on the vector.
      * @return Reference to the value at `i`.
      */
-    reference operator[](igraph_integer_t i) {
+    reference operator[](igraph_int_t i) {
         return *(begin() + i);
     }
 
@@ -346,7 +344,7 @@ public:
      * @param i Index on the vector.
      * @return Const reference to the value at `i`.
      */
-    const_reference operator[](igraph_integer_t i) const {
+    const_reference operator[](igraph_int_t i) const {
         return *(begin() + i);
     }
 
@@ -531,7 +529,7 @@ private:
 namespace internal {
 
 struct Integer {
-    typedef igraph_integer_t value_type;
+    typedef igraph_int_t value_type;
     typedef igraph_vector_int_t igraph_type;
 
 #define RAIIGRAPH_VECTOR_SUFFIX _int

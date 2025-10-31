@@ -7,6 +7,7 @@
 #include <cstddef>
 
 #include "knncolle/knncolle.hpp"
+#include "sanisizer/sanisizer.hpp"
 
 #if __has_include("igraph.h")
 #include "raiigraph/raiigraph.hpp"
@@ -21,18 +22,20 @@
 namespace scran_graph_cluster {
 
 /** 
- * Choices for the edge weighting scheme during graph construction.
- * Let \f$k\f$ be the number of nearest neighbors for each node.
+ * Choice of edge weighting schemes during graph construction in `build_snn_graph()`.
+ *
+ * Let \f$k\f$ be the number of nearest neighbors for each node, not including the node itself.
  * 
- * - `RANKED` defines the weight between two nodes as \f$k - r/2\f$ where \f$r\f$ is the smallest sum of ranks for any shared neighboring node (Xu and Su, 2015).
- * For the purposes of this ranking, each node has a rank of zero in its own nearest-neighbor set. 
- * More shared neighbors, or shared neighbors that are close to both observations, will generally yield larger weights.
- * - `NUMBER` defines the weight between two nodes as the number of shared nearest neighbors between them. 
- * The weight can range from zero to \f$k + 1\f$, as the node itself is included in its own nearest-neighbor set. 
- * This is a simpler scheme that is also slightly faster but does not account for the ranking of neighbors within each set.
- * - `JACCARD` defines the weight between two nodes as the Jaccard index of their neighbor sets,
- * motivated by the algorithm used by the [**Seurat** R package](https://cran.r-project.org/package=seurat).
- * This weight can range from zero to 1, and is a monotonic transformation of the weight used by `NUMBER`.
+ * - `RANKED` defines the weight of the edge between two nodes as \f$k - r/2\f$ where \f$r\f$ is the smallest sum of ranks for any shared neighboring node (Xu and Su, 2015).
+ *   More shared neighbors, or shared neighbors that are close to both observations, will generally yield larger weights.
+ *   For the purposes of this ranking, each node has a rank of zero in its own nearest-neighbor set. 
+ *   If only the furthest neighbor is shared between nodes (i.e., \f$r = 2f\f$, the weight is set to 1e-6 to distinguish this edge from pairs of cells with no shared neighbors.
+ * - `NUMBER` defines the weight of the edge between two nodes as the number of shared nearest neighbors between them. 
+ *   The weight can range from zero to \f$k + 1\f$, as we include the node itself. 
+ *   This is a simpler scheme that is also slightly faster but does not account for the ranking of neighbors within each set.
+ * - `JACCARD` defines the weight of the edge between two nodes as the Jaccard index of their neighbor sets,
+ *   motivated by the algorithm used by the [**Seurat** R package](https://cran.r-project.org/package=seurat).
+ *   This weight can range from zero to 1, and is a monotonic transformation of the weight used by `NUMBER`.
  *
  * @see
  * Xu C and Su Z (2015).
@@ -46,7 +49,7 @@ enum class SnnWeightScheme : char { RANKED, NUMBER, JACCARD };
  */
 struct BuildSnnGraphOptions {
     /**
-     * The number of nearest neighbors to use for graph construction.
+     * Number of nearest neighbors to use for graph construction.
      * Larger values increase the connectivity of the graph and reduce the granularity of subsequent community detection steps, at the cost of speed.
      * Only relevant for the `build_snn_graph()` overloads without pre-computed neighbors.
      */
@@ -67,8 +70,8 @@ struct BuildSnnGraphOptions {
 /**
  * @brief Results of SNN graph construction.
  *
- * @tparam Node_ Integer type for the node indices.
- * @tparam Weight_ Floating-point type for the edge weights.
+ * @tparam Node_ Integer type of the node indices.
+ * @tparam Weight_ Floating-point type of the edge weights.
  */
 template<typename Node_, typename Weight_>
 struct BuildSnnGraphResults {
@@ -91,31 +94,44 @@ struct BuildSnnGraphResults {
 };
 
 #if __has_include("igraph.h")
-typedef igraph_integer_t DefaultNode;
+typedef igraph_int_t DefaultNode;
 typedef igraph_real_t DefaultWeight;
 #else
 /**
- * Default type for the node indices.
- * Set to `igraph_integer_t` if **igraph** is available.
+ * Default type of the node indices.
+ * Set to `igraph_int_t` if **igraph** is available.
  */
 typedef int DefaultNode;
 
 /**
- * Default type for the edge weights.
+ * Default type of the edge weights.
  * Set to `igraph_real_t` if **igraph** is available.
  */
 typedef double DefaultWeight;
 #endif
 
 /**
- * In a shared nearest-neighbor graph, pairs of cells are connected to each other by an edge with weight determined from their shared nearest neighbors.
+ * @cond
+ */
+template<typename Input_>
+std::remove_cv_t<std::remove_reference_t<Input_> > I(Input_ x) {
+    return x;
+}
+/**
+ * @endcond
+ */
+
+/**
+ * In a shared nearest-neighbor graph, two cells are connected to each other by an edge if they share any of their nearest neighbors.
+ * The weight of this edge is determined from the number or ranking of their shared nearest neighbors.
  * If two cells are close together but have distinct sets of neighbors, the corresponding edge is downweighted as the two cells are unlikely to be part of the same neighborhood.
- * In this manner, highly weighted edges will form within highly interconnected neighborhoods where many cells share the same neighbors.
+ * In this manner, strongly weighted edges will only form within highly interconnected neighborhoods where many cells share the same neighbors.
  * This provides a more sophisticated definition of similarity between cells compared to a simpler (unweighted) nearest neighbor graph that just focuses on immediate proximity.
+ * Community detection algorithms (e.g., `cluster_multilevel()`) can then be applied to the graph to identify clusters of cells.
  *
- * @tparam Node_ Integer type for the node indices.
- * @tparam Weight_ Floating-point type for the edge weights.
- * @tparam Index_ Integer type for the observation index.
+ * @tparam Node_ Integer type of the node indices.
+ * @tparam Weight_ Floating-point type of the edge weights.
+ * @tparam Index_ Integer type of the observation index.
  * @tparam GetNeighbors_ Function that accepts an `Index_` cell index and returns a (const reference to) a container-like object.
  * The container should be iterable in a range-based for loop, support the `[]` operator, and have a `size()` method.
  * @tparam GetIndex_ Function that accepts an element of the container type returned by `GetNeighbors_` and returns an `Index_` containing its observation index.
@@ -132,49 +148,50 @@ typedef double DefaultWeight;
  * The input value is ignored so this can be re-used across multiple calls to `build_snn_graph()`.
  */
 template<typename Node_ = DefaultNode, typename Weight_ = DefaultWeight, typename Index_, class GetNeighbors_, class GetIndex_>
-void build_snn_graph(Index_ num_cells, GetNeighbors_ get_neighbors, GetIndex_ get_index, const BuildSnnGraphOptions& options, BuildSnnGraphResults<Node_, Weight_>& output) {
+void build_snn_graph(const Index_ num_cells, const GetNeighbors_ get_neighbors, const GetIndex_ get_index, const BuildSnnGraphOptions& options, BuildSnnGraphResults<Node_, Weight_>& output) {
     // Reverse mapping is not parallel-frendly, so we don't construct this with the neighbor search.
     std::vector<std::vector<Node_> > simple_hosts;
     std::vector<std::vector<std::pair<Node_, Weight_> > > ranked_hosts;
 
+    // Check that all implicit casts from Index_ to Node_ will be safe.
+    sanisizer::cast<Node_>(num_cells);
+
     if (options.weighting_scheme == SnnWeightScheme::RANKED) {
-        ranked_hosts.resize(num_cells);
+        sanisizer::resize(ranked_hosts, num_cells);
         for (Index_ i = 0; i < num_cells; ++i) {
             ranked_hosts[i].emplace_back(i, 0); // each point is its own 0-th nearest neighbor
             const auto& current = get_neighbors(i);
             Weight_ rank = 1;
-            for (auto x : current) {
+            for (const auto& x : current) {
                 ranked_hosts[get_index(x)].emplace_back(i, rank);
                 ++rank;
             }
         }
     } else {
-        simple_hosts.resize(num_cells);
+        sanisizer::resize(simple_hosts, num_cells);
         for (Index_ i = 0; i < num_cells; ++i) {
             simple_hosts[i].emplace_back(i); // each point is its own 0-th nearest neighbor
             const auto& current = get_neighbors(i);
-            for (auto x : current) {
+            for (const auto& x : current) {
                 simple_hosts[get_index(x)].emplace_back(i);
             }
         }
     }
 
     // Constructing the shared neighbor graph.
-    std::vector<std::vector<Node_> > edge_stores(num_cells);
-    std::vector<std::vector<Weight_> > weight_stores(num_cells);
+    auto edge_stores = sanisizer::create<std::vector<std::vector<Node_> > >(num_cells);
+    auto weight_stores = sanisizer::create<std::vector<std::vector<Weight_> > >(num_cells);
 
-    knncolle::parallelize(options.num_threads, num_cells, [&](int, Index_ start, Index_ length) -> void {
-        std::vector<Weight_> current_score(num_cells);
+    knncolle::parallelize(options.num_threads, num_cells, [&](const int, const Index_ start, const Index_ length) -> void {
+        auto current_score = sanisizer::create<std::vector<Weight_> >(num_cells);
         std::vector<Node_> current_added;
         current_added.reserve(num_cells);
 
         for (Index_ j = start, end = start + length; j < end; ++j) {
-            const Node_ j_cast = j;
-
             const auto& current_neighbors = get_neighbors(j);
-            auto nneighbors = current_neighbors.size();
+            const auto nneighbors = current_neighbors.size();
 
-            for (decltype(nneighbors) i = 0; i <= nneighbors; ++i) {
+            for (decltype(I(nneighbors)) i = 0; i <= nneighbors; ++i) {
                 // First iteration treats 'j' as the zero-th neighbor.
                 // Remaining iterations go through the neighbors of 'j'.
                 const Node_ cur_neighbor = (i == 0 ? j : get_index(current_neighbors[i-1]));
@@ -183,14 +200,13 @@ void build_snn_graph(Index_ num_cells, GetNeighbors_ get_neighbors, GetIndex_ ge
                 // is a nearest neighbor, a.k.a., 'cur_neighbor' is a shared
                 // neighbor of both 'h' and 'j'.
                 if (options.weighting_scheme == SnnWeightScheme::RANKED) {
-                    Weight_ i_cast = i;
                     for (const auto& h : ranked_hosts[cur_neighbor]) {
-                        auto othernode = h.first;
-                        if (othernode < j_cast) { // avoid duplicates from symmetry in the SNN calculations.
+                        const auto othernode = h.first;
+                        if (othernode < static_cast<Node_>(j)) { // avoid duplicates from symmetry in the SNN calculations.
                             auto& existing_other = current_score[othernode];
 
-                            // Recording the lowest combined rank per neighbor (casting to avoid overflow on Node_).
-                            Weight_ currank = h.second + i_cast;
+                            // Recording the lowest combined rank per neighbor. 
+                            const Weight_ currank = h.second + static_cast<Weight_>(i);
                             if (existing_other == 0) { 
                                 existing_other = currank;
                                 current_added.push_back(othernode);
@@ -202,7 +218,7 @@ void build_snn_graph(Index_ num_cells, GetNeighbors_ get_neighbors, GetIndex_ ge
 
                 } else {
                     for (const auto& othernode : simple_hosts[cur_neighbor]) {
-                        if (othernode < j_cast) { // avoid duplicates from symmetry in the SNN calculations.
+                        if (othernode < static_cast<Node_>(j)) { // avoid duplicates from symmetry in the SNN calculations.
                             auto& existing_other = current_score[othernode];
 
                             // Recording the number of shared neighbors.
@@ -221,21 +237,21 @@ void build_snn_graph(Index_ num_cells, GetNeighbors_ get_neighbors, GetIndex_ ge
             auto& current_weights = weight_stores[j];
             current_weights.reserve(current_added.size());
 
-            for (auto othernode : current_added) {
-                Weight_& otherscore = current_score[othernode];
-                Weight_ finalscore;
-                if (options.weighting_scheme == SnnWeightScheme::RANKED) {
-                    finalscore = static_cast<Weight_>(nneighbors) - 0.5 * static_cast<Weight_>(otherscore);
-                } else {
-                    finalscore = otherscore;
-                    if (options.weighting_scheme == SnnWeightScheme::JACCARD) {
-                        finalscore = finalscore / (2 * (nneighbors + 1) - finalscore);
-                    }
-                }
-
+            for (const auto othernode : current_added) {
                 current_edges.push_back(j);
                 current_edges.push_back(othernode);
-                current_weights.push_back(std::max(finalscore, 1e-6)); // Ensuring that an edge with a positive weight is always reported.
+
+                Weight_& otherscore = current_score[othernode];
+                current_weights.push_back([&]{
+                    if (options.weighting_scheme == SnnWeightScheme::RANKED) {
+                        const Weight_ preliminary = static_cast<Weight_>(nneighbors) - otherscore / 2;
+                        return std::max(preliminary, static_cast<Weight_>(1e-6)); // Ensuring that an edge with a positive weight is always reported.
+                    } else if (options.weighting_scheme == SnnWeightScheme::JACCARD) {
+                        return otherscore / (2 * (static_cast<Weight_>(nneighbors) + 1) - otherscore);
+                    } else {
+                        return otherscore;
+                    }
+                }());
 
                 // Resetting all those added to zero.
                 otherscore = 0;
@@ -247,7 +263,7 @@ void build_snn_graph(Index_ num_cells, GetNeighbors_ get_neighbors, GetIndex_ ge
     // Collating the total number of edges.
     std::size_t nedges = 0;
     for (const auto& w : weight_stores) {
-        nedges += w.size();
+        nedges = sanisizer::sum<std::size_t>(nedges, w.size());
     }
 
     output.num_cells = num_cells;
@@ -269,13 +285,13 @@ void build_snn_graph(Index_ num_cells, GetNeighbors_ get_neighbors, GetIndex_ ge
 }
 
 /**
- * Overload to enable convenient usage with pre-computed neighbors from **knncolle**.
+ * Overload of `build_snn_graph()` to enable convenient usage with pre-computed neighbors from **knncolle**.
  * Distances are ignored here; only the ordering of neighbor indices is used.
  *
- * @tparam Node_ Integer type for the node indices.
- * @tparam Weight_ Floating-point type for the edge weights.
- * @tparam Index_ Integer type for the neighbor indices.
- * @tparam Distance_ Floating-point type for the distances.
+ * @tparam Node_ Integer type of the node indices.
+ * @tparam Weight_ Floating-point type of the edge weights.
+ * @tparam Index_ Integer type of the neighbor indices.
+ * @tparam Distance_ Floating-point type of the distances.
  *
  * @param neighbors Vector of nearest-neighbor search results for each cell.
  * Each entry is a pair containing a vector of neighbor indices and a vector of distances to those neighbors.
@@ -290,8 +306,8 @@ template<typename Node_ = DefaultNode, typename Weight_ = DefaultWeight, typenam
 BuildSnnGraphResults<Node_, Weight_> build_snn_graph(const knncolle::NeighborList<Index_, Distance_>& neighbors, const BuildSnnGraphOptions& options) {
     BuildSnnGraphResults<Node_, Weight_> output;
     build_snn_graph(
-        static_cast<Index_>(neighbors.size()), 
-        [&](Index_ i) -> const std::vector<std::pair<Index_, Distance_> >& { return neighbors[i]; }, 
+        sanisizer::cast<Index_>(neighbors.size()), 
+        [&](const Index_ i) -> const std::vector<std::pair<Index_, Distance_> >& { return neighbors[i]; }, 
         [](const std::pair<Index_, Distance_>& x) -> Index_ { return x.first; }, 
         options,
         output
@@ -300,14 +316,14 @@ BuildSnnGraphResults<Node_, Weight_> build_snn_graph(const knncolle::NeighborLis
 }
 
 /**
- * Overload to enable convenient usage with pre-computed neighbors from **knncolle**.
+ * Overload of `build_snn_graph()` to enable convenient usage with pre-computed neighbors from **knncolle**.
  *
- * @tparam Node_ Integer type for the node indices.
- * @tparam Weight_ Floating-point type for the edge weights.
- * @tparam Index_ Integer type for the neighbor indices.
+ * @tparam Node_ Integer type of the node indices.
+ * @tparam Weight_ Floating-point type of the edge weights.
+ * @tparam Index_ Integer type of the neighbor indices.
  *
  * @param neighbors Vector of vectors of indices for the neighbors for each cell, sorted by increasing distance.
- * It is generally expected that the same number of neighbors are present for each cell, though differences between cells are supported.
+ * It is generally expected (though not strictly required) that the same number of neighbors are present for each cell.
  * @param options Further options for graph construction.
  * Note that `BuildSnnGraphOptions::num_neighbors` is ignored here.
  *
@@ -317,9 +333,9 @@ template<typename Node_ = int, typename Weight_ = double, typename Index_>
 BuildSnnGraphResults<Node_, Weight_> build_snn_graph(const std::vector<std::vector<Index_> >& neighbors, const BuildSnnGraphOptions& options) {
     BuildSnnGraphResults<Node_, Weight_> output;
     build_snn_graph(
-        static_cast<Index_>(neighbors.size()),
-        [&](Index_ i) -> const std::vector<Index_>& { return neighbors[i]; }, 
-        [](Index_ x) -> Index_ { return x; }, 
+        sanisizer::cast<Index_>(neighbors.size()),
+        [&](const Index_ i) -> const std::vector<Index_>& { return neighbors[i]; }, 
+        [](const Index_ x) -> Index_ { return x; }, 
         options,
         output
     );
@@ -327,14 +343,14 @@ BuildSnnGraphResults<Node_, Weight_> build_snn_graph(const std::vector<std::vect
 }
 
 /**
- * Overload to enable convenient usage with a prebuilt nearest-neighbor search index from **knncolle**.
+ * Overload of `build_snn_graph()` to enable convenient usage with a prebuilt nearest-neighbor search index from **knncolle**.
  *
- * @tparam Node_ Integer type for the node indices.
- * @tparam Weight_ Floating-point type for the edge weights.
- * @tparam Index_ Integer type for the cell index.
- * @tparam Input_ Numeric type for the input data used to build the search index.
+ * @tparam Node_ Integer type of the node indices.
+ * @tparam Weight_ Floating-point type of the edge weights.
+ * @tparam Index_ Integer type of the cell index.
+ * @tparam Input_ Numeric type of the input data used to build the search index.
  * This is only required to define the `knncolle::Prebuilt` class and is otherwise ignored.
- * @tparam Distance_ Floating-point type for the distances.
+ * @tparam Distance_ Floating-point type of the distances.
  *
  * @param[in] prebuilt A prebuilt nearest-neighbor search index on the cells of interest.
  * @param options Further options for graph construction.
@@ -343,47 +359,48 @@ BuildSnnGraphResults<Node_, Weight_> build_snn_graph(const std::vector<std::vect
  */
 template<typename Node_ = DefaultNode, typename Weight_ = DefaultWeight, typename Index_, typename Input_, typename Distance_>
 BuildSnnGraphResults<Node_, Weight_> build_snn_graph(const knncolle::Prebuilt<Index_, Input_, Distance_>& prebuilt, const BuildSnnGraphOptions& options) {
-    auto neighbors = knncolle::find_nearest_neighbors_index_only(prebuilt, options.num_neighbors, options.num_threads);
+    const auto neighbors = knncolle::find_nearest_neighbors_index_only(prebuilt, options.num_neighbors, options.num_threads);
     return build_snn_graph<Node_, Weight_>(neighbors, options);
 }
 
 /**
- * Overload to enable convenient usage with a column-major array of cell coordinates.
+ * Overload of `build_snn_graph()` to enable convenient usage with a column-major array of cell coordinates.
  *
- * @tparam Node_ Integer type for the node indices.
- * @tparam Weight_ Floating-point type for the edge weights.
- * @tparam Index_ Integer type for the cell index.
- * @tparam Input_ Numeric type for the input data.
- * @tparam Distance_ Floating-point type for the distances.
+ * @tparam Node_ Integer type of the node indices.
+ * @tparam Weight_ Floating-point type of the edge weights.
+ * @tparam Index_ Integer type of the cell index.
+ * @tparam Input_ Numeric type of the input data.
+ * @tparam Distance_ Floating-point type of the distances.
  * @tparam Matrix_ Class of the input data matrix for the neighbor search.
  * This should satisfy the `knncolle::Matrix` interface.
  *
  * @param num_dims Number of dimensions for the cell coordinates.
  * @param num_cells Number of cells in the dataset.
  * @param[in] data Pointer to a `num_dims`-by-`num_cells` column-major array of cell coordinates where rows are dimensions and columns are cells.
- * @param knn_method Specification of the nearest-neighbor search algorithm, e.g., `knncolle::VptreeBuilder`, `knncolle::KmknnBuilder`.
+ * @param knn_method Specification of the nearest-neighbor search algorithm, e.g., `knncolle::VptreeBuilder`. 
  * @param options Further options for graph construction.
  *
  * @return The edges and weights of the SNN graph.
  */
 template<typename Node_ = DefaultNode, typename Weight_ = DefaultWeight, typename Index_, typename Input_, typename Distance_, class Matrix_ = knncolle::Matrix<Index_, Input_> >
 BuildSnnGraphResults<Node_, Weight_> build_snn_graph(
-    std::size_t num_dims, 
-    Index_ num_cells, 
+    const std::size_t num_dims, 
+    const Index_ num_cells, 
     const Input_* data, 
     const knncolle::Builder<Index_, Input_, Distance_, Matrix_>& knn_method,
     const BuildSnnGraphOptions& options) 
 {
-    auto prebuilt = knn_method.build_unique(knncolle::SimpleMatrix(num_dims, num_cells, data));
+    const auto prebuilt = knn_method.build_unique(knncolle::SimpleMatrix(num_dims, num_cells, data));
     return build_snn_graph<Node_, Weight_>(*prebuilt, options);
 }
 
 #if __has_include("igraph.h")
 /**
  * Convert the edges in `BuildSnnGraphResults` to a **igraph** graph object for use in **igraph** functions.
+ * See also `edges_to_graph()`.
  *
- * @tparam Node_ Integer type for the node indices.
- * @tparam Weight_ Floating-point type for the edge weights.
+ * @tparam Node_ Integer type of the node indices.
+ * @tparam Weight_ Floating-point type of the edge weights.
  *
  * @param result Result of `build_snn_graph()`, containing the edges of the SNN graph.
  *

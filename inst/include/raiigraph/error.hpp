@@ -18,13 +18,18 @@ public:
     /**
      * @param code Error code returned by **igraph** functions.
      */
-    IgraphError(igraph_error_t code) : std::runtime_error(igraph_strerror(code)), code(code) {}
+    IgraphError(igraph_error_t code) : std::runtime_error(igraph_strerror(code)), my_code(code) {}
 
     /**
-     * Error code returned by **igraph** functions.
+     * @return Error code returned by **igraph** functions.
      * This should be anything but `IGRAPH_SUCCESS`.
      */
-    igraph_error_t code;
+    igraph_error_t code() const {
+        return my_code;
+    }
+
+private:
+    igraph_error_t my_code;
 };
 
 /**

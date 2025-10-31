@@ -4,6 +4,7 @@
 #include "igraph.h"
 #include "error.hpp"
 #include "Vector.hpp"
+
 #include <algorithm>
 #include <iterator>
 
@@ -21,14 +22,14 @@ namespace raiigraph {
  * This class has ownership of the underlying `igraph_matrix_*_t` object, handling both its initialization and destruction.
  * Users should only pass instances of this class to **igraph** functions that accept an already-initialized matrix.
  * Users should not attempt to destroy the matrix manually as this is done automatically when the `Matrix` goes out of scope.
+ *
+ * It is assumed that users have already called `igraph_setup()` before constructing a instance of this class.
  */
 template<class Ns_>
 class Matrix {
 private:
-    void setup(igraph_integer_t nr, igraph_integer_t nc) {
-        if (Ns_::init(&my_matrix, nr, nc)) {
-            throw std::runtime_error("failed to initialize igraph matrix of dimensions " + std::to_string(nr) + " x " + std::to_string(nc));
-        }
+    void setup(igraph_int_t nr, igraph_int_t nc) {
+        check_code(Ns_::init(&my_matrix, nr, nc));
     }
 
 public:
@@ -55,12 +56,12 @@ public:
     /**
      * Integer type for the size of the matrix.
      */
-    typedef igraph_integer_t size_type;
+    typedef igraph_int_t size_type;
 
     /**
      * Integer type for differences in positions within the matrix.
      */
-    typedef igraph_integer_t difference_type;
+    typedef igraph_int_t difference_type;
 
     /**
      * Iterator for the matrix contents. 
@@ -116,9 +117,7 @@ public:
      * This constructor will make a deep copy.
      */
     Matrix(const Matrix<Ns_>& other) {
-        if (Ns_::copy(&my_matrix, &(other.my_matrix))) {
-            throw std::runtime_error("failed to copy-construct integer igraph matrix");
-        }
+        check_code(Ns_::copy(&my_matrix, &(other.my_matrix)));
     }
 
     /**
@@ -127,9 +126,8 @@ public:
      */
     Matrix<Ns_>& operator=(const Matrix<Ns_>& other) {
         if (this != &other) {
-            if (Ns_::update(&my_matrix, &(other.my_matrix))) { // my_matrix should already be initialized before the assignment.
-                throw std::runtime_error("failed to copy-assign integer igraph matrix");
-            }
+            // my_matrix should already be initialized before the assignment.
+            check_code(Ns_::update(&my_matrix, &(other.my_matrix)));
         }
         return *this;
     }
@@ -485,7 +483,7 @@ public:
             using iterator_category = std::random_access_iterator_tag;
             typedef typename Ns_::value_type value_type;
             typedef decltype(&std::declval<BaseReference>()) pointer;
-            typedef igraph_integer_t difference_type;
+            typedef igraph_int_t difference_type;
             typedef BaseReference reference;
 
         public:
@@ -757,7 +755,7 @@ private:
 namespace matrix_internal {
 
 struct Integer {
-    typedef igraph_integer_t value_type;
+    typedef igraph_int_t value_type;
     typedef igraph_matrix_int_t igraph_type;
     typedef IntVector vector_type;
 
