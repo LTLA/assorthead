@@ -1,28 +1,38 @@
 #ifndef IRLBA_UTILS_HPP
 #define IRLBA_UTILS_HPP
 
-#include "Eigen/Dense"
 #include <random>
 #include <utility>
+#include <type_traits>
+
 #include "aarand/aarand.hpp"
+#include "Eigen/Dense"
 
 namespace irlba {
 
-namespace internal {
+template<typename Input_>
+using I = typename std::remove_cv<typename std::remove_reference<Input_>::type>::type;
 
 template<class EigenVector_, class Engine_>
 void fill_with_random_normals(EigenVector_& vec, Engine_& eng) {
-    Eigen::Index i = 1, limit = vec.size();
-    while (i < limit) {
-        auto paired = aarand::standard_normal<typename EigenVector_::Scalar>(eng);
-        vec[i - 1] = paired.first;
-        vec[i] = paired.second;
-        i += 2;
+    auto num_total = vec.size();
+    const bool odd = num_total % 2;
+    if (odd) {
+        --num_total;
     }
 
-    if (i == limit) {
-        auto paired = aarand::standard_normal(eng);
-        vec[i - 1] = paired.first;
+    // Box-Muller gives us two random values at a time.
+    typedef typename EigenVector_::Scalar Float;
+    for (I<decltype(num_total)> i = 0; i < num_total; i += 2) {
+        const auto paired = aarand::standard_normal<Float>(eng);
+        vec[i] = paired.first;
+        vec[i + 1] = paired.second;
+    }
+
+    if (odd) {
+        // Adding the poor extra for odd total lengths.
+        auto paired = aarand::standard_normal<Float>(eng);
+        vec[num_total] = paired.first;
     }
 }
 
@@ -40,18 +50,6 @@ template<class Matrix_, class Engine_>
 void fill_with_random_normals(Matrix_& mat, Eigen::Index column, Engine_& eng) {
     ColumnVectorProxy proxy(mat, column);
     fill_with_random_normals(proxy, eng);
-}
-
-template<class Right_, class EigenVector_>
-const EigenVector_& realize_rhs(const Right_& rhs, EigenVector_& buffer) {
-    if constexpr(std::is_same<Right_, EigenVector_>::value) {
-        return rhs;
-    } else {
-        buffer.noalias() = rhs;
-        return buffer;
-    }
-}
-
 }
 
 }

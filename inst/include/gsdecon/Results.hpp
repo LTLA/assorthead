@@ -11,8 +11,8 @@
 namespace gsdecon {
 
 /**
- * @brief Buffers for the `compute()` results.
- * @tparam Float_ Floating-point type for the results.
+ * @brief Buffers for the results of `compute()` and `compute_blocked()`.
+ * @tparam Float_ Floating-point type of the results.
  */
 template<typename Float_>
 struct Buffers {
@@ -30,8 +30,8 @@ struct Buffers {
 };
 
 /**
- * @brief Results of `compute()`.
- * @tparam Float_ Floating-point type for the results.
+ * @brief Results of `compute()` and `compute_blocked()`.
+ * @tparam Float_ Floating-point type of the results.
  */
 template<typename Float_>
 struct Results {
@@ -39,14 +39,14 @@ struct Results {
      * Vector of per-cell scores for this gene set.
      * This has length equal to the number of cells.
      */
-    std::vector<double> scores;
+    std::vector<Float_> scores;
 
     /**
      * Vector of weights of length equal to the number of genes in the set.
      * Each entry contains the weight of each successive gene in the gene set.
      * Weights are guaranteed to be non-negative, where larger values indicate a greater contribution to the low-rank approximation.
      */
-    std::vector<double> weights;
+    std::vector<Float_> weights;
 };
 
 }

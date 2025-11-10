@@ -7,15 +7,14 @@
 
 #include "aarand/aarand.hpp"
 #include "irlba/irlba.hpp"
-#include "irlba/parallel.hpp"
+#include "Eigen/Dense"
 #include "sanisizer/sanisizer.hpp"
 
 #include "NeighborList.hpp"
 #include "Options.hpp"
+#include "utils.hpp"
 
 namespace umappp {
-
-namespace internal {
 
 /* Peeled from the function of the same name in the uwot package,
  * see https://github.com/jlmelville/uwot/blob/master/R/init.R for details.
@@ -23,7 +22,14 @@ namespace internal {
  * It is assumed that 'edges' has already been symmetrized.
  */
 template<typename Index_, typename Float_>
-bool normalized_laplacian(const NeighborList<Index_, Float_>& edges, const std::size_t num_dim, Float_* const Y, const irlba::Options& irlba_opt, const int nthreads, double scale) {
+bool normalized_laplacian(
+    const NeighborList<Index_, Float_>& edges,
+    const std::size_t num_dim,
+    Float_* const Y,
+    const irlba::Options<Eigen::VectorXd>& irlba_opt,
+    const int nthreads,
+    double scale
+) {
     const Index_ nobs = edges.size();
     auto sums = sanisizer::create<std::vector<double> >(nobs); // we deliberately use double-precision to avoid difficult problems from overflow/underflow inside IRLBA.
     std::vector<std::size_t> pointers(sanisizer::sum<typename std::vector<std::size_t>::size_type>(nobs, 1));
@@ -97,11 +103,20 @@ bool normalized_laplacian(const NeighborList<Index_, Float_>& edges, const std::
      */
 
     const irlba::ParallelSparseMatrix<
-        decltype(values),
-        decltype(indices),
-        decltype(pointers)
-        // Eigen::VectorXd // TODO: deliberately double-precision here, but not available in 2.0.0
-    > mat(nobs, nobs, std::move(values), std::move(indices), std::move(pointers), /* column_major = */ true, nthreads);
+        Eigen::VectorXd,
+        Eigen::MatrixXd,
+        I<decltype(values)>,
+        I<decltype(indices)>,
+        I<decltype(pointers)>
+    > mat(
+        nobs,
+        nobs,
+        std::move(values),
+        std::move(indices),
+        std::move(pointers),
+        /* column_major = */ true,
+        nthreads
+    );
     irlba::EigenThreadScope tscope(nthreads);
 
     const auto actual = irlba::compute(mat, num_dim + 1, irlba_opt);
@@ -131,7 +146,7 @@ bool has_multiple_components(const NeighborList<Index_, Float_>& edges) {
     }
 
     // We assume that 'edges' is symmetric so we can use a simple recursive algorithm.
-    decltype(edges.size()) in_component = 1;
+    I<decltype(edges.size())> in_component = 1;
     std::vector<Index_> remaining(1, 0);
     std::vector<unsigned char> traversed(edges.size(), 0);
     traversed[0] = 1;
@@ -157,13 +172,13 @@ bool spectral_init(
     const NeighborList<Index_, Float_>& edges,
     const std::size_t num_dim,
     Float_* const vals,
-    const irlba::Options& irlba_opt,
+    const irlba::Options<Eigen::VectorXd>& irlba_opt,
     const int nthreads,
     const double scale,
     const bool jitter,
     const double jitter_sd,
-    const RngEngine::result_type seed)
-{
+    const RngEngine::result_type seed
+) {
     if (has_multiple_components(edges)) {
         return false;
     }
@@ -207,8 +222,6 @@ void random_init(
         vals[i] = aarand::standard_uniform<Float_>(rng) * mult - shift; ; // values from (-scale, scale).
     }
     return;
-}
-
 }
 
 }

@@ -2,11 +2,12 @@
 #define GSDECON_COMPUTE_HPP
 
 #include <algorithm>
-#include <vector>
+#include <numeric>
 
 #include "tatami/tatami.hpp"
 #include "irlba/irlba.hpp"
 #include "scran_pca/scran_pca.hpp"
+#include "sanisizer/sanisizer.hpp"
 
 #include "Options.hpp"
 #include "Results.hpp"
@@ -28,21 +29,21 @@ namespace gsdecon {
  *
  * By default, we use a rank-1 approximation (see `Options::rank`).
  * The reported weight for each gene (in `Results::weights`) is simply the absolute value of the associated rotation vector from the PCA.
- * Higher ranks may capture more biological signal for non-linear variation but also increases noise in the per-cell scores.
+ * Increasing the rank of the approximation may capture more biological signal but also increases noise in the per-cell scores.
  * If higher ranks are used, each gene's weight is instead defined as the root mean square of that gene's values across all rotation vectors.
  *
- * @tparam Value_ Floating-point type for the data.
- * @tparam Index_ Integer type for the indices.
- * @tparam Float_ Floating-point type for the output.
+ * @tparam Value_ Floating-point type of the data.
+ * @tparam Index_ Integer type of the indices.
+ * @tparam Float_ Floating-point type of the output.
  *
- * @param[in] matrix An input **tatami** matrix.
- * Columns should contain cells while rows should contain genes in the set of interest.
+ * @param[in] matrix A matrix where columns correspond to cells and rows correspond to genes.
+ * Entries are typically log-expression values. 
  * @param options Further options. 
  * @param[out] output Collection of buffers in which to store the scores and weights.
  */
 template<typename Value_, typename Index_, typename Float_>
 void compute(const tatami::Matrix<Value_, Index_>& matrix, const Options& options, const Buffers<Float_>& output) {
-    if (internal::check_edge_cases(matrix, options.rank, output)) {
+    if (check_edge_cases(matrix, options.rank, output)) {
         return;
     }
 
@@ -52,22 +53,22 @@ void compute(const tatami::Matrix<Value_, Index_>& matrix, const Options& option
     sopt.realize_matrix = options.realize_matrix;
     sopt.num_threads = options.num_threads;
     sopt.irlba_options = options.irlba_options;
-    auto res = scran_pca::simple_pca(matrix, sopt);
+    const auto res = scran_pca::simple_pca(matrix, sopt);
 
-    double shift = std::accumulate(res.center.begin(), res.center.end(), 0.0) / matrix.nrow();
+    const Float_ shift = std::accumulate(res.center.begin(), res.center.end(), static_cast<Float_>(0)) / matrix.nrow();
     std::fill_n(output.scores, matrix.ncol(), shift);
-    internal::process_output(res.rotation, res.components, options.scale, res.scale, output);
+    process_output(res.rotation, res.components, options.scale, res.scale, output);
 }
 
 /**
  * Overload of `compute()` that allocates memory for the results.
  *
- * @tparam Float_ Floating-point type for the output.
- * @tparam Value_ Floating-point type for the data.
- * @tparam Index_ Integer type for the indices.
+ * @tparam Float_ Floating-point type of the output.
+ * @tparam Value_ Floating-point type of the data.
+ * @tparam Index_ Integer type of the indices.
  *
- * @param[in] matrix An input **tatami** matrix.
- * Columns should contain cells while rows should contain genes.
+ * @param[in] matrix A matrix where columns correspond to cells and rows correspond to genes.
+ * Entries are typically log-expression values. 
  * @param options Further options. 
  *
  * @return Results of the gene set score calculation.
@@ -75,8 +76,16 @@ void compute(const tatami::Matrix<Value_, Index_>& matrix, const Options& option
 template<typename Float_ = double, typename Value_, typename Index_>
 Results<Float_> compute(const tatami::Matrix<Value_, Index_>& matrix, const Options& options) {
     Results<Float_> output;
-    output.weights.resize(matrix.nrow());
-    output.scores.resize(matrix.ncol());
+    sanisizer::resize(output.weights, matrix.nrow()
+#ifdef SCRAN_QC_TEST_INIT
+        , SCRAN_QC_TEST_INIT
+#endif
+    );
+    sanisizer::resize(output.scores, matrix.ncol()
+#ifdef SCRAN_QC_TEST_INIT
+        , SCRAN_QC_TEST_INIT
+#endif
+    );
 
     Buffers<Float_> buffers;
     buffers.weights = output.weights.data();
