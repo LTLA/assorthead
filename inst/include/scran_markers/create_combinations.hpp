@@ -20,7 +20,7 @@ namespace internal {
 template<typename Group_, typename Block_>
 std::vector<std::size_t> create_combinations(const std::size_t ngroups, const Group_* const group, const Block_* const block, const std::size_t NC) {
     auto combinations = sanisizer::create<std::vector<std::size_t> >(NC);
-    for (decltype(I(NC)) c = 0; c < NC; ++c) {
+    for (I<decltype(NC)> c = 0; c < NC; ++c) {
         combinations[c] = sanisizer::nd_offset<std::size_t>(group[c], ngroups, block[c]); // group is the faster changing dimension.
     }
     return combinations;

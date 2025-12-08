@@ -3,6 +3,7 @@
 
 #include <vector>
 #include <cstddef>
+#include <optional>
 
 #include "scran_blocks/scran_blocks.hpp"
 #include "tatami/tatami.hpp"
@@ -11,7 +12,7 @@
 
 #include "scan_matrix.hpp"
 #include "average_group_stats.hpp"
-#include "PrecomputedPairwiseWeights.hpp"
+#include "block_averages.hpp"
 #include "create_combinations.hpp"
 #include "cohens_d.hpp"
 #include "simple_diff.hpp"
@@ -78,6 +79,13 @@ struct ScoreMarkersPairwiseOptions {
     bool compute_delta_detected = true;
 
     /**
+     * Policy to use for averaging statistics across blocks into a single value.
+     * This can either be `BlockAveragePolicy::MEAN` (weighted mean) or `BlockAveragePolicy::QUANTILE` (quantile).
+     * Only used in `score_markers_pairwise_blocked()`.
+     */
+    BlockAveragePolicy block_average_policy = BlockAveragePolicy::MEAN;
+
+    /**
      * Policy to use for weighting blocks when computing average statistics/effect sizes across blocks.
      *
      * The default of `scran_blocks::WeightPolicy::VARIABLE` is to define equal weights for blocks once they reach a certain size
@@ -86,14 +94,23 @@ struct ScoreMarkersPairwiseOptions {
      *
      * Other options include `scran_blocks::WeightPolicy::EQUAL`, where all blocks are equally weighted regardless of size;
      * and `scran_blocks::WeightPolicy::NONE`, where the contribution of each block is proportional to its size.
+     *
+     * Only used in `score_markers_pairwise_blocked()` when `ScoreMarkersPairwiseOptions::block_average_policy = BlockAveragePolicy::MEAN`.
      */
     scran_blocks::WeightPolicy block_weight_policy = scran_blocks::WeightPolicy::VARIABLE;
 
     /**
      * Parameters for the variable block weights, including the threshold at which blocks are considered to be large enough to have equal weight.
-     * Only used when `ScoreMarkersPairwiseOptions::block_weight_policy = scran_blocks::WeightPolicy::VARIABLE`.
+     * Only used in `score_markers_pairwise_blocked()` when `ScoreMarkersPairwiseOptions::block_average_policy = BlockAveragePolicy::MEAN`
+     * and `ScoreMarkersPairwiseOptions::block_weight_policy = scran_blocks::WeightPolicy::VARIABLE`.
      */
     scran_blocks::VariableWeightParameters variable_block_weight_parameters;
+
+    /**
+     * Quantile probability for summarizing statistics across blocks. 
+     * Only used in `score_markers_pairwise_blocked()` when `ScoreMarkersPairwiseOptions::block_average_policy = BlockAveragePolicy::QUANTILE`.
+     */
+    double block_quantile = 0.5;
 };
 
 /**
@@ -240,33 +257,62 @@ void process_simple_pairwise_effects(
     const std::size_t ngroups,
     const std::size_t nblocks,
     const std::size_t ncombos,
-    std::vector<Stat_>& combo_means,
-    std::vector<Stat_>& combo_vars,
-    std::vector<Stat_>& combo_detected,
-    const ScoreMarkersPairwiseBuffers<Stat_>& output,
-    const std::vector<Stat_>& combo_weights,
+    const std::vector<Stat_>& combo_means,
+    const std::vector<Stat_>& combo_vars,
+    const std::vector<Stat_>& combo_detected,
     const double threshold,
-    const int num_threads)
-{
-    std::vector<Stat_> total_weights_per_group;
-    const Stat_* total_weights_ptr = combo_weights.data();
-    if (nblocks > 1) {
-        total_weights_per_group = compute_total_weight_per_group(ngroups, nblocks, combo_weights.data());
-        total_weights_ptr = total_weights_per_group.data();
+    const BlockAverageInfo<Stat_>& average_info, 
+    const ScoreMarkersPairwiseBuffers<Stat_>& output,
+    const int num_threads
+) {
+    const Stat_* total_weights_ptr = NULL;
+    std::optional<std::vector<Stat_> > total_weights_per_group;
+    if (average_info.use_mean()) {
+        if (!output.mean.empty() || !output.detected.empty()) {
+            if (nblocks > 1) {
+                total_weights_per_group = compute_total_weight_per_group(ngroups, nblocks, average_info.combo_weights().data());
+                total_weights_ptr = total_weights_per_group->data();
+            } else {
+                total_weights_ptr = average_info.combo_weights().data();
+            }
+        }
     }
-    PrecomputedPairwiseWeights<Stat_> preweights(ngroups, nblocks, combo_weights.data());
+
+    std::optional<PrecomputedPairwiseWeights<Stat_> > preweights;
+    if (average_info.use_mean()) {
+        if (output.cohens_d != NULL || output.delta_mean != NULL || output.delta_detected != NULL) {
+            preweights.emplace(ngroups, nblocks, average_info.combo_weights().data());
+        }
+    }
 
     tatami::parallelize([&](const int, const Index_ start, const Index_ length) -> void {
+        std::optional<std::vector<Stat_> > qbuffer, qrevbuffer;
+        std::optional<scran_blocks::SingleQuantileVariable<Stat_, typename std::vector<Stat_>::iterator> > qcalc;
+        if (!average_info.use_mean()) {
+            qbuffer.emplace();
+            qrevbuffer.emplace();
+            qcalc.emplace(nblocks, average_info.quantile());
+        }
+
         for (Index_ gene = start, end = start + length; gene < end; ++gene) {
             auto in_offset = sanisizer::product_unsafe<std::size_t>(gene, ncombos);
 
             if (!output.mean.empty()) {
                 const auto tmp_means = combo_means.data() + in_offset;
-                average_group_stats(gene, ngroups, nblocks, tmp_means, combo_weights.data(), total_weights_ptr, output.mean);
+                if (average_info.use_mean()) {
+                    average_group_stats_blockmean(gene, ngroups, nblocks, tmp_means, average_info.combo_weights().data(), total_weights_ptr, output.mean);
+                } else {
+                    average_group_stats_blockquantile(gene, ngroups, nblocks, tmp_means, *qbuffer, *qcalc, output.mean);
+                }
             }
+
             if (!output.detected.empty()) {
                 const auto tmp_detected = combo_detected.data() + in_offset;
-                average_group_stats(gene, ngroups, nblocks, tmp_detected, combo_weights.data(), total_weights_ptr, output.detected);
+                if (average_info.use_mean()) {
+                    average_group_stats_blockmean(gene, ngroups, nblocks, tmp_detected, average_info.combo_weights().data(), total_weights_ptr, output.detected);
+                } else {
+                    average_group_stats_blockquantile(gene, ngroups, nblocks, tmp_detected, *qbuffer, *qcalc, output.detected);
+                }
             }
 
             // Computing the effect sizes.
@@ -275,24 +321,44 @@ void process_simple_pairwise_effects(
             if (output.cohens_d != NULL) {
                 const auto tmp_means = combo_means.data() + in_offset;
                 const auto tmp_variances = combo_vars.data() + in_offset;
-                compute_pairwise_cohens_d(tmp_means, tmp_variances, ngroups, nblocks, preweights, threshold, output.cohens_d + out_offset);
+                const auto outptr = output.cohens_d + out_offset;
+                if (average_info.use_mean()) {
+                    compute_pairwise_cohens_d_blockmean(tmp_means, tmp_variances, ngroups, nblocks, threshold, *preweights, outptr);
+                } else {
+                    compute_pairwise_cohens_d_blockquantile(tmp_means, tmp_variances, ngroups, nblocks, threshold, *qbuffer, *qrevbuffer, *qcalc, outptr);
+                }
             }
 
             if (output.delta_detected != NULL) {
                 const auto tmp_detected = combo_detected.data() + in_offset;
-                compute_pairwise_simple_diff(tmp_detected, ngroups, nblocks, preweights, output.delta_detected + out_offset);
+                const auto outptr = output.delta_detected + out_offset;
+                if (average_info.use_mean()) {
+                    compute_pairwise_simple_diff_blockmean(tmp_detected, ngroups, nblocks, *preweights, outptr);
+                } else {
+                    compute_pairwise_simple_diff_blockquantile(tmp_detected, ngroups, nblocks, *qbuffer, *qcalc, outptr);
+                }
             }
 
             if (output.delta_mean != NULL) {
                 const auto tmp_means = combo_means.data() + in_offset;
-                compute_pairwise_simple_diff(tmp_means, ngroups, nblocks, preweights, output.delta_mean + out_offset);
+                const auto outptr = output.delta_mean + out_offset;
+                if (average_info.use_mean()) {
+                    compute_pairwise_simple_diff_blockmean(tmp_means, ngroups, nblocks, *preweights, outptr);
+                } else {
+                    compute_pairwise_simple_diff_blockquantile(tmp_means, ngroups, nblocks, *qbuffer, *qcalc, outptr);
+                }
             }
         }
     }, ngenes, num_threads);
 }
 
 template<typename Index_, typename Stat_>
-ScoreMarkersPairwiseBuffers<Stat_> preallocate_pairwise_results(const Index_ ngenes, const std::size_t ngroups, ScoreMarkersPairwiseResults<Stat_>& store, const ScoreMarkersPairwiseOptions& opt) {
+ScoreMarkersPairwiseBuffers<Stat_> preallocate_pairwise_results(
+    const Index_ ngenes,
+    const std::size_t ngroups,
+    ScoreMarkersPairwiseResults<Stat_>& store,
+    const ScoreMarkersPairwiseOptions& opt
+) {
     ScoreMarkersPairwiseBuffers<Stat_> output;
 
     if (opt.compute_group_mean) {
@@ -375,11 +441,18 @@ void score_markers_pairwise(
 
     // For a single block, this usually doesn't really matter, but we do it for consistency with the multi-block case,
     // and to account for variable weighting where non-zero block sizes get zero weight.
-    const auto combo_weights = scran_blocks::compute_weights<Stat_>(
-        combo_sizes,
-        options.block_weight_policy,
-        options.variable_block_weight_parameters
-    );
+    BlockAverageInfo<Stat_> average_info;
+    if (options.block_average_policy == BlockAveragePolicy::MEAN) {
+        average_info = BlockAverageInfo<Stat_>(
+            scran_blocks::compute_weights<Stat_>(
+                combo_sizes,
+                options.block_weight_policy,
+                options.variable_block_weight_parameters
+            )
+        );
+    } else {
+        average_info = BlockAverageInfo<Stat_>(options.block_quantile);
+    }
 
     if (output.auc != NULL || matrix.prefer_rows()) {
         scan_matrix_by_row_full_auc<single_block_>(
@@ -390,12 +463,12 @@ void score_markers_pairwise(
             block,
             ncombos,
             combo,
+            combo_sizes,
+            average_info,
             combo_means,
             combo_vars,
             combo_detected,
             output.auc,
-            combo_sizes,
-            combo_weights,
             options.threshold,
             options.num_threads
         );
@@ -417,10 +490,10 @@ void score_markers_pairwise(
                     return combo;
                 }
             }(),
+            combo_sizes,
             combo_means,
             combo_vars,
             combo_detected,
-            combo_sizes,
             options.num_threads
         );
     }
@@ -433,9 +506,9 @@ void score_markers_pairwise(
         combo_means,
         combo_vars,
         combo_detected,
-        output,
-        combo_weights,
         options.threshold,
+        average_info,
+        output,
         options.num_threads
     );
 }

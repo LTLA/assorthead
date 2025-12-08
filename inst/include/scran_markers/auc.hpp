@@ -16,21 +16,21 @@ namespace internal {
 template<typename Value_, typename Group_, typename Output_>
 struct AucWorkspace {
     AucWorkspace(const std::size_t ngroups, Output_* const buffer) : 
-        less_than(sanisizer::cast<decltype(I(less_than.size()))>(ngroups)
+        less_than(sanisizer::cast<I<decltype(less_than.size())> >(ngroups)
 #ifdef SCRAN_MARKERS_TEST_INIT
             , SCRAN_MARKERS_TEST_INIT
 #endif
         ),
-        equal(sanisizer::cast<decltype(I(equal.size()))>(ngroups)
+        equal(sanisizer::cast<I<decltype(equal.size())> >(ngroups)
 #ifdef SCRAN_MARKERS_TEST_INIT
             , SCRAN_MARKERS_TEST_INIT
 #endif
         ),
-        outputs(sanisizer::cast<decltype(I(outputs.size()))>(ngroups)),
+        outputs(sanisizer::cast<I<decltype(outputs.size())> >(ngroups)),
         output_start(buffer),
         output_end(buffer)
     {
-        for (decltype(I(ngroups)) i = 0; i < ngroups; ++i) {
+        for (I<decltype(ngroups)> i = 0; i < ngroups; ++i) {
             outputs[i] = output_end;
             output_end += ngroups;
         }
@@ -55,7 +55,7 @@ void prepare_auc_workspace(AucWorkspace<Value_, Group_, Output_>& work) {
     std::fill(work.output_start, work.output_end, 0);
 }
 
-template<typename Value_, typename Group_, typename Count_, typename Output_>
+template<typename Value_, typename Group_, typename Output_, typename Count_>
 void compute_pairwise_auc(AucWorkspace<Value_, Group_, Output_>& work, const std::vector<Count_>& num_zeros, const std::vector<Count_>& totals, const bool normalize) {
     prepare_auc_workspace(work);
 
@@ -66,7 +66,7 @@ void compute_pairwise_auc(AucWorkspace<Value_, Group_, Output_>& work, const std
     const auto ngroups = num_zeros.size();
 
     const auto num_input = input.size();
-    typedef decltype(I(num_input)) Position;
+    typedef I<decltype(num_input)> Position;
 
     auto inner_loop = [&](Position& pos) -> void {
         const auto& current = input[pos];
@@ -82,17 +82,17 @@ void compute_pairwise_auc(AucWorkspace<Value_, Group_, Output_>& work, const std
         if (tied) {
             ++equal[current.second]; // contribution of the current (tied) observation.
 
-            for (decltype(I(ngroups)) l = 1; l < ngroups; ++l) { // starting from 1 as zero has no work for the g < l condition anyway.
+            for (I<decltype(ngroups)> l = 1; l < ngroups; ++l) { // starting from 1 as zero has no work for the g < l condition anyway.
                 const auto num_eq = equal[l];
                 if (num_eq) {
                     const auto outptr = outputs[l];
-                    for (decltype(I(l)) g = 0; g < l; ++g) {
+                    for (I<decltype(l)> g = 0; g < l; ++g) {
                         outptr[g] += num_eq * (less_than[g] + 0.5 * equal[g]);
                     }
                 }
             }
 
-            for (decltype(I(ngroups)) l = 0; l < ngroups; ++l) {
+            for (I<decltype(ngroups)> l = 0; l < ngroups; ++l) {
                 less_than[l] += equal[l];
                 equal[l] = 0;
             }
@@ -113,17 +113,17 @@ void compute_pairwise_auc(AucWorkspace<Value_, Group_, Output_>& work, const std
     }
 
     // Values == 0. 
-    for (decltype(I(ngroups)) l = 1; l < ngroups; ++l) { // starting from 1, see above.
+    for (I<decltype(ngroups)> l = 1; l < ngroups; ++l) { // starting from 1, see above.
         const auto num_z = num_zeros[l];
         if (num_z) {
             const auto outptr = outputs[l];
-            for (decltype(I(l)) g = 0; g < l; ++g) {
+            for (I<decltype(l)> g = 0; g < l; ++g) {
                 outptr[g] += num_z * (less_than[g] + 0.5 * num_zeros[g]);
             }
         }
     }
 
-    for (decltype(I(ngroups)) l = 0; l < ngroups; ++l) {
+    for (I<decltype(ngroups)> l = 0; l < ngroups; ++l) {
         less_than[l] += num_zeros[l];
     }
 
@@ -134,8 +134,8 @@ void compute_pairwise_auc(AucWorkspace<Value_, Group_, Output_>& work, const std
     }
 
     // Filling in the other side.
-    for (decltype(I(ngroups)) l = 1; l < ngroups; ++l) { // starting from 1, see above.
-        for (decltype(I(l)) g = 0; g < l; ++g) {
+    for (I<decltype(ngroups)> l = 1; l < ngroups; ++l) { // starting from 1, see above.
+        for (I<decltype(l)> g = 0; g < l; ++g) {
             const Output_ prod = static_cast<Output_>(totals[l]) * static_cast<Output_>(totals[g]);
             outputs[g][l] = prod - outputs[l][g];
 
@@ -152,7 +152,7 @@ void compute_pairwise_auc(AucWorkspace<Value_, Group_, Output_>& work, const std
     }
 }
 
-template<typename Value_, typename Group_, typename Count_, typename Output_, typename Threshold_>
+template<typename Value_, typename Group_, typename Output_, typename Count_, typename Threshold_>
 void compute_pairwise_auc(AucWorkspace<Value_, Group_, Output_>& work, const std::vector<Count_>& num_zeros, const std::vector<Count_>& totals, const Threshold_ threshold, const bool normalize) {
     prepare_auc_workspace(work);
 
@@ -163,7 +163,7 @@ void compute_pairwise_auc(AucWorkspace<Value_, Group_, Output_>& work, const std
     const auto ngroups = num_zeros.size();
 
     const auto num_input = input.size();
-    typedef decltype(I(num_input)) Position;
+    typedef I<decltype(num_input)> Position;
 
     auto inner_loop = [&](Position& pos, Position& comp) -> void {
         const auto& current = input[pos];
@@ -186,20 +186,20 @@ void compute_pairwise_auc(AucWorkspace<Value_, Group_, Output_>& work, const std
         if (tied) {
             do {
                 const auto outptr = outputs[input[pos].second];
-                for (decltype(I(ngroups)) g = 0; g < ngroups; ++g) {
+                for (I<decltype(ngroups)> g = 0; g < ngroups; ++g) {
                     outptr[g] += less_than[g] + 0.5 * equal[g];
                 }
                 ++pos;
             } while (pos != num_input && input[pos].first == current.first);
 
-            for (decltype(I(ngroups)) l = 0; l < ngroups; ++l) {
+            for (I<decltype(ngroups)> l = 0; l < ngroups; ++l) {
                 less_than[l] += equal[l];
                 equal[l] = 0;
             }
         } else {
             do {
                 const auto outptr = outputs[input[pos].second];
-                for (decltype(I(ngroups)) g = 0; g < ngroups; ++g) {
+                for (I<decltype(ngroups)> g = 0; g < ngroups; ++g) {
                     outptr[g] += less_than[g];
                 }
                 ++pos;
@@ -244,11 +244,11 @@ void compute_pairwise_auc(AucWorkspace<Value_, Group_, Output_>& work, const std
             ++comp;
         }
 
-        for (decltype(I(ngroups)) l = 0; l < ngroups; ++l) {
+        for (I<decltype(ngroups)> l = 0; l < ngroups; ++l) {
             const auto num_z = num_zeros[l];
             if (num_z) {
                 const auto outptr = outputs[l];
-                for (decltype(I(ngroups)) g = 0; g < ngroups; ++g) {
+                for (I<decltype(ngroups)> g = 0; g < ngroups; ++g) {
                     outptr[g] += less_than[g] * num_z;
                 }
             }
@@ -263,17 +263,17 @@ void compute_pairwise_auc(AucWorkspace<Value_, Group_, Output_>& work, const std
         }
 
         if (tied) {
-            for (decltype(I(ngroups)) l = 0; l < ngroups; ++l) {
+            for (I<decltype(ngroups)> l = 0; l < ngroups; ++l) {
                 const auto num_z = num_zeros[l];
                 if (num_z) {
                     const auto outptr = outputs[l];
-                    for (decltype(I(ngroups)) g = 0; g < ngroups; ++g) {
+                    for (I<decltype(ngroups)> g = 0; g < ngroups; ++g) {
                         outptr[g] += 0.5 * equal[g] * num_z;
                     }
                 }
             }
 
-            for (decltype(I(ngroups)) l = 0; l < ngroups; ++l) {
+            for (I<decltype(ngroups)> l = 0; l < ngroups; ++l) {
                 less_than[l] += equal[l];
                 equal[l] = 0;
             }
@@ -281,11 +281,11 @@ void compute_pairwise_auc(AucWorkspace<Value_, Group_, Output_>& work, const std
 
         // Or to each other, if the threshold is zero.
         if (threshold == 0) {
-            for (decltype(I(ngroups)) l = 0; l < ngroups; ++l) {
+            for (I<decltype(ngroups)> l = 0; l < ngroups; ++l) {
                 const auto num_z = num_zeros[l];
                 if (num_z) {
                     const auto outptr = outputs[l];
-                    for (decltype(I(ngroups)) g = 0; g < ngroups; ++g) {
+                    for (I<decltype(ngroups)> g = 0; g < ngroups; ++g) {
                         outptr[g] += num_z * 0.5 * num_zeros[g];
                     }
                 }
@@ -300,13 +300,13 @@ void compute_pairwise_auc(AucWorkspace<Value_, Group_, Output_>& work, const std
     // Adding the contribution of zeros (in terms of the limit _being_ at zero + threshold)
     while (pos != num_input && static_cast<Threshold_>(input[pos].first) == threshold) {
         const auto outptr = outputs[input[pos].second];
-        for (decltype(I(ngroups)) g = 0; g < ngroups; ++g) {
+        for (I<decltype(ngroups)> g = 0; g < ngroups; ++g) {
             outptr[g] += less_than[g] + 0.5 * num_zeros[g];
         }
         ++pos;
     }
 
-    for (decltype(I(ngroups)) l = 0; l < ngroups; ++l) {
+    for (I<decltype(ngroups)> l = 0; l < ngroups; ++l) {
         less_than[l] += num_zeros[l];
     }
 
@@ -316,8 +316,8 @@ void compute_pairwise_auc(AucWorkspace<Value_, Group_, Output_>& work, const std
 
     // Dividing by the product of sizes.
     if (normalize) {
-        for (decltype(I(ngroups)) l = 0; l < ngroups; ++l) {
-            for (decltype(I(ngroups)) g = 0; g < ngroups; ++g) {
+        for (I<decltype(ngroups)> l = 0; l < ngroups; ++l) {
+            for (I<decltype(ngroups)> g = 0; g < ngroups; ++g) {
                 const Output_ prod = static_cast<Output_>(totals[l]) * static_cast<Output_>(totals[g]);
                 if (prod) {
                     outputs[l][g] /= prod;

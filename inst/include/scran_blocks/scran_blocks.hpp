@@ -2,7 +2,8 @@
 #define SCRAN_BLOCKS_HPP
 
 #include "block_weights.hpp"
-#include "average_vectors.hpp"
+#include "parallel_means.hpp"
+#include "parallel_quantiles.hpp"
 
 /**
  * @file scran_blocks.hpp

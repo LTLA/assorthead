@@ -148,7 +148,7 @@ void fit_variance_trend(
 
     std::size_t counter = 0;
     const Float_ min_mean = options.minimum_mean;
-    for (decltype(I(n)) i = 0; i < n; ++i) {
+    for (I<decltype(n)> i = 0; i < n; ++i) {
         if (!options.mean_filter || mean[i] >= min_mean) {
             xbuffer[counter] = mean[i];
             if (options.transform) {
@@ -204,7 +204,7 @@ void fit_variance_trend(
         }
     }
 
-    for (decltype(I(n)) i = 0; i < n; ++i) {
+    for (I<decltype(n)> i = 0; i < n; ++i) {
         residuals[i] = variance[i] - fitted[i];
     }
     return;
@@ -226,12 +226,12 @@ struct FitVarianceTrendResults {
     FitVarianceTrendResults() {}
 
     FitVarianceTrendResults(const std::size_t n) :
-        fitted(sanisizer::cast<decltype(I(fitted.size()))>(n)
+        fitted(sanisizer::cast<I<decltype(fitted.size())> >(n)
 #ifdef SCRAN_VARIANCES_TEST_INIT
             , SCRAN_VARIANCES_TEST_INIT
 #endif
         ),
-        residuals(sanisizer::cast<decltype(I(residuals.size()))>(n)
+        residuals(sanisizer::cast<I<decltype(residuals.size())> >(n)
 #ifdef SCRAN_VARIANCES_TEST_INIT
             , SCRAN_VARIANCES_TEST_INIT
 #endif

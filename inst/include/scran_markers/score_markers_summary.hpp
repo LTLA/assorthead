@@ -9,10 +9,12 @@
 #include <array>
 #include <map>
 #include <vector>
+#include <optional>
 
 #include "scan_matrix.hpp"
 #include "cohens_d.hpp"
 #include "simple_diff.hpp"
+#include "block_averages.hpp"
 #include "summarize_comparisons.hpp"
 #include "average_group_stats.hpp"
 #include "create_combinations.hpp"
@@ -103,6 +105,13 @@ struct ScoreMarkersSummaryOptions {
     bool compute_max = true;
 
     /**
+     * Probabilites of the quantiles of the effect sizes for each group, to be reported.
+     * If set, the vector should be sorted and each entry should lie in \$f[0, 1]\f$.
+     * If not set, no quantiles are reported.
+     */
+    std::optional<std::vector<double> > compute_summary_quantiles;
+
+    /**
      * Whether to report the minimum rank of the effect sizes for each group.
      * Only affects the `score_markers_summary()` overload that returns a `ScoreMarkersSummaryResults`.
      */
@@ -123,6 +132,13 @@ struct ScoreMarkersSummaryOptions {
     bool min_rank_preserve_ties = false;
 
     /**
+     * Policy to use for averaging statistics across blocks into a single value.
+     * This can either be `BlockAveragePolicy::MEAN` (weighted mean) or `BlockAveragePolicy::QUANTILE` (quantile).
+     * Only used in `score_markers_summary_blocked()`.
+     */
+    BlockAveragePolicy block_average_policy = BlockAveragePolicy::MEAN;
+
+    /**
      * Policy to use for weighting blocks when computing average statistics/effect sizes across blocks.
      *
      * The default of `scran_blocks::WeightPolicy::VARIABLE` is to define equal weights for blocks once they reach a certain size
@@ -131,14 +147,23 @@ struct ScoreMarkersSummaryOptions {
      *
      * Other options include `scran_blocks::WeightPolicy::EQUAL`, where all blocks are equally weighted regardless of size;
      * and `scran_blocks::WeightPolicy::NONE`, where the contribution of each block is proportional to its size.
+     *
+     * Only used in `score_markers_summary_blocked()` when `ScoreMarkersSummaryOptions::block_average_policy = BlockAveragePolicy::MEAN`.
      */
     scran_blocks::WeightPolicy block_weight_policy = scran_blocks::WeightPolicy::VARIABLE;
 
     /**
      * Parameters for the variable block weights, including the threshold at which blocks are considered to be large enough to have equal weight.
-     * Only used when `ScoreMarkersSummaryOptions::block_weight_policy = scran_blocks::WeightPolicy::VARIABLE`.
+     * Only used in `score_markers_summary_blocked()` when `ScoreMarkersSummaryOptions::block_average_policy = BlockAveragePolicy::QUANTILE`
+     * and `ScoreMarkersSummaryOptions::block_weight_policy = scran_blocks::WeightPolicy::VARIABLE`.
      */
     scran_blocks::VariableWeightParameters variable_block_weight_parameters;
+
+    /**
+     * Quantile probability for summarizing statistics across blocks. 
+     * Only used in `score_markers_summary_blocked()` when `ScoreMarkersSummaryOptions::block_average_policy = BlockAveragePolicy::QUANTILE`.
+     */
+    double block_quantile = 0.5;
 };
 
 /**
@@ -284,12 +309,12 @@ void preallocate_minrank_queues(
     for (int t = 0; t < num_threads; ++t) {
         sanisizer::resize(all_queues[t], ngroups);
 
-        for (decltype(I(ngroups)) g1 = 0; g1 < ngroups; ++g1) {
+        for (I<decltype(ngroups)> g1 = 0; g1 < ngroups; ++g1) {
             if (summaries[g1].min_rank == NULL) {
                 continue;
             }
 
-            for (decltype(I(ngroups)) g2 = 0; g2 < ngroups; ++g2) {
+            for (I<decltype(ngroups)> g2 = 0; g2 < ngroups; ++g2) {
                 all_queues[t][g1].emplace_back(limit, true, qopt);
             }
         }
@@ -302,17 +327,18 @@ void compute_summary_stats_per_gene(
     const std::size_t ngroups,
     const Stat_* const pairwise_buffer_ptr,
     std::vector<Stat_>& summary_buffer,
+    MaybeMultipleQuantiles<Stat_>& summary_qcalcs,
     MinrankTopQueues<Stat_, Index_>& minrank_queues,
     const std::vector<SummaryBuffers<Stat_, Rank_> >& summaries
 ) {
-    for (decltype(I(ngroups)) gr = 0; gr < ngroups; ++gr) {
+    for (I<decltype(ngroups)> gr = 0; gr < ngroups; ++gr) {
         auto& cursummary = summaries[gr];
         const auto in_offset = sanisizer::product_unsafe<std::size_t>(ngroups, gr);
-        summarize_comparisons(ngroups, pairwise_buffer_ptr + in_offset, gr, gene, cursummary, summary_buffer);
+        summarize_comparisons(ngroups, pairwise_buffer_ptr + in_offset, gr, gene, cursummary, summary_qcalcs, summary_buffer);
 
         if (cursummary.min_rank) {
             auto& cur_queues = minrank_queues[gr];
-            for (decltype(I(ngroups)) gr2 = 0; gr2 < ngroups; ++gr2) {
+            for (I<decltype(ngroups)> gr2 = 0; gr2 < ngroups; ++gr2) {
                 if (gr != gr2) {
                     cur_queues[gr2].emplace(pairwise_buffer_ptr[in_offset + gr2], gene);
                 }
@@ -333,7 +359,7 @@ void report_minrank_from_queues(
     tatami::parallelize([&](const int, const std::size_t start, const std::size_t length) -> void {
         std::vector<Index_> tie_buffer;
 
-        for (decltype(I(ngroups)) gr = start, grend = start + length; gr < grend; ++gr) {
+        for (I<decltype(ngroups)> gr = start, grend = start + length; gr < grend; ++gr) {
             const auto mr_out = summaries[gr].min_rank;
             if (mr_out == NULL) {
                 continue;
@@ -343,14 +369,14 @@ void report_minrank_from_queues(
             const auto maxrank_placeholder = sanisizer::cast<Rank_>(ngenes);
             std::fill_n(mr_out, ngenes, maxrank_placeholder);
 
-            for (decltype(I(ngroups)) gr2 = 0; gr2 < ngroups; ++gr2) {
+            for (I<decltype(ngroups)> gr2 = 0; gr2 < ngroups; ++gr2) {
                 if (gr == gr2) {
                     continue;
                 }
                 auto& current_out = all_queues.front()[gr][gr2];
 
                 const auto num_queues = all_queues.size();
-                for (decltype(I(num_queues)) q = 1; q < num_queues; ++q) {
+                for (I<decltype(num_queues)> q = 1; q < num_queues; ++q) {
                     auto& current_in = all_queues[q][gr][gr2];
                     while (!current_in.empty()) {
                         current_out.push(current_in.top());
@@ -400,13 +426,14 @@ void process_simple_summary_effects(
     const std::vector<Stat_>& combo_means,
     const std::vector<Stat_>& combo_vars,
     const std::vector<Stat_>& combo_detected,
-    const ScoreMarkersSummaryBuffers<Stat_, Rank_>& output,
-    const std::vector<Stat_>& combo_weights,
     const double threshold,
+    const BlockAverageInfo<Stat_>& average_info,
+    const std::optional<std::vector<double> >& summary_quantiles,
     const Index_ minrank_limit,
     const bool minrank_keep_ties,
-    const int num_threads)
-{
+    const ScoreMarkersSummaryBuffers<Stat_, Rank_>& output,
+    const int num_threads
+) {
     std::vector<MinrankTopQueues<Stat_, Index_> > cohens_d_minrank_all_queues, delta_mean_minrank_all_queues, delta_detected_minrank_all_queues;
     if (output.cohens_d.size()) {
         preallocate_minrank_queues(ngroups, cohens_d_minrank_all_queues, output.cohens_d, minrank_limit, minrank_keep_ties, num_threads);
@@ -418,55 +445,90 @@ void process_simple_summary_effects(
         preallocate_minrank_queues(ngroups, delta_detected_minrank_all_queues, output.delta_detected, minrank_limit, minrank_keep_ties, num_threads);
     }
 
-    std::vector<Stat_> total_weights_per_group;
-    auto total_weights_ptr = combo_weights.data();
-    if (!output.mean.empty() || !output.detected.empty()) {
-        if (nblocks > 1) {
-            total_weights_per_group = compute_total_weight_per_group(ngroups, nblocks, combo_weights.data());
-            total_weights_ptr = total_weights_per_group.data();
+    std::optional<std::vector<Stat_> > total_weights_per_group;
+    const Stat_* total_weights_ptr = NULL;
+    if (average_info.use_mean()) {
+        if (!output.mean.empty() || !output.detected.empty()) {
+            if (nblocks > 1) {
+                total_weights_per_group = compute_total_weight_per_group(ngroups, nblocks, average_info.combo_weights().data());
+                total_weights_ptr = total_weights_per_group->data();
+            } else {
+                total_weights_ptr = average_info.combo_weights().data();
+            }
         }
     }
 
-    PrecomputedPairwiseWeights<Stat_> preweights;
-    if (!output.cohens_d.empty() || !output.delta_mean.empty() || !output.delta_detected.empty()) {
-        preweights =  PrecomputedPairwiseWeights<Stat_>(ngroups, nblocks, combo_weights.data());
+    std::optional<PrecomputedPairwiseWeights<Stat_> > preweights;
+    if (average_info.use_mean()) {
+        if (!output.cohens_d.empty() || !output.delta_mean.empty() || !output.delta_detected.empty()) {
+            preweights = PrecomputedPairwiseWeights<Stat_>(ngroups, nblocks, average_info.combo_weights().data());
+        }
     }
 
     const auto ngroups2 = sanisizer::product<typename std::vector<Stat_>::size_type>(ngroups, ngroups);
     tatami::parallelize([&](const int t, const Index_ start, const Index_ length) -> void {
         std::vector<Stat_> pairwise_buffer(ngroups2);
         std::vector<Stat_> summary_buffer(ngroups);
+        auto summary_qcalcs = setup_multiple_quantiles<Stat_>(summary_quantiles, ngroups);
+
+        std::optional<std::vector<Stat_> > qbuffer, qrevbuffer;
+        std::optional<scran_blocks::SingleQuantileVariable<Stat_, typename std::vector<Stat_>::iterator> > qcalc;
+        if (!average_info.use_mean()) {
+            qbuffer.emplace();
+            qrevbuffer.emplace();
+            qcalc.emplace(nblocks, average_info.quantile());
+        }
 
         for (Index_ gene = start, end = start + length; gene < end; ++gene) {
             const auto in_offset = sanisizer::product_unsafe<std::size_t>(gene, ncombos);
 
             if (!output.mean.empty()) {
                 const auto tmp_means = combo_means.data() + in_offset;
-                average_group_stats(gene, ngroups, nblocks, tmp_means, combo_weights.data(), total_weights_ptr, output.mean);
+                if (average_info.use_mean()) {
+                    average_group_stats_blockmean(gene, ngroups, nblocks, tmp_means, average_info.combo_weights().data(), total_weights_ptr, output.mean);
+                } else {
+                    average_group_stats_blockquantile(gene, ngroups, nblocks, tmp_means, *qbuffer, *qcalc, output.mean);
+                }
             }
 
             if (!output.detected.empty()) {
                 const auto tmp_detected = combo_detected.data() + in_offset;
-                average_group_stats(gene, ngroups, nblocks, tmp_detected, combo_weights.data(), total_weights_ptr, output.detected);
+                if (average_info.use_mean()) {
+                    average_group_stats_blockmean(gene, ngroups, nblocks, tmp_detected, average_info.combo_weights().data(), total_weights_ptr, output.detected);
+                } else {
+                    average_group_stats_blockquantile(gene, ngroups, nblocks, tmp_detected, *qbuffer, *qcalc, output.detected);
+                }
             }
 
             if (output.cohens_d.size()) {
                 const auto tmp_means = combo_means.data() + in_offset;
                 const auto tmp_variances = combo_vars.data() + in_offset;
-                compute_pairwise_cohens_d(tmp_means, tmp_variances, ngroups, nblocks, preweights, threshold, pairwise_buffer.data());
-                compute_summary_stats_per_gene(gene, ngroups, pairwise_buffer.data(), summary_buffer, cohens_d_minrank_all_queues[t], output.cohens_d);
+                if (average_info.use_mean()) {
+                    compute_pairwise_cohens_d_blockmean(tmp_means, tmp_variances, ngroups, nblocks, threshold, *preweights, pairwise_buffer.data());
+                } else {
+                    compute_pairwise_cohens_d_blockquantile(tmp_means, tmp_variances, ngroups, nblocks, threshold, *qbuffer, *qrevbuffer, *qcalc, pairwise_buffer.data());
+                }
+                compute_summary_stats_per_gene(gene, ngroups, pairwise_buffer.data(), summary_buffer, summary_qcalcs, cohens_d_minrank_all_queues[t], output.cohens_d);
             }
 
             if (output.delta_mean.size()) {
                 const auto tmp_means = combo_means.data() + in_offset;
-                compute_pairwise_simple_diff(tmp_means, ngroups, nblocks, preweights, pairwise_buffer.data());
-                compute_summary_stats_per_gene(gene, ngroups, pairwise_buffer.data(), summary_buffer, delta_mean_minrank_all_queues[t], output.delta_mean);
+                if (average_info.use_mean()) {
+                    compute_pairwise_simple_diff_blockmean(tmp_means, ngroups, nblocks, *preweights, pairwise_buffer.data());
+                } else {
+                    compute_pairwise_simple_diff_blockquantile(tmp_means, ngroups, nblocks, *qbuffer, *qcalc, pairwise_buffer.data());
+                }
+                compute_summary_stats_per_gene(gene, ngroups, pairwise_buffer.data(), summary_buffer, summary_qcalcs, delta_mean_minrank_all_queues[t], output.delta_mean);
             }
 
             if (output.delta_detected.size()) {
                 const auto tmp_det = combo_detected.data() + in_offset;
-                compute_pairwise_simple_diff(tmp_det, ngroups, nblocks, preweights, pairwise_buffer.data());
-                compute_summary_stats_per_gene(gene, ngroups, pairwise_buffer.data(), summary_buffer, delta_detected_minrank_all_queues[t], output.delta_detected);
+                if (average_info.use_mean()) {
+                    compute_pairwise_simple_diff_blockmean(tmp_det, ngroups, nblocks, *preweights, pairwise_buffer.data());
+                } else {
+                    compute_pairwise_simple_diff_blockquantile(tmp_det, ngroups, nblocks, *qbuffer, *qcalc, pairwise_buffer.data());
+                }
+                compute_summary_stats_per_gene(gene, ngroups, pairwise_buffer.data(), summary_buffer, summary_qcalcs, delta_detected_minrank_all_queues[t], output.delta_detected);
             }
         }
     }, ngenes, num_threads);
@@ -510,6 +572,7 @@ ScoreMarkersSummaryBuffers<Stat_, Rank_> preallocate_summary_results(
             options.compute_mean,
             options.compute_median,
             options.compute_max,
+            options.compute_summary_quantiles,
             options.compute_min_rank
         );
     }
@@ -523,6 +586,7 @@ ScoreMarkersSummaryBuffers<Stat_, Rank_> preallocate_summary_results(
             options.compute_mean,
             options.compute_median,
             options.compute_max,
+            options.compute_summary_quantiles,
             options.compute_min_rank
         );
     }
@@ -536,6 +600,7 @@ ScoreMarkersSummaryBuffers<Stat_, Rank_> preallocate_summary_results(
             options.compute_mean,
             options.compute_median,
             options.compute_max,
+            options.compute_summary_quantiles,
             options.compute_min_rank
         );
     }
@@ -549,6 +614,7 @@ ScoreMarkersSummaryBuffers<Stat_, Rank_> preallocate_summary_results(
             options.compute_mean,
             options.compute_median,
             options.compute_max,
+            options.compute_summary_quantiles,
             options.compute_min_rank
         );
     }
@@ -592,28 +658,39 @@ void score_markers_summary(
 
     // For a single block, this usually doesn't really matter, but we do it for consistency with the multi-block case,
     // and to account for variable weighting where non-zero block sizes get zero weight.
-    const auto combo_weights = scran_blocks::compute_weights<Stat_>(
-        combo_sizes,
-        options.block_weight_policy,
-        options.variable_block_weight_parameters
-    );
+    BlockAverageInfo<Stat_> average_info;
+    if (options.block_average_policy == BlockAveragePolicy::MEAN) {
+        average_info = BlockAverageInfo<Stat_>(
+            scran_blocks::compute_weights<Stat_>(
+                combo_sizes,
+                options.block_weight_policy,
+                options.variable_block_weight_parameters
+            )
+        );
+    } else {
+        average_info = BlockAverageInfo<Stat_>(options.block_quantile);
+    }
 
     const Index_ minrank_limit = sanisizer::cap<Index_>(options.min_rank_limit);
+    internal::validate_quantiles(options.compute_summary_quantiles);
 
     if (!output.auc.empty()) {
         std::vector<MinrankTopQueues<Stat_, Index_> > auc_minrank_all_queues;
         preallocate_minrank_queues(ngroups, auc_minrank_all_queues, output.auc, minrank_limit, options.min_rank_preserve_ties, options.num_threads);
 
         struct AucResultWorkspace {
-            AucResultWorkspace() = default;
-            AucResultWorkspace(const std::size_t ngroups, MinrankTopQueues<Stat_, Index_>& queues) :
+            AucResultWorkspace(const std::size_t ngroups, MinrankTopQueues<Stat_, Index_>& queues, const std::optional<std::vector<double> >& summary_quantiles) :
                 pairwise_buffer(sanisizer::product<typename std::vector<Stat_>::size_type>(ngroups, ngroups)),
                 summary_buffer(sanisizer::cast<typename std::vector<Stat_>::size_type>(ngroups)),
-                queue_ptr(&queues)
+                queue_ptr(&queues),
+                summary_qcalcs(setup_multiple_quantiles<Stat_>(summary_quantiles, ngroups))
             {};
+
+        public:
             std::vector<Stat_> pairwise_buffer;
             std::vector<Stat_> summary_buffer;
             MinrankTopQueues<Stat_, Index_>* queue_ptr;
+            MaybeMultipleQuantiles<Stat_> summary_qcalcs;
         };
 
         scan_matrix_by_row_custom_auc<single_block_>(
@@ -624,23 +701,31 @@ void score_markers_summary(
             block,
             ncombos,
             combo,
+            combo_sizes,
+            average_info,
             combo_means,
             combo_vars,
             combo_detected,
             /* do_auc = */ true,
             /* auc_result_initialize = */ [&](const int t) -> AucResultWorkspace {
-                return AucResultWorkspace(ngroups, auc_minrank_all_queues[t]);
+                return AucResultWorkspace(ngroups, auc_minrank_all_queues[t], options.compute_summary_quantiles);
             },
             /* auc_result_process = */ [&](
                 const Index_ gene,
-                AucScanWorkspace<Value_, Group_, Index_, Stat_>& auc_work,
+                AucScanWorkspace<Value_, Group_, Stat_, Index_>& auc_work,
                 AucResultWorkspace& res_work
             ) -> void {
                 process_auc_for_rows(auc_work, ngroups, nblocks, options.threshold, res_work.pairwise_buffer.data());
-                compute_summary_stats_per_gene(gene, ngroups, res_work.pairwise_buffer.data(), res_work.summary_buffer, *(res_work.queue_ptr), output.auc);
+                compute_summary_stats_per_gene(
+                    gene,
+                    ngroups,
+                    res_work.pairwise_buffer.data(),
+                    res_work.summary_buffer,
+                    res_work.summary_qcalcs,
+                    *(res_work.queue_ptr),
+                    output.auc
+                );
             },
-            combo_sizes,
-            combo_weights,
             options.num_threads
         );
 
@@ -655,12 +740,12 @@ void score_markers_summary(
             block,
             ncombos,
             combo,
+            combo_sizes,
+            average_info,
             combo_means,
             combo_vars,
             combo_detected,
             static_cast<Stat_*>(NULL),
-            combo_sizes,
-            combo_weights, 
             options.threshold,
             options.num_threads
         );
@@ -682,10 +767,10 @@ void score_markers_summary(
                     return combo;
                 }
             }(),
+            combo_sizes,
             combo_means,
             combo_vars,
             combo_detected,
-            combo_sizes,
             options.num_threads
         );
     }
@@ -698,11 +783,12 @@ void score_markers_summary(
         combo_means,
         combo_vars,
         combo_detected,
-        output,
-        combo_weights,
         options.threshold,
+        average_info,
+        options.compute_summary_quantiles,
         minrank_limit,
         options.min_rank_preserve_ties,
+        output,
         options.num_threads
     );
 }

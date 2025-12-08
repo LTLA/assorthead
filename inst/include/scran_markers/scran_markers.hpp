@@ -3,6 +3,7 @@
 
 #include "score_markers_pairwise.hpp"
 #include "score_markers_summary.hpp"
+#include "score_markers_best.hpp"
 #include "summarize_effects.hpp"
 
 /**

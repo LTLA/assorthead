@@ -13,45 +13,73 @@ namespace scran_markers {
 
 namespace internal {
 
-template<typename Weight_>
-std::vector<Weight_> compute_total_weight_per_group(const std::size_t ngroups, const std::size_t nblocks, const Weight_* const combo_weights) {
-    auto output = sanisizer::create<std::vector<Weight_> >(ngroups);
-    for (decltype(I(nblocks)) b = 0; b < nblocks; ++b) {
-        for (decltype(I(ngroups)) g = 0; g < ngroups; ++g) {
+template<typename Stat_>
+std::vector<Stat_> compute_total_weight_per_group(const std::size_t ngroups, const std::size_t nblocks, const Stat_* const combo_weights) {
+    auto output = sanisizer::create<std::vector<Stat_> >(ngroups);
+    for (I<decltype(nblocks)> b = 0; b < nblocks; ++b) {
+        for (I<decltype(ngroups)> g = 0; g < ngroups; ++g) {
             output[g] += combo_weights[sanisizer::nd_offset<std::size_t>(g, ngroups, b)];
         }
     }
     return output;
 }
 
-template<typename Gene_, typename Stat_, typename Weight_>
-void average_group_stats(
+template<typename Gene_, typename Stat_>
+void average_group_stats_blockmean(
     const Gene_ gene,
     const std::size_t ngroups,
     const std::size_t nblocks,
-    const Stat_* const tmp_stats,
-    const Weight_* const combo_weights,
-    const Weight_* const total_weights,
+    const Stat_* const stats,
+    const Stat_* const combo_weights,
+    const Stat_* const total_weights,
     const std::vector<Stat_*>& out_stats 
 ) {
-    for (decltype(I(ngroups)) g = 0; g < ngroups; ++g) {
+    for (I<decltype(ngroups)> g = 0; g < ngroups; ++g) {
+        auto& output = out_stats[g][gene];
+
         const auto total_weight = total_weights[g];
         if (total_weight == 0) {
-            out_stats[g][gene] = std::numeric_limits<Stat_>::quiet_NaN();
+            output = std::numeric_limits<Stat_>::quiet_NaN();
             continue;
         }
 
-        Stat_ output = 0;
-        for (decltype(I(nblocks)) b = 0; b < nblocks; ++b) {
+        Stat_ sum = 0;
+        for (I<decltype(nblocks)> b = 0; b < nblocks; ++b) {
             // Remember, blocks are the slower changing dimension, so we need to jump by 'ngroups'.
             const auto offset = sanisizer::nd_offset<std::size_t>(g, ngroups, b);
             const auto& curweight = combo_weights[offset];
-            if (curweight) { // check if this is zero, in which case tmp_stats could be NaN.
-                output += curweight * tmp_stats[offset];
+            if (curweight) { // check if this is zero and skip it explicitly, as the value would probably be NaN. 
+                sum += curweight * stats[offset];
             }
         }
 
-        out_stats[g][gene] = output / total_weight;
+        output = sum / total_weight;
+    }
+}
+
+template<typename Gene_, typename Stat_>
+void average_group_stats_blockquantile(
+    const Gene_ gene,
+    const std::size_t ngroups,
+    const std::size_t nblocks,
+    const Stat_* const stats,
+    std::vector<Stat_>& buffer,
+    scran_blocks::SingleQuantileVariable<Stat_, typename std::vector<Stat_>::iterator>& qcalc,
+    const std::vector<Stat_*>& out_stats 
+) {
+    for (I<decltype(ngroups)> g = 0; g < ngroups; ++g) {
+        buffer.clear();
+
+        for (I<decltype(nblocks)> b = 0; b < nblocks; ++b) {
+            // Remember, blocks are the slower changing dimension, so we need to jump by 'ngroups'.
+            const auto offset = sanisizer::nd_offset<std::size_t>(g, ngroups, b);
+            const auto val = stats[offset];
+            if (!std::isnan(val)) {
+                buffer.push_back(val);
+            }
+        }
+
+        out_stats[g][gene] = qcalc(buffer.size(), buffer.begin(), buffer.end());
     }
 }
 
@@ -64,9 +92,9 @@ void preallocate_average_results(
 ) {
     res.reserve(ngroups);
     ptrs.reserve(ngroups);
-    for (decltype(I(ngroups)) g = 0; g < ngroups; ++g) {
+    for (I<decltype(ngroups)> g = 0; g < ngroups; ++g) {
         res.emplace_back(
-            sanisizer::cast<decltype(I(res.front().size()))>(ngenes)
+            sanisizer::cast<I<decltype(res.front().size())> >(ngenes)
 #ifdef SCRAN_MARKERS_TEST_INIT
             , SCRAN_MARKERS_TEST_INIT
 #endif

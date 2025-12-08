@@ -19,24 +19,33 @@ namespace scran_markers {
 
 namespace internal {
 
-template<typename Value_, typename Group_, typename Index_, typename Stat_>
+template<typename Value_, typename Group_, typename Stat_, typename Index_>
 struct AucScanWorkspace {
     std::vector<AucWorkspace<Value_, Group_, Stat_> > block_workspaces;
     std::vector<std::vector<Index_> > block_num_zeros;
     std::vector<std::vector<Index_> > block_totals;
-    std::vector<std::vector<Stat_> > block_scale;
     std::vector<Stat_> common_buffer;
-    std::vector<Stat_> full_weight;
+
+    bool use_mean;
+
+    // Only when use_mean = true.
+    std::optional<std::vector<std::vector<Stat_> > > block_scale;
+    std::optional<std::vector<Stat_> > full_weight;
+
+    // Only when use_mean = false.
+    std::optional<std::vector<std::vector<std::vector<Stat_> > > > pairwise_buffers;
+    std::optional<scran_blocks::SingleQuantileVariable<Stat_, typename std::vector<Stat_>::iterator> > calculator;
 };
 
-template<typename Value_, typename Group_, typename Index_, typename Stat_, typename Weight_>
-void initialize_auc_workspace(
-    AucScanWorkspace<Value_, Group_, Index_, Stat_>& work,
+template<typename Value_, typename Group_, typename Stat_, typename Index_>
+AucScanWorkspace<Value_, Group_, Stat_, Index_> initialize_workspace_for_auc(
     const std::size_t ngroups,
     const std::size_t nblocks,
     const std::vector<Index_>& combo_size,
-    const std::vector<Weight_>& combo_weight) 
-{
+    const BlockAverageInfo<Stat_>& average_info
+) {
+    AucScanWorkspace<Value_, Group_, Stat_, Index_> work;
+
     const auto ngroups2 = sanisizer::product<typename std::vector<Stat_>::size_type>(ngroups, ngroups);
     work.common_buffer.resize(ngroups2
 #ifdef SCRAN_MARKERS_TEST_INIT
@@ -48,102 +57,168 @@ void initialize_auc_workspace(
     work.block_num_zeros.reserve(nblocks);
     work.block_totals.reserve(nblocks);
 
-    for (decltype(I(nblocks)) b = 0; b < nblocks; ++b) {
+    sanisizer::cast<typename std::vector<Index_>::size_type>(ngroups);
+    for (I<decltype(nblocks)> b = 0; b < nblocks; ++b) {
         // All workspaces just re-use the same buffer for the AUCs, so make sure to run compute_pairwise_auc() for only one block at a time.
         work.block_workspaces.emplace_back(ngroups, work.common_buffer.data()); 
         work.block_num_zeros.emplace_back(
-            sanisizer::cast<decltype(I(work.block_num_zeros.front().size()))>(ngroups)
+            ngroups
 #ifdef SCRAN_MARKERS_TEST_INIT
             , SCRAN_MARKERS_TEST_INIT
 #endif
         );
         work.block_totals.emplace_back(
-            sanisizer::cast<decltype(I(work.block_totals.front().size()))>(ngroups)
+            ngroups
 #ifdef SCRAN_MARKERS_TEST_INIT
             , SCRAN_MARKERS_TEST_INIT
 #endif
         );
     }
 
-    for (decltype(I(nblocks)) b = 0; b < nblocks; ++b) {
-        for (decltype(I(ngroups)) g = 0; g < ngroups; ++g) {
+    for (I<decltype(nblocks)> b = 0; b < nblocks; ++b) {
+        for (I<decltype(ngroups)> g = 0; g < ngroups; ++g) {
             work.block_totals[b][g] = combo_size[sanisizer::nd_offset<std::size_t>(g, ngroups, b)]; // remember that the groups are the fastest changing dimension in this array.
         }
     }
 
-    work.block_scale.reserve(nblocks);
-    work.full_weight.resize(ngroups2);
-    for (decltype(I(nblocks)) b = 0; b < nblocks; ++b) {
-        work.block_scale.emplace_back(ngroups2);
-        auto& cur_scale = work.block_scale[b];
-        auto& cur_totals = work.block_totals[b];
+    if (average_info.use_mean()) {
+        const auto& combo_weights = average_info.combo_weights();
+        work.block_scale.emplace();
+        work.block_scale->reserve(nblocks);
+        work.full_weight.emplace();
+        work.full_weight->resize(ngroups2);
+        work.use_mean = true;
 
-        for (decltype(I(ngroups)) g1 = 1; g1 < ngroups; ++g1) {
-            const auto w1 = combo_weight[sanisizer::nd_offset<std::size_t>(g1, ngroups, b)];
-            Stat_ denom1 = cur_totals[g1];
+        for (I<decltype(nblocks)> b = 0; b < nblocks; ++b) {
+            work.block_scale->emplace_back(ngroups2);
+            auto& cur_scale = (*work.block_scale)[b];
+            const auto& cur_totals = work.block_totals[b];
 
-            for (decltype(I(g1)) g2 = 0; g2 < g1; ++g2) {
-                Stat_ block_denom = denom1 * static_cast<Stat_>(cur_totals[g2]);
-                if (block_denom == 0) {
+            for (I<decltype(ngroups)> g1 = 1; g1 < ngroups; ++g1) {
+                const auto w1 = combo_weights[sanisizer::nd_offset<std::size_t>(g1, ngroups, b)];
+                const Stat_ denom1 = cur_totals[g1];
+                if (denom1 == 0) {
                     continue;
                 }
 
-                const Stat_ block_weight = w1 * combo_weight[sanisizer::nd_offset<std::size_t>(g2, ngroups, b)];
-                const Stat_ block_scaling = block_denom / block_weight;
+                for (I<decltype(g1)> g2 = 0; g2 < g1; ++g2) {
+                    const Stat_ denom2 = cur_totals[g2];
+                    if (denom2 == 0) {
+                        continue;
+                    }
 
-                const auto pair_offset1 = sanisizer::nd_offset<std::size_t>(g2, ngroups, g1);
-                cur_scale[pair_offset1] = block_scaling;
-                work.full_weight[pair_offset1] += block_weight;
+                    const Stat_ block_denom = denom1 * denom2;
+                    const Stat_ block_weight = w1 * combo_weights[sanisizer::nd_offset<std::size_t>(g2, ngroups, b)];
+                    const Stat_ block_scaling = block_denom / block_weight;
 
-                const auto pair_offset2 = sanisizer::nd_offset<std::size_t>(g1, ngroups, g2);
-                cur_scale[pair_offset2] = block_scaling;
-                work.full_weight[pair_offset2] += block_weight;
+                    const auto pair_offset1 = sanisizer::nd_offset<std::size_t>(g2, ngroups, g1);
+                    cur_scale[pair_offset1] = block_scaling;
+                    (*work.full_weight)[pair_offset1] += block_weight;
+
+                    const auto pair_offset2 = sanisizer::nd_offset<std::size_t>(g1, ngroups, g2);
+                    cur_scale[pair_offset2] = block_scaling;
+                    (*work.full_weight)[pair_offset2] += block_weight;
+                }
             }
         }
+
+    } else {
+        work.pairwise_buffers.emplace();
+        work.pairwise_buffers->reserve(ngroups);
+        sanisizer::cast<I<decltype(work.pairwise_buffers->front().size())> >(ngroups);
+        for (I<decltype(ngroups)> g = 0; g < ngroups; ++g) {
+            work.pairwise_buffers->emplace_back(ngroups);
+        }
+        work.calculator.emplace(sanisizer::cast<std::size_t>(nblocks), average_info.quantile());
+        work.use_mean = false;
     }
+
+    return work;
 }
 
-template<typename Value_, typename Group_, typename Index_, typename Stat_, typename Threshold_>
+template<typename Value_, typename Group_, typename Stat_, typename Index_, typename Threshold_>
 void process_auc_for_rows(
-    AucScanWorkspace<Value_, Group_, Index_, Stat_>& work,
+    AucScanWorkspace<Value_, Group_, Stat_, Index_>& work,
     const std::size_t ngroups,
     const std::size_t nblocks,
     const Threshold_ threshold,
-    Stat_* const output) 
-{
+    Stat_* const output
+) {
     auto& auc_buffer = work.common_buffer;
     const auto ngroups2 = auc_buffer.size();
-    std::fill_n(output, ngroups2, 0);
+    if (work.use_mean) {
+        std::fill_n(output, ngroups2, 0);
+    } else {
+        for (auto& buffers : *work.pairwise_buffers){
+            for (auto& individual : buffers) {
+                individual.clear();
+            }
+        }
+    }
 
-    for (decltype(I(nblocks)) b = 0; b < nblocks; ++b) {
+    for (I<decltype(nblocks)> b = 0; b < nblocks; ++b) {
         auto& wrk = work.block_workspaces[b];
         auto& nz = work.block_num_zeros[b];
         const auto& tt = work.block_totals[b];
 
+        const bool normalize = !work.use_mean;
         if (threshold) {
-            compute_pairwise_auc(wrk, nz, tt, threshold, false);
+            compute_pairwise_auc(wrk, nz, tt, threshold, normalize);
         } else {
-            compute_pairwise_auc(wrk, nz, tt, false);
+            compute_pairwise_auc(wrk, nz, tt, normalize);
         }
 
-        // Adding to the blocks.
-        const auto& block_scale = work.block_scale[b];
-        for (decltype(I(ngroups2)) g = 0; g < ngroups2; ++g) {
-            if (block_scale[g]) {
-                output[g] += auc_buffer[g] / block_scale[g];
+        if (work.use_mean) {
+            const auto& block_scale = (*work.block_scale)[b];
+            for (I<decltype(ngroups2)> g = 0; g < ngroups2; ++g) {
+                const auto scale = block_scale[g];
+                if (scale) {
+                    output[g] += auc_buffer[g] / scale;
+                }
+            }
+
+        } else {
+            for (I<decltype(ngroups)> g1 = 0; g1 < ngroups; ++g1) {
+                auto& curbuffers = (*work.pairwise_buffers)[g1];
+                for (I<decltype(ngroups)> g2 = 0; g2 < ngroups; ++g2) {
+                    if (g1 != g2) {
+                        const auto val = auc_buffer[sanisizer::nd_offset<std::size_t>(g2, ngroups, g1)];
+                        if (!std::isnan(val)) {
+                            curbuffers[g2].push_back(val);
+                        }
+                    }
+                }
             }
         }
     }
 
-    for (decltype(I(ngroups)) g1 = 0; g1 < ngroups; ++g1) {
-        for (decltype(I(ngroups)) g2 = 0; g2 < ngroups; ++g2) {
+    for (I<decltype(ngroups)> g1 = 0; g1 < ngroups; ++g1) {
+        for (I<decltype(ngroups)> g2 = 0; g2 < ngroups; ++g2) {
             const auto offset = sanisizer::nd_offset<std::size_t>(g2, ngroups, g1);
             auto& current = output[offset];
-            if (work.full_weight[offset]) {
-                current /= work.full_weight[offset];
-            } else if (g1 != g2) {
-                current = std::numeric_limits<Stat_>::quiet_NaN();
-            } // g1 == g2 gets a current = 0, which is technically wrong, but no one should be using the self-comparison effect size anyway.
+
+            if (work.use_mean) {
+                if (g1 != g2) {
+                    const auto full = (*work.full_weight)[offset];
+                    if (full) {
+                        current /= full;
+                    } else {
+                        current = std::numeric_limits<Stat_>::quiet_NaN();
+                    }
+                } else {
+                    // We do nothing for g1 == g2, so current defaults to 0 from the initial fill.
+                    // This is technically wrong, but no one should be using the self-comparison effect size anyway.
+                }
+
+            } else {
+                if (g1 != g2) {
+                    auto& curbuffer = (*work.pairwise_buffers)[g1][g2];
+                    current = (*work.calculator)(curbuffer.size(), curbuffer.begin(), curbuffer.end());
+                } else {
+                    // Explicitly set this to zero because we didn't do an initial fill in quantile mode.
+                    current = 0;
+                }
+            }
         }
     }
 }
@@ -157,8 +232,7 @@ template<
     typename Combo_,
     typename Stat_,
     class AucResultInitialize_,
-    class AucResultProcess_,
-    typename Weight_
+    class AucResultProcess_
 >
 void scan_matrix_by_row_custom_auc(
     const tatami::Matrix<Value_, Index_>& matrix, 
@@ -168,14 +242,14 @@ void scan_matrix_by_row_custom_auc(
     const Block_* const block, // ignored if single_block_ = true.
     const std::size_t ncombos, // should be equal to ngroups if single_block_ = true. 
     const Combo_* const combo, // ignored if single_block_ = true.
+    const std::vector<Index_>& combo_size,
+    const BlockAverageInfo<Stat_>& average_info,
     std::vector<Stat_>& combo_means,
     std::vector<Stat_>& combo_vars,
     std::vector<Stat_>& combo_detected,
     const bool do_auc,
     AucResultInitialize_ auc_result_init, // generate workspace for processing the final AUC results.
     AucResultProcess_ auc_result_process, // process the pairwise AUC comparisons into the final AUC results.
-    const std::vector<Index_>& combo_size,
-    const std::vector<Weight_>& combo_weights,
     const int num_threads
 ) {
     const Index_ NC = matrix.ncol();
@@ -205,15 +279,15 @@ void scan_matrix_by_row_custom_auc(
         }
 
         // A vast array of AUC-related bits and pieces.
-        AucScanWorkspace<Value_, Group_, Index_, Stat_> auc_work;
-        decltype(I(auc_result_init(0))) auc_res_work;
+        std::optional<AucScanWorkspace<Value_, Group_, Stat_, Index_> > auc_work;
+        std::optional<I<decltype(auc_result_init(0))> > auc_res_work;
         if (do_auc) {
-            initialize_auc_workspace(auc_work, ngroups, nblocks, combo_size, combo_weights);
+            auc_work = initialize_workspace_for_auc<Value_, Group_, Stat_, Index_>(ngroups, nblocks, combo_size, average_info);
             auc_res_work = auc_result_init(t);
         }
 
         const auto divide = [&](Stat_* ptr) -> void {
-            for (decltype(I(ncombos)) co = 0; co < ncombos; ++co) {
+            for (I<decltype(ncombos)> co = 0; co < ncombos; ++co) {
                 ptr[co] /= combo_size[co];
             }
         };
@@ -260,12 +334,12 @@ void scan_matrix_by_row_custom_auc(
                 }
 
                 if (do_auc) {
-                    auto nzIt = auc_work.block_num_zeros.begin();
-                    for (const auto& t : auc_work.block_totals) {
+                    auto nzIt = auc_work->block_num_zeros.begin();
+                    for (const auto& t : auc_work->block_totals) {
                         std::copy(t.begin(), t.end(), nzIt->begin());
                         ++nzIt;
                     }
-                    for (auto& p : auc_work.block_workspaces) {
+                    for (auto& p : auc_work->block_workspaces) {
                         p.paired.clear();
                     }
 
@@ -280,12 +354,12 @@ void scan_matrix_by_row_custom_auc(
                                 }
                             }();
                             const auto g = group[c];
-                            auc_work.block_workspaces[b].paired.emplace_back(range.value[j], g);
-                            --(auc_work.block_num_zeros[b][g]);
+                            auc_work->block_workspaces[b].paired.emplace_back(range.value[j], g);
+                            --(auc_work->block_num_zeros[b][g]);
                         }
                     }
 
-                    auc_result_process(r, auc_work, auc_res_work);
+                    auc_result_process(r, *auc_work, *auc_res_work);
                 }
             }
 
@@ -327,10 +401,10 @@ void scan_matrix_by_row_custom_auc(
                 }
 
                 if (do_auc) {
-                    for (auto& z : auc_work.block_num_zeros) {
+                    for (auto& z : auc_work->block_num_zeros) {
                         std::fill(z.begin(), z.end(), 0);
                     }
-                    for (auto& p : auc_work.block_workspaces) {
+                    for (auto& p : auc_work->block_workspaces) {
                         p.paired.clear();
                     }
 
@@ -344,13 +418,13 @@ void scan_matrix_by_row_custom_auc(
                         }();
                         const auto g = group[c];
                         if (ptr[c]) {
-                            auc_work.block_workspaces[b].paired.emplace_back(ptr[c], g);
+                            auc_work->block_workspaces[b].paired.emplace_back(ptr[c], g);
                         } else {
-                            ++(auc_work.block_num_zeros[b][g]);
+                            ++(auc_work->block_num_zeros[b][g]);
                         }
                     }
 
-                    auc_result_process(r, auc_work, auc_res_work);
+                    auc_result_process(r, *auc_work, *auc_res_work);
                 }
             }
         }
@@ -365,7 +439,6 @@ template<
     typename Block_,
     typename Combo_,
     typename Stat_, 
-    typename Weight_,
     typename Threshold_
 >
 void scan_matrix_by_row_full_auc(
@@ -376,12 +449,12 @@ void scan_matrix_by_row_full_auc(
     const Block_* const block,
     const std::size_t ncombos,
     const Combo_* const combo,
+    const std::vector<Index_>& combo_size,
+    const BlockAverageInfo<Stat_>& average_info,
     std::vector<Stat_>& combo_means,
     std::vector<Stat_>& combo_vars,
     std::vector<Stat_>& combo_detected,
     Stat_* const auc,
-    const std::vector<Index_>& combo_size,
-    const std::vector<Weight_>& combo_weights,
     const Threshold_ threshold,
     const int num_threads
 ) {
@@ -393,6 +466,8 @@ void scan_matrix_by_row_full_auc(
         block,
         ncombos,
         combo,
+        combo_size,
+        average_info,
         combo_means,
         combo_vars,
         combo_detected,
@@ -400,12 +475,10 @@ void scan_matrix_by_row_full_auc(
         /* auc_result_initialize = */ [&](int) -> bool {
             return false;
         },
-        /* auc_result_process = */ [&](const Index_ gene, AucScanWorkspace<Value_, Group_, Index_, Stat_>& auc_work, bool) -> void {
+        /* auc_result_process = */ [&](const Index_ gene, AucScanWorkspace<Value_, Group_, Stat_, Index_>& auc_work, bool) -> void {
             const auto auc_ptr = auc + sanisizer::product_unsafe<std::size_t>(gene, ngroups, ngroups);
             process_auc_for_rows(auc_work, ngroups, nblocks, threshold, auc_ptr);
         },
-        combo_size,
-        combo_weights,
         num_threads
     );
 }
@@ -415,12 +488,12 @@ void scan_matrix_by_column(
     const tatami::Matrix<Value_, Index_>& matrix, 
     const std::size_t ncombos,
     const Combo_* const combo,
+    const std::vector<Index_>& combo_size,
     std::vector<Stat_>& combo_means,
     std::vector<Stat_>& combo_vars,
     std::vector<Stat_>& combo_detected,
-    const std::vector<Index_>& combo_size,
-    const int num_threads)
-{
+    const int num_threads
+) {
     const Index_ NC = matrix.ncol();
     tatami::parallelize([&](const int, const Index_ start, const Index_ length) -> void {
         auto vbuffer = tatami::create_container_of_Index_size<std::vector<Value_> >(length);
@@ -432,7 +505,7 @@ void scan_matrix_by_column(
         const auto len = tatami::cast_Index_to_container_size<std::vector<Stat_> >(length);
         const auto allocate_tmp = [&](std::vector<std::vector<Stat_> >& tmp) -> void {
             tmp.reserve(ncombos);
-            for (decltype(I(ncombos)) co = 0; co < ncombos; ++co) {
+            for (I<decltype(ncombos)> co = 0; co < ncombos; ++co) {
                 tmp.emplace_back(len);
             }
         };
@@ -456,7 +529,7 @@ void scan_matrix_by_column(
             std::vector<tatami_stats::variances::RunningSparse<Stat_, Value_, Index_> > runners;
             if (do_vars) {
                 runners.reserve(ncombos);
-                for (decltype(I(ncombos)) co = 0; co < ncombos; ++co) {
+                for (I<decltype(ncombos)> co = 0; co < ncombos; ++co) {
                     runners.emplace_back(length, tmp_means[co].data(), tmp_vars[co].data(), /* skip_nan = */ false, start);
                 }
             }
@@ -494,7 +567,7 @@ void scan_matrix_by_column(
             std::vector<tatami_stats::variances::RunningDense<Stat_, Value_, Index_> > runners;
             if (do_vars) {
                 runners.reserve(ncombos);
-                for (decltype(I(ncombos)) co = 0; co < ncombos; ++co) {
+                for (I<decltype(ncombos)> co = 0; co < ncombos; ++co) {
                     runners.emplace_back(length, tmp_means[co].data(), tmp_vars[co].data(), /* skip_nan = */ false);
                 }
             }
@@ -534,20 +607,20 @@ void scan_matrix_by_column(
             if (do_vars) {
                 const auto mean_ptr = combo_means.data() + offset;
                 const auto var_ptr = combo_vars.data() + offset;
-                for (decltype(I(ncombos)) co = 0; co < ncombos; ++co) {
+                for (I<decltype(ncombos)> co = 0; co < ncombos; ++co) {
                     mean_ptr[co] = tmp_means[co][r];
                     var_ptr[co] = tmp_vars[co][r];
                 }
             } else if (do_means) {
                 const auto mean_ptr = combo_means.data() + offset;
-                for (decltype(I(ncombos)) co = 0; co < ncombos; ++co) {
+                for (I<decltype(ncombos)> co = 0; co < ncombos; ++co) {
                     mean_ptr[co] = tmp_means[co][r] / combo_size[co];
                 }
             }
 
             if (do_detected) {
                 const auto det_ptr = combo_detected.data() + offset;
-                for (decltype(I(ncombos)) co = 0; co < ncombos; ++co) {
+                for (I<decltype(ncombos)> co = 0; co < ncombos; ++co) {
                     det_ptr[co] = tmp_dets[co][r] / combo_size[co];
                 }
             }

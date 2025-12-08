@@ -55,6 +55,13 @@ struct SummarizeEffectsOptions {
     bool compute_min_rank = true;
 
     /**
+     * Probabilites of the quantiles of the effect sizes for each group, to be reported.
+     * If set, the vector should be sorted and each entry should lie in \$f[0, 1]\f$.
+     * If not set, no quantiles are reported.
+     */
+    std::optional<std::vector<double> > compute_quantiles;
+
+    /**
      * Whether to preserve ties when computing the minimum rank.
      * If `true`, tied genes with equal effect sizes receive the same rank within each pairwise comparison. 
      * Otherwise, ties are broken in a stable manner, i.e., genes in earlier rows will receive a higher rank.
@@ -85,6 +92,10 @@ struct SummarizeEffectsOptions {
  *   A small value indicates that the gene is downregulated in \f$X\f$ compared to all other groups.
  *   For downregulation, this is the most stringent summary as markers will only have extreme values if they are _uniquely_ downregulated in \f$X\f$ compared to every other group.
  *   However, it may not be effective if \f$X\f$ is closely related to any of the groups.
+ * - The description above for the minimum, median and maximum can be generalized to arbitrary quantiles.
+ *   For example, the 10th percentile would only be large if one group was upregulated compared to 90% of all other groups.
+ *   For upregulation, lower quantile probabilities are more stringent as they approach the minimum;
+ *   conversely for downregulation, higher quantiles are more stringent as they approach the maximum.
  * - The "minimum rank" (a.k.a., min-rank) is defined by ranking genes based on decreasing effect size _within_ each comparison involving \f$X\f$,
  *   and then taking the smallest rank for each gene _across_ all comparisons involving \f$X\f$.
  *   A minimum rank of 1 means that the gene is the top upregulated gene in at least one comparison to another group.
@@ -128,7 +139,8 @@ void summarize_effects(
     const SummarizeEffectsOptions& options
 ) {
     internal::compute_min_rank_pairwise(ngenes, ngroups, effects, summaries, options.min_rank_preserve_ties, options.num_threads);
-    internal::summarize_comparisons(ngenes, ngroups, effects, summaries, options.num_threads); 
+    internal::validate_quantiles(options.compute_quantiles);
+    internal::summarize_comparisons(ngenes, ngroups, effects, options.compute_quantiles, summaries, options.num_threads); 
 }
 
 /**
@@ -152,8 +164,8 @@ std::vector<SummaryResults<Stat_, Rank_> > summarize_effects(
     const Gene_ ngenes,
     const std::size_t ngroups,
     const Stat_* const effects,
-    const SummarizeEffectsOptions& options)
-{
+    const SummarizeEffectsOptions& options
+) {
     std::vector<SummaryResults<Stat_, Rank_> > output;
     const auto ptrs = internal::fill_summary_results(
         ngenes,
@@ -163,6 +175,7 @@ std::vector<SummaryResults<Stat_, Rank_> > summarize_effects(
         options.compute_mean,
         options.compute_median,
         options.compute_max,
+        options.compute_quantiles,
         options.compute_min_rank
     );
     summarize_effects(ngenes, ngroups, effects, ptrs, options);
