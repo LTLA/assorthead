@@ -32,54 +32,54 @@ namespace tatami_r {
  * Note that `fun` may not be called for all `c` - if leaf nodes do not contain any data, they will be skipped.
  */
 template<class Function_>
-void parse_SVT_SparseMatrix(Rcpp::RObject matrix, Function_ fun) {
-    Rcpp::RObject raw_svt = matrix.slot("SVT");
+void parse_SVT_SparseMatrix(const Rcpp::RObject& matrix, const Function_ fun) {
+    const Rcpp::RObject raw_svt = matrix.slot("SVT");
     if (raw_svt == R_NilValue) {
         return;
     }
 
-    Rcpp::IntegerVector svt_version(matrix.slot(".svt_version"));
+    const Rcpp::IntegerVector svt_version(matrix.slot(".svt_version"));
     if (svt_version.size() != 1) {
         auto ctype = get_class_name(matrix);
         throw std::runtime_error("'.svt_version' slot of a " + ctype + " should be an integer scalar");
     }
-    int version = svt_version[0];
-    int index_x = (version == 0 ? 0 : 1);
-    int value_x = (version == 0 ? 1 : 0);
+    const int version = svt_version[0];
+    const int index_x = (version == 0 ? 0 : 1);
+    const int value_x = (version == 0 ? 1 : 0);
 
-    Rcpp::List svt(raw_svt);
-    int NC = svt.size();
+    const Rcpp::List svt(raw_svt);
+    const auto NC = svt.size();
 
-    for (int c = 0; c < NC; ++c) {
-        Rcpp::RObject raw_inner(svt[c]);
+    for (I<decltype(NC)> c = 0; c < NC; ++c) {
+        const Rcpp::RObject raw_inner(svt[c]);
         if (raw_inner == R_NilValue) {
             continue;
         }
 
-        Rcpp::List inner(raw_inner);
+        const Rcpp::List inner(raw_inner);
         if (inner.size() != 2) {
             auto ctype = get_class_name(matrix);
             throw std::runtime_error("each entry of the 'SVT' slot of a " + ctype + " object should be a list of length 2 or NULL");
         }
 
         // Verify type to ensure that we're not making a view on a temporary array.
-        Rcpp::RObject raw_indices = inner[index_x];
+        const Rcpp::RObject raw_indices = inner[index_x];
         if (raw_indices.sexp_type() != INTSXP) {
             auto ctype = get_class_name(matrix);
             throw std::runtime_error("indices of each element of the 'SVT' slot in a " + ctype + " object should be an integer vector");
         }
-        Rcpp::IntegerVector curindices(raw_indices);
-        auto nnz = curindices.size();
+        const Rcpp::IntegerVector curindices(raw_indices);
+        const auto nnz = curindices.size();
 
-        Rcpp::RObject raw_values(inner[value_x]);
-        auto vsexp = raw_values.sexp_type();
-        bool has_values = raw_values != R_NilValue;
+        const Rcpp::RObject raw_values(inner[value_x]);
+        const auto vsexp = raw_values.sexp_type();
+        const bool has_values = raw_values != R_NilValue;
         Rcpp::IntegerVector curvalues_i;
         Rcpp::NumericVector curvalues_n;
         Rcpp::LogicalVector curvalues_l;
 
         if (has_values) {
-            decltype(nnz) vsize;
+            I<decltype(nnz)> vsize;
             switch (vsexp) {
                 case INTSXP:
                     curvalues_i = Rcpp::IntegerVector(raw_values);
@@ -126,12 +126,12 @@ void parse_SVT_SparseMatrix(Rcpp::RObject matrix, Function_ fun) {
 template<typename CachedValue_, typename CachedIndex_, typename Index_>
 void parse_sparse_matrix(
     Rcpp::RObject matrix,
-    bool row,
+    const bool row,
     std::vector<CachedValue_*>& value_ptrs, 
     std::vector<CachedIndex_*>& index_ptrs, 
-    Index_* counts)
-{
-    auto ctype = get_class_name(matrix);
+    Index_* const counts
+) {
+    const auto ctype = get_class_name(matrix);
     if (ctype != "SVT_SparseMatrix") {
         // Can't be bothered to write a parser for COO_SparseMatrix objects,
         // which are soon-to-be-superceded by SVT_SparseMatrix anyway; so we
@@ -141,37 +141,37 @@ void parse_sparse_matrix(
         matrix = converter(matrix, Rcpp::CharacterVector::create("SVT_SparseMatrix"));
     }
 
-    bool needs_value = !value_ptrs.empty();
-    bool needs_index = !index_ptrs.empty();
+    const bool needs_value = !value_ptrs.empty();
+    const bool needs_index = !index_ptrs.empty();
 
     parse_SVT_SparseMatrix(
         matrix,
-        [&](int c, const auto& curindices, bool all_ones, const auto& curvalues) -> void {
-            auto nnz = curindices.size();
+        [&](const int c, const auto& curindices, const bool all_ones, const auto& curvalues) -> void {
+            const auto nnz = curindices.size();
 
             // Note that non-empty value_ptrs and index_ptrs may be longer than the
             // number of rows/columns in the SVT matrix, due to the reuse of slabs.
             if (row) {
                 if (needs_value) {
                     if (all_ones) {
-                        for (decltype(nnz) i = 0; i < nnz; ++i) {
-                            auto ix = curindices[i];
+                        for (I<decltype(nnz)> i = 0; i < nnz; ++i) {
+                            const auto ix = curindices[i];
                             value_ptrs[ix][counts[ix]] = 1;
                         }
                     } else {
-                        for (decltype(nnz) i = 0; i < nnz; ++i) {
-                            auto ix = curindices[i];
+                        for (I<decltype(nnz)> i = 0; i < nnz; ++i) {
+                            const auto ix = curindices[i];
                             value_ptrs[ix][counts[ix]] = curvalues[i];
                         }
                     }
                 }
                 if (needs_index) {
-                    for (decltype(nnz) i = 0; i < nnz; ++i) {
-                        auto ix = curindices[i];
+                    for (I<decltype(nnz)> i = 0; i < nnz; ++i) {
+                        const auto ix = curindices[i];
                         index_ptrs[ix][counts[ix]] = c;
                     }
                 }
-                for (decltype(nnz) i = 0; i < nnz; ++i) {
+                for (I<decltype(nnz)> i = 0; i < nnz; ++i) {
                     ++(counts[curindices[i]]);
                 }
 

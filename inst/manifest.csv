@@ -4,7 +4,7 @@ tatami_stats,https://github.com/tatami-inc/tatami_stats,v2.0.1,"Compute statisti
 tatami_mult,https://github.com/tatami-inc/tatami_mult,v0.1.3,"Multiplication of **tatami** matrices"
 tatami_chunked,https://github.com/tatami-inc/tatami_chunked,v2.1.0,"**tatami** extension for chunked matrices"
 manticore,https://github.com/tatami-inc/manticore,v1.0.3,"Execute arbitrary functions on the main thread"
-tatami_r,https://github.com/tatami-inc/tatami_r,v2.0.4,"**tatami** extension for R matrices"
+tatami_r,https://github.com/tatami-inc/tatami_r,v2.0.5,"**tatami** extension for R matrices"
 tatami_hdf5,https://github.com/tatami-inc/tatami_hdf5,v2.0.5,"**tatami** extension for HDF5 matrices"
 tatami_tiledb,https://github.com/tatami-inc/tatami_tiledb,v2.0.1,"**tatami** extension for TileDB matrices"
 eminem,https://github.com/tatami-inc/eminem,v1.2.0,"**tatami** extension for TileDB matrices"

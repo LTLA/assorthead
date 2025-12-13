@@ -10,10 +10,25 @@
 
 namespace tatami_r { 
 
+/* It's worth stressing here that 'data' is just a big matrix of data that we pulled out of R,
+ * saving time by avoiding repeated invocations of the R interpreter (at the expense of memory).
+ * Here, we need to split up that big blob into each cache buffer to make it easier to manage. 
+ * Each call to parse_dense_matrix() just extracts part of that big blob into one cache pointer;
+ * specifically, we want to extract rows from '[data_start_row, data_start_row + cache_num_rows)'
+ * and columns from '[data_start_column, data_start_column + cache_num_columns)'.
+ */
 template<typename InputValue_, class InputObject_, typename Index_, typename CachedValue_>
-void parse_dense_matrix_internal(const InputObject_& data, Index_ data_start_row, Index_ data_start_col, bool row, CachedValue_* cache, Index_ cache_num_rows, Index_ cache_num_cols) {
-    Index_ data_num_rows = data.rows();
-    auto input = static_cast<const InputValue_*>(data.begin()) + sanisizer::nd_offset<std::size_t>(data_start_row, data_num_rows, data_start_col);
+void parse_dense_matrix_internal(
+    const InputObject_& data,
+    const Index_ data_start_row,
+    const Index_ data_start_col,
+    const bool row,
+    CachedValue_* const cache,
+    const Index_ cache_num_rows,
+    const Index_ cache_num_cols
+) {
+    const Index_ data_num_rows = data.rows();
+    const auto input = static_cast<const InputValue_*>(data.begin()) + sanisizer::nd_offset<std::size_t>(data_start_row, data_num_rows, data_start_col);
 
     if (row) {
         // 'data' is a column-major matrix, but transpose() expects a row-major
@@ -31,16 +46,24 @@ void parse_dense_matrix_internal(const InputObject_& data, Index_ data_start_row
 }
 
 template<typename Index_, typename CachedValue_>
-void parse_dense_matrix(const Rcpp::RObject& seed, Index_ data_start_row, Index_ data_start_col, bool row, CachedValue_* cache, Index_ cache_num_rows, Index_ cache_num_cols) {
-    auto stype = seed.sexp_type();
+void parse_dense_matrix(    
+    const Rcpp::RObject& seed,
+    const Index_ data_start_row,
+    const Index_ data_start_col,
+    const bool row,
+    CachedValue_* const cache,
+    const Index_ cache_num_rows,
+    const Index_ cache_num_cols
+) {
+    const auto stype = seed.sexp_type();
     if (stype == REALSXP) {
-        Rcpp::NumericMatrix y(seed);
+        const Rcpp::NumericMatrix y(seed);
         parse_dense_matrix_internal<double>(y, data_start_row, data_start_col, row, cache, cache_num_rows, cache_num_cols);
     } else if (stype == INTSXP) {
-        Rcpp::IntegerMatrix y(seed);
+        const Rcpp::IntegerMatrix y(seed);
         parse_dense_matrix_internal<int>(y, data_start_row, data_start_col, row, cache, cache_num_rows, cache_num_cols);
     } else if (stype == LGLSXP) {
-        Rcpp::LogicalMatrix y(seed);
+        const Rcpp::LogicalMatrix y(seed);
         parse_dense_matrix_internal<int>(y, data_start_row, data_start_col, row, cache, cache_num_rows, cache_num_cols);
     } else {
         throw std::runtime_error("unsupported SEXP type (" + std::to_string(stype) + ") from the matrix returned by 'extract_array'");

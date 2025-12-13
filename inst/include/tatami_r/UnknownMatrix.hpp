@@ -15,6 +15,11 @@
 #include <optional>
 #include <cstddef>
 
+/**
+ * @file UnknownMatrix.hpp
+ * @brief **tatami** binding for an unknown R matrix.
+ */
+
 namespace tatami_r {
 
 /**
@@ -68,14 +73,15 @@ public:
         // operations in the initialization list are thread-safe.
 
         {
-            auto base = Rcpp::Environment::base_env();
-            Rcpp::Function fun = base["dim"];
-            Rcpp::RObject output = fun(seed);
+            const auto base = Rcpp::Environment::base_env();
+            const Rcpp::Function fun = base["dim"];
+            const Rcpp::RObject output = fun(seed);
             if (output.sexp_type() != INTSXP) {
                 auto ctype = get_class_name(my_original_seed);
                 throw std::runtime_error("'dim(<" + ctype + ">)' should return an integer vector");
             }
-            Rcpp::IntegerVector dims(output);
+
+            const Rcpp::IntegerVector dims(output);
             if (dims.size() != 2 || dims[0] < 0 || dims[1] < 0) {
                 auto ctype = get_class_name(my_original_seed);
                 throw std::runtime_error("'dim(<" + ctype + ">)' should contain two non-negative integers");
@@ -86,11 +92,15 @@ public:
             // For example, an ArbitraryArrayGrid is restricted by the ticks, while a RegularArrayGrid must have chunkdim <= refdim.
             my_nrow = sanisizer::cast<Index_>(dims[0]);
             my_ncol = sanisizer::cast<Index_>(dims[1]);
+
+            // Checking that we can safely create an Rcpp::IntegerVector without overfllow.
+            // We do it here once, so that we don't need to check in each call to consecutive_indices() or increment_indices() or whatever.
+            tatami::can_cast_Index_to_container_size<Rcpp::IntegerVector>(std::max(my_nrow, my_ncol));
         }
 
         {
-            Rcpp::Function fun = my_delayed_env["is_sparse"];
-            Rcpp::LogicalVector is_sparse = fun(seed);
+            const Rcpp::Function fun = my_delayed_env["is_sparse"];
+            const Rcpp::LogicalVector is_sparse = fun(seed);
             if (is_sparse.size() != 1) {
                 auto ctype = get_class_name(my_original_seed);
                 throw std::runtime_error("'is_sparse(<" + ctype + ">)' should return a logical vector of length 1");
@@ -102,8 +112,8 @@ public:
             tatami::resize_container_to_Index_size(my_row_chunk_map, my_nrow);
             tatami::resize_container_to_Index_size(my_col_chunk_map, my_ncol);
 
-            Rcpp::Function fun = my_delayed_env["chunkGrid"];
-            Rcpp::RObject grid = fun(seed);
+            const Rcpp::Function fun = my_delayed_env["chunkGrid"];
+            const Rcpp::RObject grid = fun(seed);
 
             if (grid == R_NilValue) {
                 my_row_max_chunk_size = 1;
@@ -124,13 +134,18 @@ public:
                 auto grid_cls = get_class_name(grid);
 
                 if (grid_cls == "RegularArrayGrid") {
-                    Rcpp::IntegerVector spacings(Rcpp::RObject(grid.slot("spacings")));
+                    const Rcpp::IntegerVector spacings(Rcpp::RObject(grid.slot("spacings")));
                     if (spacings.size() != 2) {
                         auto ctype = get_class_name(seed);
                         throw std::runtime_error("'chunkGrid(<" + ctype + ">)@spacings' should be an integer vector of length 2 with non-negative values");
                     }
 
-                    auto populate = [](Index_ extent, Index_ spacing, std::vector<Index_>& map, std::vector<Index_>& ticks) {
+                    const auto populate = [](
+                        const Index_ extent,
+                        const Index_ spacing,
+                        std::vector<Index_>& map,
+                        std::vector<Index_>& ticks
+                    ) -> void {
                         if (spacing == 0) {
                             ticks.push_back(0);
                         } else {
@@ -152,14 +167,20 @@ public:
                     populate(my_ncol, my_col_max_chunk_size, my_col_chunk_map, my_col_chunk_ticks);
 
                 } else if (grid_cls == "ArbitraryArrayGrid") {
-                    Rcpp::List ticks(Rcpp::RObject(grid.slot("tickmarks")));
+                    const Rcpp::List ticks(Rcpp::RObject(grid.slot("tickmarks")));
                     if (ticks.size() != 2) {
                         auto ctype = get_class_name(seed);
                         throw std::runtime_error("'chunkGrid(<" + ctype + ">)@tickmarks' should return a list of length 2");
                     }
 
-                    auto populate = [](Index_ extent, const Rcpp::IntegerVector& ticks, std::vector<Index_>& map, std::vector<Index_>& new_ticks, Index_& max_chunk_size) {
-                        if (ticks.size() == 0 || ticks[ticks.size() - 1] != static_cast<int>(extent)) {
+                    const auto populate = [](
+                        const Index_ extent,
+                        const Rcpp::IntegerVector& ticks,
+                        std::vector<Index_>& map,
+                        std::vector<Index_>& new_ticks,
+                        Index_& max_chunk_size
+                    ) -> void {
+                        if (ticks.size() != 0 && ticks[ticks.size() - 1] != static_cast<int>(extent)) {
                             throw std::runtime_error("invalid ticks returned by 'chunkGrid'");
                         }
                         new_ticks.resize(sanisizer::sum<decltype(new_ticks.size())>(ticks.size(), 1));
@@ -195,8 +216,8 @@ public:
                 }
 
                 // Choose the dimension that requires pulling out fewer chunks.
-                auto chunks_per_row = my_col_chunk_ticks.size() - 1;
-                auto chunks_per_col = my_row_chunk_ticks.size() - 1;
+                const auto chunks_per_row = my_col_chunk_ticks.size() - 1;
+                const auto chunks_per_col = my_row_chunk_ticks.size() - 1;
                 my_prefer_rows = chunks_per_row <= chunks_per_col;
             }
         }
@@ -278,11 +299,11 @@ public:
     }
 
 private:
-    Index_ max_primary_chunk_length(bool row) const {
+    Index_ max_primary_chunk_length(const bool row) const {
         return (row ? my_row_max_chunk_size : my_col_max_chunk_size);
     }
 
-    Index_ primary_num_chunks(bool row, Index_ primary_chunk_length) const {
+    Index_ primary_num_chunks(const bool row, const Index_ primary_chunk_length) const {
         auto primary_dim = (row ? my_nrow : my_ncol);
         if (primary_chunk_length == 0) {
             return primary_dim;
@@ -291,11 +312,11 @@ private:
         }
     }
 
-    Index_ secondary_dim(bool row) const {
+    Index_ secondary_dim(const bool row) const {
         return (row ? my_ncol : my_nrow);
     }
 
-    const std::vector<Index_>& chunk_ticks(bool row) const {
+    const std::vector<Index_>& chunk_ticks(const bool row) const {
         if (row) {
             return my_row_chunk_ticks;
         } else {
@@ -303,7 +324,7 @@ private:
         }
     }
 
-    const std::vector<Index_>& chunk_map(bool row) const {
+    const std::vector<Index_>& chunk_map(const bool row) const {
         if (row) {
             return my_row_chunk_map;
         } else {
@@ -321,10 +342,15 @@ private:
         template <bool, bool, typename, typename, typename, typename> class FromSparse_,
         typename ... Args_
     >
-    std::unique_ptr<tatami::DenseExtractor<oracle_, Value_, Index_> > populate_dense_internal(bool row, Index_ non_target_length, tatami::MaybeOracle<oracle_, Index_> oracle, Args_&& ... args) const {
+    std::unique_ptr<tatami::DenseExtractor<oracle_, Value_, Index_> > populate_dense_internal(
+        const bool row,
+        const Index_ non_target_length,
+        tatami::MaybeOracle<oracle_, Index_> oracle,
+        Args_&& ... args
+    ) const {
         std::unique_ptr<tatami::DenseExtractor<oracle_, Value_, Index_> > output;
 
-        Index_ max_target_chunk_length = max_primary_chunk_length(row);
+        const Index_ max_target_chunk_length = max_primary_chunk_length(row);
         tatami_chunked::SlabCacheStats<Index_> stats(
             /* target length = */ max_target_chunk_length,
             /* non_target_length = */ non_target_length,
@@ -336,7 +362,7 @@ private:
 
         const auto& map = chunk_map(row);
         const auto& ticks = chunk_ticks(row);
-        bool solo = (stats.max_slabs_in_cache == 0);
+        const bool solo = (stats.max_slabs_in_cache == 0);
 
 #ifdef TATAMI_R_PARALLELIZE_UNKNOWN 
         // This involves some Rcpp initializations, so we lock it just in case.
@@ -346,19 +372,64 @@ private:
 
         if (!my_sparse) {
             if (solo) {
-                typedef FromDense_<true, oracle_, Value_, Index_, CachedValue_> ShortDense;
-                output.reset(new ShortDense(my_original_seed, my_dense_extractor, row, std::move(oracle), std::forward<Args_>(args)..., ticks, map, stats));
+                output.reset(
+                    new FromDense_<true, oracle_, Value_, Index_, CachedValue_>(
+                        my_original_seed,
+                        my_dense_extractor,
+                        row,
+                        std::move(oracle),
+                        std::forward<Args_>(args)...,
+                        ticks,
+                        map,
+                        stats
+                    )
+                );
+
             } else {
-                typedef FromDense_<false, oracle_, Value_, Index_, CachedValue_> ShortDense;
-                output.reset(new ShortDense(my_original_seed, my_dense_extractor, row, std::move(oracle), std::forward<Args_>(args)..., ticks, map, stats));
+                output.reset(
+                    new FromDense_<false, oracle_, Value_, Index_, CachedValue_>(
+                        my_original_seed,
+                        my_dense_extractor,
+                        row,
+                        std::move(oracle),
+                        std::forward<Args_>(args)...,
+                        ticks,
+                        map,
+                        stats
+                    )
+                );
             }
+
         } else {
             if (solo) {
-                typedef FromSparse_<true, oracle_, Value_, Index_, CachedValue_, CachedIndex_> ShortSparse;
-                output.reset(new ShortSparse(my_original_seed, my_sparse_extractor, row, std::move(oracle), std::forward<Args_>(args)..., max_target_chunk_length, ticks, map, stats));
+                output.reset(
+                    new FromSparse_<true, oracle_, Value_, Index_, CachedValue_, CachedIndex_>( 
+                        my_original_seed,
+                        my_sparse_extractor,
+                        row,
+                        std::move(oracle),
+                        std::forward<Args_>(args)...,
+                        max_target_chunk_length,
+                        ticks,
+                        map,
+                        stats
+                    )
+                );
+
             } else {
-                typedef FromSparse_<false, oracle_, Value_, Index_, CachedValue_, CachedIndex_> ShortSparse;
-                output.reset(new ShortSparse(my_original_seed, my_sparse_extractor, row, std::move(oracle), std::forward<Args_>(args)..., max_target_chunk_length, ticks, map, stats));
+                output.reset(
+                    new FromSparse_<false, oracle_, Value_, Index_, CachedValue_, CachedIndex_>( 
+                        my_original_seed,
+                        my_sparse_extractor,
+                        row,
+                        std::move(oracle),
+                        std::forward<Args_>(args)...,
+                        max_target_chunk_length,
+                        ticks,
+                        map,
+                        stats
+                    )
+                );
             }
         }
 
@@ -370,32 +441,75 @@ private:
     }
 
     template<bool oracle_>
-    std::unique_ptr<tatami::DenseExtractor<oracle_, Value_, Index_> > populate_dense(bool row, tatami::MaybeOracle<oracle_, Index_> ora, const tatami::Options&) const {
-        Index_ non_target_dim = secondary_dim(row);
-        return populate_dense_internal<oracle_, UnknownMatrix_internal::DenseFull, UnknownMatrix_internal::DensifiedSparseFull>(row, non_target_dim, std::move(ora), non_target_dim);
+    std::unique_ptr<tatami::DenseExtractor<oracle_, Value_, Index_> > populate_dense(
+        const bool row,
+        tatami::MaybeOracle<oracle_, Index_> ora,
+        const tatami::Options&
+    ) const {
+        const Index_ non_target_dim = secondary_dim(row);
+        return populate_dense_internal<oracle_, DenseFull, DensifiedSparseFull>(
+            row,
+            non_target_dim,
+            std::move(ora),
+            non_target_dim
+        );
     }
 
     template<bool oracle_>
-    std::unique_ptr<tatami::DenseExtractor<oracle_, Value_, Index_> > populate_dense(bool row, tatami::MaybeOracle<oracle_, Index_> ora, Index_ block_start, Index_ block_length, const tatami::Options&) const {
-        return populate_dense_internal<oracle_, UnknownMatrix_internal::DenseBlock, UnknownMatrix_internal::DensifiedSparseBlock>(row, block_length, std::move(ora), block_start, block_length);
+    std::unique_ptr<tatami::DenseExtractor<oracle_, Value_, Index_> > populate_dense(
+        const  bool row,
+        tatami::MaybeOracle<oracle_, Index_> ora,
+        const Index_ block_start,
+        const Index_ block_length,
+        const tatami::Options&
+    ) const {
+        return populate_dense_internal<oracle_, DenseBlock, DensifiedSparseBlock>(
+            row,
+            block_length,
+            std::move(ora),
+            block_start,
+            block_length
+        );
     }
 
     template<bool oracle_>
-    std::unique_ptr<tatami::DenseExtractor<oracle_, Value_, Index_> > populate_dense(bool row, tatami::MaybeOracle<oracle_, Index_> ora, tatami::VectorPtr<Index_> indices_ptr, const tatami::Options&) const {
-        Index_ nidx = indices_ptr->size();
-        return populate_dense_internal<oracle_, UnknownMatrix_internal::DenseIndexed, UnknownMatrix_internal::DensifiedSparseIndexed>(row, nidx, std::move(ora), std::move(indices_ptr));
+    std::unique_ptr<tatami::DenseExtractor<oracle_, Value_, Index_> > populate_dense(
+        const bool row,
+        tatami::MaybeOracle<oracle_, Index_> ora,
+        tatami::VectorPtr<Index_> indices_ptr,
+        const tatami::Options&
+    ) const {
+        const Index_ nidx = indices_ptr->size();
+        return populate_dense_internal<oracle_, DenseIndexed, DensifiedSparseIndexed>(
+            row,
+            nidx,
+            std::move(ora),
+            std::move(indices_ptr)
+        );
     }
 
 public:
-    std::unique_ptr<tatami::MyopicDenseExtractor<Value_, Index_> > dense(bool row, const tatami::Options& opt) const {
+    std::unique_ptr<tatami::MyopicDenseExtractor<Value_, Index_> > dense(
+        const bool row,
+        const tatami::Options& opt
+    ) const {
         return populate_dense<false>(row, false, opt); 
     }
 
-    std::unique_ptr<tatami::MyopicDenseExtractor<Value_, Index_> > dense(bool row, Index_ block_start, Index_ block_length, const tatami::Options& opt) const {
+    std::unique_ptr<tatami::MyopicDenseExtractor<Value_, Index_> > dense(
+        const bool row,
+        const Index_ block_start,
+        const Index_ block_length,
+        const tatami::Options& opt
+    ) const {
         return populate_dense<false>(row, false, block_start, block_length, opt); 
     }
 
-    std::unique_ptr<tatami::MyopicDenseExtractor<Value_, Index_> > dense(bool row, tatami::VectorPtr<Index_> indices_ptr, const tatami::Options& opt) const {
+    std::unique_ptr<tatami::MyopicDenseExtractor<Value_, Index_> > dense(
+        const bool row,
+        tatami::VectorPtr<Index_> indices_ptr,
+        const tatami::Options& opt
+    ) const {
         return populate_dense<false>(row, false, std::move(indices_ptr), opt); 
     }
 
@@ -403,15 +517,30 @@ public:
      *** Oracular dense ***
      **********************/
 public:
-    std::unique_ptr<tatami::OracularDenseExtractor<Value_, Index_> > dense(bool row, std::shared_ptr<const tatami::Oracle<Index_> > ora, const tatami::Options& opt) const {
+    std::unique_ptr<tatami::OracularDenseExtractor<Value_, Index_> > dense(
+        const bool row,
+        std::shared_ptr<const tatami::Oracle<Index_> > ora,
+        const tatami::Options& opt
+    ) const {
         return populate_dense<true>(row, std::move(ora), opt); 
     }
 
-    std::unique_ptr<tatami::OracularDenseExtractor<Value_, Index_> > dense(bool row, std::shared_ptr<const tatami::Oracle<Index_> > ora, Index_ block_start, Index_ block_length, const tatami::Options& opt) const {
+    std::unique_ptr<tatami::OracularDenseExtractor<Value_, Index_> > dense(
+        const bool row,
+        std::shared_ptr<const tatami::Oracle<Index_> > ora,
+        const Index_ block_start,
+        const Index_ block_length,
+        const tatami::Options& opt
+    ) const {
         return populate_dense<true>(row, std::move(ora), block_start, block_length, opt); 
     }
 
-    std::unique_ptr<tatami::OracularDenseExtractor<Value_, Index_> > dense(bool row, std::shared_ptr<const tatami::Oracle<Index_> > ora, tatami::VectorPtr<Index_> indices_ptr, const tatami::Options& opt) const {
+    std::unique_ptr<tatami::OracularDenseExtractor<Value_, Index_> > dense(
+        const bool row,
+        std::shared_ptr<const tatami::Oracle<Index_> > ora,
+        tatami::VectorPtr<Index_> indices_ptr,
+        const tatami::Options& opt
+    ) const {
         return populate_dense<true>(row, std::move(ora), std::move(indices_ptr), opt); 
     }
 
@@ -425,15 +554,13 @@ public:
         typename ... Args_
     >
     std::unique_ptr<tatami::SparseExtractor<oracle_, Value_, Index_> > populate_sparse_internal(
-        bool row,
-        Index_ non_target_length, 
+        const bool row,
+        const Index_ non_target_length, 
         tatami::MaybeOracle<oracle_, Index_> oracle, 
         const tatami::Options& opt, 
-        Args_&& ... args) 
-    const {
-        std::unique_ptr<tatami::SparseExtractor<oracle_, Value_, Index_> > output;
-
-        Index_ max_target_chunk_length = max_primary_chunk_length(row);
+        Args_&& ... args
+    ) const {
+        const Index_ max_target_chunk_length = max_primary_chunk_length(row);
         tatami_chunked::SlabCacheStats<Index_> stats(
             /* target_length = */ max_target_chunk_length,
             /* non_target_length = */ non_target_length, 
@@ -445,9 +572,11 @@ public:
 
         const auto& map = chunk_map(row);
         const auto& ticks = chunk_ticks(row);
-        bool needs_value = opt.sparse_extract_value;
-        bool needs_index = opt.sparse_extract_index;
-        bool solo = stats.max_slabs_in_cache == 0;
+        const bool needs_value = opt.sparse_extract_value;
+        const bool needs_index = opt.sparse_extract_index;
+        const bool solo = stats.max_slabs_in_cache == 0;
+
+        std::unique_ptr<tatami::SparseExtractor<oracle_, Value_, Index_> > output;
 
 #ifdef TATAMI_R_PARALLELIZE_UNKNOWN 
         // This involves some Rcpp initializations, so we lock it just in case.
@@ -456,11 +585,38 @@ public:
 #endif
 
         if (solo) {
-            typedef FromSparse_<true, oracle_, Value_, Index_, CachedValue_, CachedIndex_> ShortSparse;
-            output.reset(new ShortSparse(my_original_seed, my_sparse_extractor, row, std::move(oracle), std::forward<Args_>(args)..., max_target_chunk_length, ticks, map, stats, needs_value, needs_index));
+            output.reset(
+                new FromSparse_<true, oracle_, Value_, Index_, CachedValue_, CachedIndex_>( 
+                    my_original_seed,
+                    my_sparse_extractor,
+                    row,
+                    std::move(oracle),
+                    std::forward<Args_>(args)...,
+                    max_target_chunk_length,
+                    ticks,
+                    map,
+                    stats,
+                    needs_value,
+                    needs_index
+                )
+            );
+
         } else {
-            typedef FromSparse_<false, oracle_, Value_, Index_, CachedValue_, CachedIndex_> ShortSparse;
-            output.reset(new ShortSparse(my_original_seed, my_sparse_extractor, row, std::move(oracle), std::forward<Args_>(args)..., max_target_chunk_length, ticks, map, stats, needs_value, needs_index));
+            output.reset(
+                new FromSparse_<false, oracle_, Value_, Index_, CachedValue_, CachedIndex_>( 
+                    my_original_seed,
+                    my_sparse_extractor,
+                    row,
+                    std::move(oracle),
+                    std::forward<Args_>(args)...,
+                    max_target_chunk_length,
+                    ticks,
+                    map,
+                    stats,
+                    needs_value,
+                    needs_index
+                )
+            );
         }
 
 #ifdef TATAMI_R_PARALLELIZE_UNKNOWN 
@@ -471,43 +627,101 @@ public:
     }
 
     template<bool oracle_>
-    std::unique_ptr<tatami::SparseExtractor<oracle_, Value_, Index_> > populate_sparse(bool row, tatami::MaybeOracle<oracle_, Index_> ora, const tatami::Options& opt) const {
-        Index_ non_target_dim = secondary_dim(row);
-        return populate_sparse_internal<oracle_, UnknownMatrix_internal::SparseFull>(row, non_target_dim, std::move(ora), opt, non_target_dim); 
+    std::unique_ptr<tatami::SparseExtractor<oracle_, Value_, Index_> > populate_sparse(
+        const bool row,
+        tatami::MaybeOracle<oracle_, Index_> ora,
+        const tatami::Options& opt
+    ) const {
+        const Index_ non_target_dim = secondary_dim(row);
+        return populate_sparse_internal<oracle_, SparseFull>(
+            row,
+            non_target_dim,
+            std::move(ora),
+            opt,
+            non_target_dim
+        ); 
     }
 
     template<bool oracle_>
-    std::unique_ptr<tatami::SparseExtractor<oracle_, Value_, Index_> > populate_sparse(bool row, tatami::MaybeOracle<oracle_, Index_> ora, Index_ block_start, Index_ block_length, const tatami::Options& opt) const {
-        return populate_sparse_internal<oracle_, UnknownMatrix_internal::SparseBlock>(row, block_length, std::move(ora), opt, block_start, block_length);
+    std::unique_ptr<tatami::SparseExtractor<oracle_, Value_, Index_> > populate_sparse(
+        const bool row,
+        tatami::MaybeOracle<oracle_, Index_> ora,
+        const Index_ block_start,
+        const Index_ block_length,
+        const tatami::Options& opt
+    ) const {
+        return populate_sparse_internal<oracle_, SparseBlock>(
+            row,
+            block_length,
+            std::move(ora),
+            opt,
+            block_start,
+            block_length
+        );
     }
 
     template<bool oracle_>
-    std::unique_ptr<tatami::SparseExtractor<oracle_, Value_, Index_> > populate_sparse(bool row, tatami::MaybeOracle<oracle_, Index_> ora, tatami::VectorPtr<Index_> indices_ptr, const tatami::Options& opt) const {
-        Index_ nidx = indices_ptr->size();
-        return populate_sparse_internal<oracle_, UnknownMatrix_internal::SparseIndexed>(row, nidx, std::move(ora), opt, std::move(indices_ptr));
+    std::unique_ptr<tatami::SparseExtractor<oracle_, Value_, Index_> > populate_sparse(
+        const bool row,
+        tatami::MaybeOracle<oracle_, Index_> ora,
+        tatami::VectorPtr<Index_> indices_ptr,
+        const tatami::Options& opt
+    ) const {
+        return populate_sparse_internal<oracle_, SparseIndexed>(
+            row,
+            indices_ptr->size(),
+            std::move(ora),
+            opt,
+            std::move(indices_ptr)
+        );
     }
 
 public:
-    std::unique_ptr<tatami::MyopicSparseExtractor<Value_, Index_> > sparse(bool row, const tatami::Options& opt) const {
+    std::unique_ptr<tatami::MyopicSparseExtractor<Value_, Index_> > sparse(
+        const bool row,
+        const tatami::Options& opt
+    ) const {
         if (!my_sparse) {
-            return std::make_unique<tatami::FullSparsifiedWrapper<false, Value_, Index_> >(dense(row, opt), secondary_dim(row), opt);
+            return std::make_unique<tatami::FullSparsifiedWrapper<false, Value_, Index_> >(
+                dense(row, opt),
+                secondary_dim(row),
+                opt
+            );
         } else {
             return populate_sparse<false>(row, false, opt); 
         }
     }
 
-    std::unique_ptr<tatami::MyopicSparseExtractor<Value_, Index_> > sparse(bool row, Index_ block_start, Index_ block_length, const tatami::Options& opt) const {
+    std::unique_ptr<tatami::MyopicSparseExtractor<Value_, Index_> > sparse(
+        const bool row,
+        const Index_ block_start,
+        const Index_ block_length,
+        const tatami::Options& opt
+    ) const {
         if (!my_sparse) {
-            return std::make_unique<tatami::BlockSparsifiedWrapper<false, Value_, Index_> >(dense(row, block_start, block_length, opt), block_start, block_length, opt);
+            return std::make_unique<tatami::BlockSparsifiedWrapper<false, Value_, Index_> >(
+                dense(row, block_start, block_length, opt),
+                block_start,
+                block_length,
+                opt
+            );
         } else {
             return populate_sparse<false>(row, false, block_start, block_length, opt); 
         }
     }
 
-    std::unique_ptr<tatami::MyopicSparseExtractor<Value_, Index_> > sparse(bool row, tatami::VectorPtr<Index_> indices_ptr, const tatami::Options& opt) const {
+    std::unique_ptr<tatami::MyopicSparseExtractor<Value_, Index_> > sparse(
+        const bool row,
+        tatami::VectorPtr<Index_> indices_ptr,
+        const tatami::Options& opt
+    ) const {
         if (!my_sparse) {
             auto index_copy = indices_ptr;
-            return std::make_unique<tatami::IndexSparsifiedWrapper<false, Value_, Index_> >(dense(row, std::move(indices_ptr), opt), std::move(index_copy), opt);
+            return std::make_unique<tatami::IndexSparsifiedWrapper<false, Value_, Index_> >(
+                dense(row, std::move(indices_ptr), opt),
+                std::move(index_copy),
+                opt
+            );
         } else {
             return populate_sparse<false>(row, false, std::move(indices_ptr), opt); 
         }
@@ -517,26 +731,54 @@ public:
      *** Oracular sparse ***
      **********************/
 public:
-    std::unique_ptr<tatami::OracularSparseExtractor<Value_, Index_> > sparse(bool row, std::shared_ptr<const tatami::Oracle<Index_> > ora, const tatami::Options& opt) const {
+    std::unique_ptr<tatami::OracularSparseExtractor<Value_, Index_> > sparse(
+        const bool row,
+        std::shared_ptr<const tatami::Oracle<Index_> > ora,
+        const tatami::Options& opt
+    ) const {
         if (!my_sparse) {
-            return std::make_unique<tatami::FullSparsifiedWrapper<true, Value_, Index_> >(dense(row, std::move(ora), opt), secondary_dim(row), opt);
+            return std::make_unique<tatami::FullSparsifiedWrapper<true, Value_, Index_> >(
+                dense(row, std::move(ora), opt),
+                secondary_dim(row),
+                opt
+            );
         } else {
             return populate_sparse<true>(row, std::move(ora), opt); 
         }
     }
 
-    std::unique_ptr<tatami::OracularSparseExtractor<Value_, Index_> > sparse(bool row, std::shared_ptr<const tatami::Oracle<Index_> > ora, Index_ block_start, Index_ block_length, const tatami::Options& opt) const {
+    std::unique_ptr<tatami::OracularSparseExtractor<Value_, Index_> > sparse(
+        const bool row,
+        std::shared_ptr<const tatami::Oracle<Index_> > ora,
+        const Index_ block_start,
+        const Index_ block_length,
+        const tatami::Options& opt
+    ) const {
         if (!my_sparse) {
-            return std::make_unique<tatami::BlockSparsifiedWrapper<true, Value_, Index_> >(dense(row, std::move(ora), block_start, block_length, opt), block_start, block_length, opt);
+            return std::make_unique<tatami::BlockSparsifiedWrapper<true, Value_, Index_> >(
+                dense(row, std::move(ora), block_start, block_length, opt),
+                block_start,
+                block_length,
+                opt
+            );
         } else {
             return populate_sparse<true>(row, std::move(ora), block_start, block_length, opt); 
         }
     }
 
-    std::unique_ptr<tatami::OracularSparseExtractor<Value_, Index_> > sparse(bool row, std::shared_ptr<const tatami::Oracle<Index_> > ora, tatami::VectorPtr<Index_> indices_ptr, const tatami::Options& opt) const {
+    std::unique_ptr<tatami::OracularSparseExtractor<Value_, Index_> > sparse(
+        const bool row,
+        std::shared_ptr<const tatami::Oracle<Index_> > ora,
+        tatami::VectorPtr<Index_> indices_ptr,
+        const tatami::Options& opt
+    ) const {
         if (!my_sparse) {
             auto index_copy = indices_ptr;
-            return std::make_unique<tatami::IndexSparsifiedWrapper<true, Value_, Index_> >(dense(row, std::move(ora), std::move(indices_ptr), opt), std::move(index_copy), opt);
+            return std::make_unique<tatami::IndexSparsifiedWrapper<true, Value_, Index_> >(
+                dense(row, std::move(ora), std::move(indices_ptr), opt),
+                std::move(index_copy),
+                opt
+            );
         } else {
             return populate_sparse<true>(row, std::move(ora), std::move(indices_ptr), opt); 
         }

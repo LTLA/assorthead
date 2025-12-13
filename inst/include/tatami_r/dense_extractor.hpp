@@ -13,17 +13,20 @@
 #include <vector>
 #include <stdexcept>
 #include <type_traits>
+#include <algorithm>
+#include <cstddef>
+#include <optional>
 
 namespace tatami_r {
-
-namespace UnknownMatrix_internal {
 
 // GENERAL COMMENTS:
 //
 // - No need to protect against overflows when incrementing to get to 1-based indexing.
 //   This is because the value being incremented is less than the dimension extent, which is known to fit into an Index_.
 // - No need to protect against overflows when creating IntegerVectors from dimension extents.
-//   We already know that the dimension extent can be safely converted to/from an int, based on checks in the UnknownMatrix constructor.
+//   We already checked for this in the UnknownMatrix constructor.
+// - Constructors are assumed to be serialized already, when called from an UnknownMatrix method.
+//   However, any destruction of Rcpp objects should also be serialized.
 
 /********************
  *** Core classes ***
@@ -35,26 +38,36 @@ public:
     SoloDenseCore(
         const Rcpp::RObject& matrix, 
         const Rcpp::Function& dense_extractor,
-        bool row,
+        const bool row,
         tatami::MaybeOracle<oracle_, Index_> oracle,
         Rcpp::IntegerVector non_target_extract, 
         [[maybe_unused]] const std::vector<Index_>& ticks, // provided here for compatibility with the other Dense*Core classes.
         [[maybe_unused]] const std::vector<Index_>& map,
-        [[maybe_unused]] const tatami_chunked::SlabCacheStats<Index_>& stats) :
+        [[maybe_unused]] const tatami_chunked::SlabCacheStats<Index_>& stats
+    ) :
         my_matrix(matrix),
         my_dense_extractor(dense_extractor),
-        my_extract_args(2),
         my_row(row),
         my_non_target_length(non_target_extract.size()),
         my_oracle(std::move(oracle))
     {
-        my_extract_args[static_cast<int>(row)] = non_target_extract;
+        my_extract_args.emplace(2);
+        (*my_extract_args)[static_cast<int>(row)] = std::move(non_target_extract);
+    }
+
+    ~SoloDenseCore() {
+#ifdef TATAMI_R_PARALLELIZE_UNKNOWN 
+        auto& mexec = executor();
+        mexec.run([&]() -> void {
+            my_extract_args.reset();
+        });
+#endif
     }
 
 private:
     const Rcpp::RObject& my_matrix;
     const Rcpp::Function& my_dense_extractor;
-    Rcpp::List my_extract_args;
+    std::optional<Rcpp::List> my_extract_args;
 
     bool my_row;
     Index_ my_non_target_length;
@@ -75,8 +88,8 @@ public:
         mexec.run([&]() -> void {
 #endif
 
-        my_extract_args[static_cast<int>(!my_row)] = Rcpp::IntegerVector::create(i + 1);
-        auto obj = my_dense_extractor(my_matrix, my_extract_args);
+        (*my_extract_args)[static_cast<int>(!my_row)] = Rcpp::IntegerVector::create(i + 1);
+        auto obj = my_dense_extractor(my_matrix, *my_extract_args);
         if (my_row) {
             parse_dense_matrix<Index_>(obj, 0, 0, true, buffer, 1, my_non_target_length);
         } else {
@@ -95,15 +108,15 @@ public:
     MyopicDenseCore(
         const Rcpp::RObject& matrix, 
         const Rcpp::Function& dense_extractor,
-        bool row,
+        const bool row,
         [[maybe_unused]] tatami::MaybeOracle<false, Index_> oracle, // provided here for compatibility with the other Dense*Core classes.
         Rcpp::IntegerVector non_target_extract, 
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats<Index_>& stats) :
+        const tatami_chunked::SlabCacheStats<Index_>& stats
+    ) :
         my_matrix(matrix),
         my_dense_extractor(dense_extractor),
-        my_extract_args(2),
         my_row(row),
         my_non_target_length(non_target_extract.size()),
         my_chunk_ticks(ticks),
@@ -111,13 +124,23 @@ public:
         my_factory(stats),
         my_cache(stats.max_slabs_in_cache)
     {
-        my_extract_args[static_cast<int>(row)] = non_target_extract;
+        my_extract_args.emplace(2);
+        (*my_extract_args)[static_cast<int>(row)] = std::move(non_target_extract);
+    }
+
+    ~MyopicDenseCore() {
+#ifdef TATAMI_R_PARALLELIZE_UNKNOWN 
+        auto& mexec = executor();
+        mexec.run([&]() -> void {
+            my_extract_args.reset();
+        });
+#endif
     }
 
 private:
     const Rcpp::RObject& my_matrix;
     const Rcpp::Function& my_dense_extractor;
-    Rcpp::List my_extract_args;
+    std::optional<Rcpp::List> my_extract_args;
 
     bool my_row;
     Index_ my_non_target_length;
@@ -126,33 +149,31 @@ private:
     const std::vector<Index_>& my_chunk_map;
 
     tatami_chunked::DenseSlabFactory<CachedValue_> my_factory;
-    typedef typename decltype(my_factory)::Slab Slab;
+    typedef typename I<decltype(my_factory)>::Slab Slab;
     tatami_chunked::LruSlabCache<Index_, Slab> my_cache;
 
 public:
     template<typename Value_>
-    void fetch_raw(Index_ i, Value_* buffer) {
-        auto chosen = my_chunk_map[i];
+    void fetch_raw(const Index_ i, Value_* const buffer) {
+        const auto chosen = my_chunk_map[i];
 
         const auto& slab = my_cache.find(
             chosen,
             [&]() -> Slab {
                 return my_factory.create();
             },
-            [&](Index_ id, Slab& cache) -> void {
+            [&](const Index_ id, Slab& cache) -> void {
+                const auto chunk_start = my_chunk_ticks[id];
+                const Index_ chunk_len = my_chunk_ticks[id + 1] - chunk_start;
+
 #ifdef TATAMI_R_PARALLELIZE_UNKNOWN 
                 // This involves some Rcpp initializations, so we lock it just in case.
                 auto& mexec = executor();
                 mexec.run([&]() -> void {
 #endif
 
-                auto chunk_start = my_chunk_ticks[id];
-                Index_ chunk_len = my_chunk_ticks[id + 1] - chunk_start;
-                Rcpp::IntegerVector primary_extract(chunk_len);
-                std::iota(primary_extract.begin(), primary_extract.end(), chunk_start + 1);
-                my_extract_args[static_cast<int>(!my_row)] = primary_extract;
-
-                auto obj = my_dense_extractor(my_matrix, my_extract_args);
+                (*my_extract_args)[static_cast<int>(!my_row)] = consecutive_indices(chunk_start, chunk_len);
+                auto obj = my_dense_extractor(my_matrix, *my_extract_args);
                 if (my_row) {
                     parse_dense_matrix<Index_>(obj, 0, 0, true, cache.data, chunk_len, my_non_target_length);
                 } else {
@@ -165,7 +186,7 @@ public:
             }
         );
 
-        auto shift = sanisizer::product_unsafe<std::size_t>(i - my_chunk_ticks[chosen], my_non_target_length);
+        const auto shift = sanisizer::product_unsafe<std::size_t>(i - my_chunk_ticks[chosen], my_non_target_length);
         std::copy_n(slab.data + shift, my_non_target_length, buffer);
     }
 };
@@ -176,15 +197,15 @@ public:
     OracularDenseCore(
         const Rcpp::RObject& matrix, 
         const Rcpp::Function& dense_extractor,
-        bool row,
+        const bool row,
         tatami::MaybeOracle<true, Index_> oracle,
         Rcpp::IntegerVector non_target_extract, 
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats<Index_>& stats) :
+        const tatami_chunked::SlabCacheStats<Index_>& stats
+    ) :
         my_matrix(matrix),
         my_dense_extractor(dense_extractor),
-        my_extract_args(2),
         my_row(row),
         my_non_target_length(non_target_extract.size()),
         my_chunk_ticks(ticks),
@@ -192,13 +213,23 @@ public:
         my_factory(stats),
         my_cache(std::move(oracle), stats.max_slabs_in_cache)
     {
-        my_extract_args[static_cast<int>(row)] = non_target_extract;
+        my_extract_args.emplace(2);
+        (*my_extract_args)[static_cast<int>(row)] = std::move(non_target_extract);
+    }
+
+    ~OracularDenseCore() {
+#ifdef TATAMI_R_PARALLELIZE_UNKNOWN 
+        auto& mexec = executor();
+        mexec.run([&]() -> void {
+            my_extract_args.reset();
+        });
+#endif
     }
 
 private:
     const Rcpp::RObject& my_matrix;
     const Rcpp::Function& my_dense_extractor;
-    Rcpp::List my_extract_args;
+    std::optional<Rcpp::List> my_extract_args;
 
     bool my_row;
     Index_ my_non_target_length;
@@ -207,15 +238,15 @@ private:
     const std::vector<Index_>& my_chunk_map;
 
     tatami_chunked::DenseSlabFactory<CachedValue_> my_factory;
-    typedef typename decltype(my_factory)::Slab Slab;
+    typedef typename I<decltype(my_factory)>::Slab Slab;
     tatami_chunked::OracularSlabCache<Index_, Index_, Slab> my_cache;
 
 public:
     template<typename Value_>
-    void fetch_raw(Index_, Value_* buffer) {
+    void fetch_raw(const Index_, Value_* const buffer) {
         auto res = my_cache.next(
-            [&](Index_ i) -> std::pair<Index_, Index_> {
-                auto chosen = my_chunk_map[i];
+            [&](const Index_ i) -> std::pair<Index_, Index_> {
+                const auto chosen = my_chunk_map[i];
                 return std::make_pair(chosen, static_cast<Index_>(i - my_chunk_ticks[chosen]));
             },
             [&]() -> Slab {
@@ -241,23 +272,23 @@ public:
                 mexec.run([&]() -> void {
 #endif
 
-                Rcpp::IntegerVector primary_extract(total_len);
+                Rcpp::IntegerVector primary_extract(total_len); // known safe as overflow is checked in the UnknownMatrix constructor.
                 Index_ current = 0;
                 for (const auto& p : to_populate) {
-                    Index_ chunk_start = my_chunk_ticks[p.first];
-                    Index_ chunk_len = my_chunk_ticks[p.first + 1] - chunk_start;
-                    auto start = primary_extract.begin() + current;
+                    const Index_ chunk_start = my_chunk_ticks[p.first];
+                    const Index_ chunk_len = my_chunk_ticks[p.first + 1] - chunk_start;
+                    const auto start = primary_extract.begin() + current;
                     std::iota(start, start + chunk_len, my_chunk_ticks[p.first] + 1);
                     current += chunk_len;
                 }
 
-                my_extract_args[static_cast<int>(!my_row)] = primary_extract;
-                auto obj = my_dense_extractor(my_matrix, my_extract_args);
+                (*my_extract_args)[static_cast<int>(!my_row)] = std::move(primary_extract);
+                const auto obj = my_dense_extractor(my_matrix, *my_extract_args);
 
                 current = 0;
                 for (const auto& p : to_populate) {
-                    auto chunk_start = my_chunk_ticks[p.first];
-                    Index_ chunk_len = my_chunk_ticks[p.first + 1] - chunk_start;
+                    const auto chunk_start = my_chunk_ticks[p.first];
+                    const Index_ chunk_len = my_chunk_ticks[p.first + 1] - chunk_start;
                     if (my_row) {
                         parse_dense_matrix<Index_>(obj, current, 0, true, p.second->data, chunk_len, my_non_target_length);
                     } else {
@@ -272,7 +303,7 @@ public:
             }
         );
 
-        auto shift = sanisizer::product_unsafe<std::size_t>(my_non_target_length, res.second);
+        const auto shift = sanisizer::product_unsafe<std::size_t>(my_non_target_length, res.second);
         std::copy_n(res.first->data + shift, my_non_target_length, buffer);
     }
 };
@@ -296,22 +327,19 @@ public:
     DenseFull(
         const Rcpp::RObject& matrix, 
         const Rcpp::Function& dense_extractor,
-        bool row,
+        const bool row,
         tatami::MaybeOracle<oracle_, Index_> oracle,
-        Index_ non_target_dim,
+        const Index_ non_target_dim,
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats<Index_>& stats) :
+        const tatami_chunked::SlabCacheStats<Index_>& stats
+    ) :
         my_core(
             matrix,
             dense_extractor,
             row,
             std::move(oracle),
-            [&]{
-                Rcpp::IntegerVector output(non_target_dim);
-                std::iota(output.begin(), output.end(), 1);
-                return output;
-            }(),
+            consecutive_indices<Index_>(0, non_target_dim),
             ticks,
             map,
             stats
@@ -322,7 +350,7 @@ private:
     DenseCore<solo_, oracle_, Index_, CachedValue_> my_core;
 
 public:
-    const Value_* fetch(Index_ i, Value_* buffer) {
+    const Value_* fetch(const Index_ i, Value_* const buffer) {
         my_core.fetch_raw(i, buffer);
         return buffer;
     }
@@ -334,23 +362,20 @@ public:
     DenseBlock(
         const Rcpp::RObject& matrix, 
         const Rcpp::Function& dense_extractor,
-        bool row,
+        const bool row,
         tatami::MaybeOracle<oracle_, Index_> oracle,
-        Index_ block_start,
-        Index_ block_length,
+        const Index_ block_start,
+        const Index_ block_length,
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats<Index_>& stats) :
+        const tatami_chunked::SlabCacheStats<Index_>& stats
+    ) :
         my_core(
             matrix,
             dense_extractor,
             row,
             std::move(oracle),
-            [&]{
-                Rcpp::IntegerVector output(block_length);
-                std::iota(output.begin(), output.end(), block_start + 1);
-                return output;
-            }(),
+            consecutive_indices<Index_>(block_start, block_length),
             ticks,
             map,
             stats
@@ -361,7 +386,7 @@ private:
     DenseCore<solo_, oracle_, Index_, CachedValue_> my_core;
 
 public:
-    const Value_* fetch(Index_ i, Value_* buffer) {
+    const Value_* fetch(const Index_ i, Value_* const buffer) {
         my_core.fetch_raw(i, buffer);
         return buffer;
     }
@@ -373,12 +398,13 @@ public:
     DenseIndexed(
         const Rcpp::RObject& matrix, 
         const Rcpp::Function& dense_extractor,
-        bool row,
+        const bool row,
         tatami::MaybeOracle<oracle_, Index_> oracle,
         tatami::VectorPtr<Index_> indices_ptr,
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats<Index_>& stats) :
+        const tatami_chunked::SlabCacheStats<Index_>& stats
+    ) :
         my_core(
             matrix,
             dense_extractor,
@@ -395,13 +421,11 @@ private:
     DenseCore<solo_, oracle_, Index_, CachedValue_> my_core;
 
 public:
-    const Value_* fetch(Index_ i, Value_* buffer) {
+    const Value_* fetch(const Index_ i, Value_* const buffer) {
         my_core.fetch_raw(i, buffer);
         return buffer;
     }
 };
-
-}
 
 }
 

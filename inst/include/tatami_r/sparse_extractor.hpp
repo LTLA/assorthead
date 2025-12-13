@@ -11,10 +11,12 @@
 
 #include <vector>
 #include <stdexcept>
+#include <type_traits>
+#include <algorithm>
+#include <numeric>
+#include <optional>
 
 namespace tatami_r {
-
-namespace UnknownMatrix_internal {
 
 // GENERAL COMMENTS:
 //
@@ -22,6 +24,8 @@ namespace UnknownMatrix_internal {
 //   This is because the value being incremented is less than the dimension extent, which is known to fit into an Index_.
 // - No need to protect against overflows when creating IntegerVectors from dimension extents.
 //   We already know that the dimension extent can be safely converted to/from an int, based on checks in the UnknownMatrix constructor.
+// - Constructors are assumed to be serialized already, when called from an UnknownMatrix method.
+//   However, any destruction of Rcpp objects should also be serialized.
 
 /********************
  *** Core classes ***
@@ -33,7 +37,7 @@ public:
     SoloSparseCore(
         const Rcpp::RObject& matrix, 
         const Rcpp::Function& sparse_extractor,
-        bool row,
+        const bool row,
         tatami::MaybeOracle<oracle_, Index_> oracle,
         Rcpp::IntegerVector non_target_extract, 
         [[maybe_unused]] Index_ max_target_chunk_length, // provided here for compatibility with the other Sparse*Core classes.
@@ -41,27 +45,43 @@ public:
         [[maybe_unused]] const std::vector<Index_>& map,
         [[maybe_unused]] const tatami_chunked::SlabCacheStats<Index_>& stats,
         bool needs_value,
-        bool needs_index) : 
+        bool needs_index
+    ) : 
         my_matrix(matrix),
         my_sparse_extractor(sparse_extractor),
-        my_extract_args(2),
         my_row(row),
-        my_factory(1, non_target_extract.size(), 1, needs_value, needs_index),
+        my_factory(
+            1,
+            sanisizer::cast<CachedIndex_>(non_target_extract.size()),
+            1,
+            needs_value,
+            needs_index
+        ),
         my_solo(my_factory.create()),
         my_oracle(std::move(oracle))
     {
-        my_extract_args[static_cast<int>(row)] = non_target_extract;
+        my_extract_args.emplace(2);
+        (*my_extract_args)[static_cast<int>(row)] = std::move(non_target_extract);
+    }
+
+    ~SoloSparseCore() {
+#ifdef TATAMI_R_PARALLELIZE_UNKNOWN 
+        auto& mexec = executor();
+        mexec.run([&]() -> void {
+            my_extract_args.reset();
+        });
+#endif
     }
 
 private:
     const Rcpp::RObject& my_matrix;
     const Rcpp::Function& my_sparse_extractor;
-    Rcpp::List my_extract_args;
+    std::optional<Rcpp::List> my_extract_args;
 
     bool my_row;
 
     tatami_chunked::SparseSlabFactory<CachedValue_, CachedIndex_> my_factory;
-    typedef typename decltype(my_factory)::Slab Slab;
+    typedef typename I<decltype(my_factory)>::Slab Slab;
     Slab my_solo;
 
     tatami::MaybeOracle<oracle_, Index_> my_oracle;
@@ -80,8 +100,8 @@ public:
         mexec.run([&]() -> void {
 #endif
 
-        my_extract_args[static_cast<int>(!my_row)] = Rcpp::IntegerVector::create(i + 1);
-        auto obj = my_sparse_extractor(my_matrix, my_extract_args);
+        (*my_extract_args)[static_cast<int>(!my_row)] = Rcpp::IntegerVector::create(i + 1);
+        const auto obj = my_sparse_extractor(my_matrix, *my_extract_args);
         parse_sparse_matrix(obj, my_row, my_solo.values, my_solo.indices, my_solo.number);
 
 #ifdef TATAMI_R_PARALLELIZE_UNKNOWN 
@@ -101,28 +121,44 @@ public:
         bool row,
         [[maybe_unused]] tatami::MaybeOracle<false, Index_> oracle, // provided here for compatibility with the other Sparse*Core classes.
         Rcpp::IntegerVector non_target_extract, 
-        Index_ max_target_chunk_length, 
+        const Index_ max_target_chunk_length, 
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
         const tatami_chunked::SlabCacheStats<Index_>& stats,
-        bool needs_value,
-        bool needs_index) : 
+        const bool needs_value,
+        const bool needs_index
+    ) : 
         my_matrix(matrix),
         my_sparse_extractor(sparse_extractor),
-        my_extract_args(2),
         my_row(row),
         my_chunk_ticks(ticks),
         my_chunk_map(map),
-        my_factory(max_target_chunk_length, non_target_extract.size(), stats, needs_value, needs_index),
+        my_factory(
+            sanisizer::cast<CachedIndex_>(max_target_chunk_length),
+            sanisizer::cast<CachedIndex_>(non_target_extract.size()),
+            stats,
+            needs_value,
+            needs_index
+        ),
         my_cache(stats.max_slabs_in_cache)
     {
-        my_extract_args[static_cast<int>(row)] = non_target_extract;
+        my_extract_args.emplace(2);
+        (*my_extract_args)[static_cast<int>(row)] = std::move(non_target_extract);
+    }
+
+    ~MyopicSparseCore() {
+#ifdef TATAMI_R_PARALLELIZE_UNKNOWN 
+        auto& mexec = executor();
+        mexec.run([&]() -> void {
+            my_extract_args.reset();
+        });
+#endif
     }
 
 private:
     const Rcpp::RObject& my_matrix;
     const Rcpp::Function& my_sparse_extractor;
-    Rcpp::List my_extract_args;
+    std::optional<Rcpp::List> my_extract_args;
 
     bool my_row;
 
@@ -130,21 +166,21 @@ private:
     const std::vector<Index_>& my_chunk_map;
 
     tatami_chunked::SparseSlabFactory<CachedValue_, CachedIndex_> my_factory;
-    typedef typename decltype(my_factory)::Slab Slab;
+    typedef typename I<decltype(my_factory)>::Slab Slab;
     tatami_chunked::LruSlabCache<Index_, Slab> my_cache;
 
 public:
-    std::pair<const Slab*, Index_> fetch_raw(Index_ i) {
-        auto chosen = my_chunk_map[i];
+    std::pair<const Slab*, Index_> fetch_raw(const Index_ i) {
+        const auto chosen = my_chunk_map[i];
 
         const auto& slab = my_cache.find(
             chosen,
             [&]() -> Slab {
                 return my_factory.create();
             },
-            [&](Index_ id, Slab& cache) -> void {
-                auto chunk_start = my_chunk_ticks[id], chunk_end = my_chunk_ticks[id + 1];
-                Index_ chunk_len = chunk_end - chunk_start;
+            [&](const Index_ id, Slab& cache) -> void {
+                const auto chunk_start = my_chunk_ticks[id], chunk_end = my_chunk_ticks[id + 1];
+                const Index_ chunk_len = chunk_end - chunk_start;
                 std::fill_n(cache.number, chunk_len, 0);
 
 #ifdef TATAMI_R_PARALLELIZE_UNKNOWN 
@@ -153,10 +189,8 @@ public:
                 mexec.run([&]() -> void {
 #endif
 
-                Rcpp::IntegerVector primary_extract(chunk_len);
-                std::iota(primary_extract.begin(), primary_extract.end(), chunk_start + 1);
-                my_extract_args[static_cast<int>(!my_row)] = primary_extract;
-                auto obj = my_sparse_extractor(my_matrix, my_extract_args);
+                (*my_extract_args)[static_cast<int>(!my_row)] = consecutive_indices(chunk_start, chunk_len);
+                auto obj = my_sparse_extractor(my_matrix, *my_extract_args);
                 parse_sparse_matrix(obj, my_row, cache.values, cache.indices, cache.number);
 
 #ifdef TATAMI_R_PARALLELIZE_UNKNOWN 
@@ -176,33 +210,49 @@ public:
     OracularSparseCore(
         const Rcpp::RObject& matrix, 
         const Rcpp::Function& sparse_extractor,
-        bool row,
+        const bool row,
         tatami::MaybeOracle<true, Index_> oracle,
         Rcpp::IntegerVector non_target_extract, 
-        Index_ max_target_chunk_length, 
+        const Index_ max_target_chunk_length, 
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
         const tatami_chunked::SlabCacheStats<Index_>& stats,
-        bool needs_value,
-        bool needs_index) : 
+        const bool needs_value,
+        const bool needs_index
+    ) : 
         my_matrix(matrix),
         my_sparse_extractor(sparse_extractor),
-        my_extract_args(2),
         my_row(row),
         my_chunk_ticks(ticks),
         my_chunk_map(map),
-        my_factory(max_target_chunk_length, non_target_extract.size(), stats, needs_value, needs_index),
+        my_factory(
+            sanisizer::cast<CachedIndex_>(max_target_chunk_length),
+            sanisizer::cast<CachedIndex_>(non_target_extract.size()),
+            stats,
+            needs_value,
+            needs_index
+        ),
         my_cache(std::move(oracle), stats.max_slabs_in_cache),
         my_needs_value(needs_value),
         my_needs_index(needs_index)
     {
-        my_extract_args[static_cast<int>(row)] = non_target_extract;
+        my_extract_args.emplace(2);
+        (*my_extract_args)[static_cast<int>(row)] = std::move(non_target_extract);
+    }
+
+    ~OracularSparseCore() {
+#ifdef TATAMI_R_PARALLELIZE_UNKNOWN 
+        auto& mexec = executor();
+        mexec.run([&]() -> void {
+            my_extract_args.reset();
+        });
+#endif
     }
 
 private:
     const Rcpp::RObject& my_matrix;
     const Rcpp::Function& my_sparse_extractor;
-    Rcpp::List my_extract_args;
+    std::optional<Rcpp::List> my_extract_args;
 
     bool my_row;
 
@@ -210,7 +260,7 @@ private:
     const std::vector<Index_>& my_chunk_map;
 
     tatami_chunked::SparseSlabFactory<CachedValue_, CachedIndex_> my_factory;
-    typedef typename decltype(my_factory)::Slab Slab;
+    typedef typename I<decltype(my_factory)>::Slab Slab;
     tatami_chunked::OracularSlabCache<Index_, Index_, Slab> my_cache;
 
     std::vector<CachedValue_*> my_chunk_value_ptrs;
@@ -223,8 +273,8 @@ private:
 public:
     std::pair<const Slab*, Index_> fetch_raw(Index_) {
         return my_cache.next(
-            [&](Index_ i) -> std::pair<Index_, Index_> {
-                auto chosen = my_chunk_map[i];
+            [&](const Index_ i) -> std::pair<Index_, Index_> {
+                const auto chosen = my_chunk_map[i];
                 return std::make_pair(chosen, static_cast<Index_>(i - my_chunk_ticks[chosen]));
             },
             [&]() -> Slab {
@@ -248,7 +298,7 @@ public:
 
                 Index_ total_len = 0;
                 for (const auto& p : to_populate) {
-                    Index_ chunk_len = my_chunk_ticks[p.first + 1] - my_chunk_ticks[p.first];
+                    const Index_ chunk_len = my_chunk_ticks[p.first + 1] - my_chunk_ticks[p.first];
                     total_len += chunk_len;
                     if (my_needs_value) {
                         auto vIt = p.second->values.begin();
@@ -269,23 +319,23 @@ public:
                 mexec.run([&]() -> void {
 #endif
 
-                Rcpp::IntegerVector primary_extract(total_len);
+                Rcpp::IntegerVector primary_extract(total_len); // known safe as overflow is checked in the UnknownMatrix constructor.
                 Index_ current = 0;
                 for (const auto& p : to_populate) {
-                    Index_ chunk_start = my_chunk_ticks[p.first];
-                    Index_ chunk_len = my_chunk_ticks[p.first + 1] - chunk_start;
+                    const Index_ chunk_start = my_chunk_ticks[p.first];
+                    const Index_ chunk_len = my_chunk_ticks[p.first + 1] - chunk_start;
                     auto start = primary_extract.begin() + current;
                     std::iota(start, start + chunk_len, chunk_start + 1);
                     current += chunk_len;
                 }
 
-                my_extract_args[static_cast<int>(!my_row)] = primary_extract;
-                auto obj = my_sparse_extractor(my_matrix, my_extract_args);
+                (*my_extract_args)[static_cast<int>(!my_row)] = std::move(primary_extract);
+                auto obj = my_sparse_extractor(my_matrix, *my_extract_args);
                 parse_sparse_matrix(obj, my_row, my_chunk_value_ptrs, my_chunk_index_ptrs, my_chunk_numbers.data());
 
                 current = 0;
                 for (const auto& p : to_populate) {
-                    Index_ chunk_len = my_chunk_ticks[p.first + 1] - my_chunk_ticks[p.first];
+                    const Index_ chunk_len = my_chunk_ticks[p.first + 1] - my_chunk_ticks[p.first];
                     std::copy_n(my_chunk_numbers.begin() + current, chunk_len, p.second->number);
                     current += chunk_len;
                 }
@@ -317,25 +367,22 @@ public:
     SparseFull(
         const Rcpp::RObject& matrix, 
         const Rcpp::Function& sparse_extractor,
-        bool row,
+        const bool row,
         tatami::MaybeOracle<oracle_, Index_> oracle,
-        Index_ non_target_dim,
-        Index_ max_target_chunk_length, 
+        const Index_ non_target_dim,
+        const Index_ max_target_chunk_length, 
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
         const tatami_chunked::SlabCacheStats<Index_>& stats,
-        bool needs_value,
-        bool needs_index) : 
+        const bool needs_value,
+        const bool needs_index
+    ) : 
         my_core(
             matrix,
             sparse_extractor,
             row,
             std::move(oracle),
-            [&]{
-                Rcpp::IntegerVector output(non_target_dim);
-                std::iota(output.begin(), output.end(), 1);
-                return output;
-            }(),
+            consecutive_indices<Index_>(0, non_target_dim),
             max_target_chunk_length,
             ticks,
             map,
@@ -354,10 +401,10 @@ private:
     bool my_needs_value, my_needs_index;
 
 public:
-    tatami::SparseRange<Value_, Index_> fetch(Index_ i, Value_* value_buffer, Index_* index_buffer) {
-        auto res = my_core.fetch_raw(i);
+    tatami::SparseRange<Value_, Index_> fetch(const Index_ i, Value_* const value_buffer, Index_* const index_buffer) {
+        const auto res = my_core.fetch_raw(i);
         const auto& slab = *(res.first);
-        Index_ offset = res.second;
+        const Index_ offset = res.second;
 
         tatami::SparseRange<Value_, Index_> output(slab.number[offset]);
         if (my_needs_value) {
@@ -382,24 +429,21 @@ public:
         const Rcpp::Function& sparse_extractor,
         bool row,
         tatami::MaybeOracle<oracle_, Index_> oracle,
-        Index_ block_start,
-        Index_ block_length,
-        Index_ max_target_chunk_length, 
+        const Index_ block_start,
+        const Index_ block_length,
+        const Index_ max_target_chunk_length, 
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
         const tatami_chunked::SlabCacheStats<Index_>& stats,
-        bool needs_value,
-        bool needs_index) : 
+        const bool needs_value,
+        const bool needs_index
+    ) : 
         my_core(
             matrix,
             sparse_extractor,
             row,
             std::move(oracle),
-            [&]{
-                Rcpp::IntegerVector output(block_length);
-                std::iota(output.begin(), output.end(), block_start + 1);
-                return output;
-            }(),
+            consecutive_indices(block_start, block_length),
             max_target_chunk_length,
             ticks,
             map,
@@ -418,10 +462,10 @@ private:
     bool my_needs_value, my_needs_index;
 
 public:
-    tatami::SparseRange<Value_, Index_> fetch(Index_ i, Value_* value_buffer, Index_* index_buffer) {
+    tatami::SparseRange<Value_, Index_> fetch(const Index_ i, Value_* const value_buffer, Index_* const index_buffer) {
         auto res = my_core.fetch_raw(i);
         const auto& slab = *(res.first);
-        Index_ offset = res.second;
+        const Index_ offset = res.second;
 
         tatami::SparseRange<Value_, Index_> output(slab.number[offset]);
         if (my_needs_value) {
@@ -430,7 +474,7 @@ public:
         }
 
         if (my_needs_index) {
-            auto iptr = slab.indices[offset];
+            const auto iptr = slab.indices[offset];
             for (Index_ i = 0; i < output.number; ++i) {
                 index_buffer[i] = static_cast<Index_>(iptr[i]) + my_block_start;
             }
@@ -449,19 +493,20 @@ public:
         const Rcpp::Function& sparse_extractor,
         bool row,
         tatami::MaybeOracle<oracle_, Index_> oracle,
-        tatami::VectorPtr<Index_> indices_ptr,
-        Index_ max_target_chunk_length, 
+        tatami::VectorPtr<Index_> idx_ptr,
+        const Index_ max_target_chunk_length, 
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
         const tatami_chunked::SlabCacheStats<Index_>& stats,
-        bool needs_value,
-        bool needs_index) : 
+        const bool needs_value,
+        const bool needs_index
+    ) : 
         my_core(
             matrix,
             sparse_extractor,
             row,
             std::move(oracle),
-            increment_indices(*indices_ptr),
+            increment_indices(*idx_ptr),
             max_target_chunk_length,
             ticks,
             map,
@@ -469,7 +514,7 @@ public:
             needs_value,
             needs_index
         ),
-        my_indices_ptr(std::move(indices_ptr)),
+        my_indices_ptr(std::move(idx_ptr)),
         my_needs_value(needs_value),
         my_needs_index(needs_index)
     {}
@@ -480,10 +525,10 @@ private:
     bool my_needs_value, my_needs_index;
 
 public:
-    tatami::SparseRange<Value_, Index_> fetch(Index_ i, Value_* value_buffer, Index_* index_buffer) {
+    tatami::SparseRange<Value_, Index_> fetch(const Index_ i, Value_* const value_buffer, Index_* const index_buffer) {
         auto res = my_core.fetch_raw(i);
         const auto& slab = *(res.first);
-        Index_ offset = res.second;
+        const Index_ offset = res.second;
 
         tatami::SparseRange<Value_, Index_> output(slab.number[offset]);
         if (my_needs_value) {
@@ -492,7 +537,7 @@ public:
         }
 
         if (my_needs_index) {
-            auto iptr = slab.indices[offset];
+            const auto iptr = slab.indices[offset];
             const auto& indices = *my_indices_ptr;
             for (Index_ i = 0; i < output.number; ++i) {
                 index_buffer[i] = indices[iptr[i]];
@@ -509,12 +554,14 @@ public:
  ***********************************/
 
 template<typename Slab_, typename Value_, typename Index_>
-const Value_* densify(const Slab_& slab, Index_ offset, Index_ non_target_length, Value_* buffer) {
-    auto vptr = slab.values[offset];
-    auto iptr = slab.indices[offset];
+const Value_* densify(const Slab_& slab, const Index_ offset, const Index_ non_target_length, Value_* const buffer) {
+    const auto vptr = slab.values[offset];
+    const auto iptr = slab.indices[offset];
     std::fill_n(buffer, non_target_length, 0);
-    for (Index_ i = 0, end = slab.number[offset]; i < end; ++i, ++vptr, ++iptr) {
-        buffer[*iptr] = *vptr;
+
+    const Index_ num = slab.number[offset];
+    for (Index_ i = 0; i < num; ++i) {
+        buffer[iptr[i]] = vptr[i];
     }
     return buffer;
 }
@@ -525,23 +572,20 @@ public:
     DensifiedSparseFull(
         const Rcpp::RObject& matrix, 
         const Rcpp::Function& sparse_extractor,
-        bool row,
+        const bool row,
         tatami::MaybeOracle<oracle_, Index_> oracle,
-        Index_ non_target_dim,
-        Index_ max_target_chunk_length, 
+        const Index_ non_target_dim,
+        const Index_ max_target_chunk_length, 
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats<Index_>& stats) :
+        const tatami_chunked::SlabCacheStats<Index_>& stats
+    ) :
         my_core(
             matrix,
             sparse_extractor,
             row,
             std::move(oracle),
-            [&]{
-                Rcpp::IntegerVector output(non_target_dim);
-                std::iota(output.begin(), output.end(), 1);
-                return output;
-            }(),
+            consecutive_indices(0, non_target_dim),
             max_target_chunk_length,
             ticks,
             map,
@@ -557,8 +601,8 @@ private:
     Index_ my_non_target_dim;
 
 public:
-    const Value_* fetch(Index_ i, Value_* buffer) {
-        auto res = my_core.fetch_raw(i);
+    const Value_* fetch(const Index_ i, Value_* const buffer) {
+        const auto res = my_core.fetch_raw(i);
         return densify(*(res.first), res.second, my_non_target_dim, buffer);
     }
 };
@@ -569,24 +613,21 @@ public:
     DensifiedSparseBlock(
         const Rcpp::RObject& matrix, 
         const Rcpp::Function& sparse_extractor,
-        bool row,
+        const bool row,
         tatami::MaybeOracle<oracle_, Index_> oracle,
-        Index_ block_start,
-        Index_ block_length,
-        Index_ max_target_chunk_length, 
+        const Index_ block_start,
+        const Index_ block_length,
+        const Index_ max_target_chunk_length, 
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats<Index_>& stats) :
+        const tatami_chunked::SlabCacheStats<Index_>& stats
+    ) :
         my_core(
             matrix,
             sparse_extractor,
             row,
             std::move(oracle),
-            [&]{
-                Rcpp::IntegerVector output(block_length);
-                std::iota(output.begin(), output.end(), block_start + 1);
-                return output;
-            }(),
+            consecutive_indices(block_start, block_length),
             max_target_chunk_length,
             ticks,
             map,
@@ -602,8 +643,8 @@ private:
     Index_ my_block_length;
 
 public:
-    const Value_* fetch(Index_ i, Value_* buffer) {
-        auto res = my_core.fetch_raw(i);
+    const Value_* fetch(const Index_ i, Value_* const buffer) {
+        const auto res = my_core.fetch_raw(i);
         return densify(*(res.first), res.second, my_block_length, buffer);
     }
 };
@@ -614,13 +655,14 @@ public:
     DensifiedSparseIndexed(
         const Rcpp::RObject& matrix, 
         const Rcpp::Function& sparse_extractor,
-        bool row,
+        const bool row,
         tatami::MaybeOracle<oracle_, Index_> oracle,
         tatami::VectorPtr<Index_> idx_ptr,
-        Index_ max_target_chunk_length, 
+        const Index_ max_target_chunk_length, 
         const std::vector<Index_>& ticks,
         const std::vector<Index_>& map,
-        const tatami_chunked::SlabCacheStats<Index_>& stats) :
+        const tatami_chunked::SlabCacheStats<Index_>& stats
+    ) :
         my_core( 
             matrix,
             sparse_extractor,
@@ -642,13 +684,11 @@ private:
     Index_ my_num_indices;
 
 public:
-    const Value_* fetch(Index_ i, Value_* buffer) {
-        auto res = my_core.fetch_raw(i);
+    const Value_* fetch(const Index_ i, Value_* const buffer) {
+        const auto res = my_core.fetch_raw(i);
         return densify(*(res.first), res.second, my_num_indices, buffer);
     }
 };
-
-}
 
 }
 
