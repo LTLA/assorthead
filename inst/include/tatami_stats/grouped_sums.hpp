@@ -66,8 +66,8 @@ struct Options {
  */
 template<typename Value_, typename Index_, typename Group_, typename Output_>
 void apply(bool row, const tatami::Matrix<Value_, Index_>& mat, const Group_* group, std::size_t num_groups, Output_** output, const Options& sopt) {
-    Index_ dim = (row ? mat.nrow() : mat.ncol());
-    Index_ otherdim = (row ? mat.ncol() : mat.nrow());
+    const Index_ dim = (row ? mat.nrow() : mat.ncol());
+    const Index_ otherdim = (row ? mat.ncol() : mat.nrow());
 
     if (mat.sparse()) {
         if (mat.prefer_rows() == row) {
@@ -84,7 +84,7 @@ void apply(bool row, const tatami::Matrix<Value_, Index_>& mat, const Group_* gr
                     internal::nanable_ifelse<Value_>(
                         sopt.skip_nan,
                         [&]() -> void {
-                            for (int j = 0; j < range.number; ++j) {
+                            for (Index_ j = 0; j < range.number; ++j) {
                                 auto val = range.value[j];
                                 if (!std::isnan(val)) {
                                     tmp[group[range.index[j]]] += val;
@@ -92,7 +92,7 @@ void apply(bool row, const tatami::Matrix<Value_, Index_>& mat, const Group_* gr
                             }
                         },
                         [&]() -> void {
-                            for (int j = 0; j < range.number; ++j) {
+                            for (Index_ j = 0; j < range.number; ++j) {
                                 tmp[group[range.index[j]]] += range.value[j];
                             }
                         }
@@ -126,7 +126,7 @@ void apply(bool row, const tatami::Matrix<Value_, Index_>& mat, const Group_* gr
                 auto xbuffer = tatami::create_container_of_Index_size<std::vector<Value_> >(len);
                 auto ibuffer = tatami::create_container_of_Index_size<std::vector<Index_> >(len);
 
-                for (int i = 0; i < otherdim; ++i) {
+                for (Index_ i = 0; i < otherdim; ++i) {
                     auto range = ext->fetch(xbuffer.data(), ibuffer.data());
                     runners[group[i]].add(range.value, range.index, range.number);
                 }
@@ -186,7 +186,7 @@ void apply(bool row, const tatami::Matrix<Value_, Index_>& mat, const Group_* gr
                 auto xbuffer = tatami::create_container_of_Index_size<std::vector<Value_> >(len);
                 auto ext = tatami::consecutive_extractor<false>(mat, !row, static_cast<Index_>(0), otherdim, start, len);
 
-                for (int i = 0; i < otherdim; ++i) {
+                for (Index_ i = 0; i < otherdim; ++i) {
                     auto ptr = ext->fetch(xbuffer.data());
                     runners[group[i]].add(ptr);
                 }

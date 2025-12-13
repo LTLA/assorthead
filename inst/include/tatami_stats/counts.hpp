@@ -42,8 +42,8 @@ namespace counts {
  */
 template<typename Value_, typename Index_, typename Output_, class Condition_>
 void apply(bool row, const tatami::Matrix<Value_, Index_>& mat, Output_* output, int num_threads, Condition_ condition) {
-    auto dim = (row ? mat.nrow() : mat.ncol());
-    auto otherdim = (row ? mat.ncol() : mat.nrow());
+    const Index_ dim = (row ? mat.nrow() : mat.ncol());
+    const Index_ otherdim = (row ? mat.ncol() : mat.nrow());
     std::fill(output, output + dim, 0);
 
     if (mat.prefer_rows() == row) {
@@ -117,7 +117,7 @@ void apply(bool row, const tatami::Matrix<Value_, Index_>& mat, Output_* output,
                 }
 
                 if (count_zero) {
-                    for (int d = 0; d < dim; ++d) {
+                    for (Index_ d = 0; d < dim; ++d) {
                         curoutput[d] += len - nonzeros[d];
                     }
                 }

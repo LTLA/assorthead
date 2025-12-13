@@ -11,6 +11,7 @@
 #include <cstddef>
 
 #include "tatami/tatami.hpp"
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file variances.hpp
@@ -215,6 +216,9 @@ public:
      * @param[in] ptr Pointer to an array of values of length `num`, corresponding to an observed vector.
      */
     void add(const Value_* ptr) {
+        // my_count is the upper bound of all my_ok_count, so we check it regardless of my_skip_nan.
+        my_count = sanisizer::sum<Index_>(my_count, 1);
+
         ::tatami_stats::internal::nanable_ifelse<Value_>(
             my_skip_nan,
             [&]() -> void {
@@ -226,7 +230,6 @@ public:
                 }
             },
             [&]() -> void {
-                ++my_count;
                 for (Index_ i = 0; i < my_num; ++i, ++ptr) {
                     internal::add_welford(my_mean[i], my_variance[i], *ptr, my_count);
                 }
@@ -318,7 +321,8 @@ public:
      * @param number Number of non-zero elements in `value` and `index`.
      */
     void add(const Value_* value, const Index_* index, Index_ number) {
-        ++my_count;
+        // my_count is the upper bound of all my_nonzero, so no need to check individual increments.
+        my_count = sanisizer::sum<Index_>(my_count, 1);
 
         ::tatami_stats::internal::nanable_ifelse<Value_>(
             my_skip_nan,

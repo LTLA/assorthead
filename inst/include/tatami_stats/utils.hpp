@@ -91,9 +91,9 @@ public:
      */
     template<typename Index_>
     LocalOutputBuffer(int thread, Index_ start, Index_ length, Output_* output, Output_ fill) : 
-        my_output(output + start),
+        my_output(output + sanisizer::cast<std::size_t>(start)),
         use_local(thread > 0),
-        my_buffer(use_local ? tatami::can_cast_Index_to_container_size<decltype(my_buffer)>(length) : static_cast<Index_>(0), fill)
+        my_buffer(use_local ? sanisizer::cast<decltype(my_buffer.size())>(length) : static_cast<decltype(my_buffer.size())>(0), fill)
     {
         if (!use_local) {
             // Setting to zero to match the initial behavior of 'my_buffer' when 'use_local = true'.
@@ -166,7 +166,9 @@ template<typename Output_, class GetOutput_>
 class LocalOutputBuffers {
 public:
     /**
-     * @tparam Index_ Type of the start index and length.
+     * @tparam Number_ Integer type of the number of buffers.
+     * @tparam Index_ Integer type of the start index and length.
+     *
      * @param thread Identity of the thread, starting from zero to the total number of threads.
      * @param number Number of output buffers.
      * @param start Index of the first objective vector in the contiguous block for this thread.
@@ -174,10 +176,10 @@ public:
      * @param outfun Function that accepts an `std::size_t` specifying the index of an output buffer in `[0, number)` and returns a `Output_*` pointer to that buffer.
      * @param fill Initial value to fill the buffer.
      */
-    template<typename Index_>
-    LocalOutputBuffers(int thread, std::size_t number, Index_ start, Index_ length, GetOutput_ outfun, Output_ fill) : 
-        my_number(number),
-        my_start(start), // Remember, Index_ is assumed to always be castable to std::size_t in a tatami context, otherwise fetch() wouldn't work.
+    template<typename Number_, typename Index_>
+    LocalOutputBuffers(int thread, Number_ number, Index_ start, Index_ length, GetOutput_ outfun, Output_ fill) : 
+        my_number(sanisizer::cast<decltype(my_number)>(number)),
+        my_start(sanisizer::cast<decltype(my_start)>(start)),
         my_use_local(thread > 0),
         my_getter(std::move(outfun))
     {
@@ -197,15 +199,17 @@ public:
     /**
      * Overloaded constructor that sets the default `fill = 0`.
      *
-     * @tparam Index_ Type of the start index and length.
+     * @tparam Number_ Integer type of the number of buffers.
+     * @tparam Index_ Integer type of the start index and length.
+     *
      * @param thread Identity of the thread, starting from zero to the total number of threads.
      * @param number Number of output buffers.
      * @param start Index of the first objective vector in the contiguous block for this thread.
      * @param length Number of objective vectors in the contiguous block for this thread.
      * @param outfun Function that accepts an `Index_` specifying the index of an output buffer in `[0, number)` and returns a `Output_*` pointer to that buffer.
      */
-    template<typename Index_>
-    LocalOutputBuffers(int thread, std::size_t number, Index_ start, Index_ length, GetOutput_ outfun) :
+    template<typename Number_, typename Index_>
+    LocalOutputBuffers(int thread, Number_ number, Index_ start, Index_ length, GetOutput_ outfun) :
         LocalOutputBuffers(thread, number, start, length, std::move(outfun), 0) {}
 
     /**
