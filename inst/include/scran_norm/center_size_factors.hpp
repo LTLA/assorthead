@@ -1,14 +1,16 @@
 #ifndef SCRAN_NORM_CENTER_SIZE_FACTORS_HPP
 #define SCRAN_NORM_CENTER_SIZE_FACTORS_HPP
 
-#include "tatami_stats/tatami_stats.hpp"
-
 #include <vector>
 #include <numeric>
 #include <algorithm>
 #include <type_traits>
+#include <cstddef>
+
+#include "tatami_stats/tatami_stats.hpp"
 
 #include "sanitize_size_factors.hpp"
+#include "utils.hpp"
 
 /**
  * @file center_size_factors.hpp
@@ -34,9 +36,9 @@ struct CenterSizeFactorsOptions {
      * This can be desirable to ensure consistency with independent analyses of each block - otherwise, the centering would depend on the size factors in other blocks.
      * However, any systematic differences in the size factors between blocks are lost, i.e., systematic changes in coverage between blocks will not be normalized.
      * 
-     * With the `LOWEST` strategy, we compute the mean size factor for each block and we divide all size factors by the lowest mean.
+     * With the `LOWEST` strategy, we compute the mean size factor for each block and we divide all size factors in all blocks by the lowest of the per-block means.
      * Here, our normalization strategy involves downscaling all blocks to match the coverage of the lowest-coverage block.
-     * This is useful for datasets with highly variable coverage between different blocks as it avoids egregious upscaling of low-coverage blocks.
+     * This is useful for datasets with big differences in coverage between blocks as it avoids egregious upscaling of low-coverage blocks.
      * Specifically, strong upscaling allows the log-transformation to ignore any shrinkage from the pseudo-count.
      * This is problematic as it inflates differences between cells at log-values derived from low counts, increasing noise and overstating log-fold changes. 
      * Downscaling is safer as it allows the pseudo-count to shrink the log-differences between cells towards zero at low counts,
@@ -63,28 +65,28 @@ struct CenterSizeFactorsOptions {
 /**
  * Compute the mean size factor but do not scale the size factors themselves.
  *
- * @tparam SizeFactor_ Floating-point type for the size factors.
+ * @tparam SizeFactor_ Floating-point type of the size factors.
  *
  * @param num Number of cells.
  * @param[in] size_factors Pointer to an array of length `num`, containing the size factor for each cell.
  * @param[out] diagnostics Diagnostics for invalid size factors.
- * This is only used if `CenterSizeFactorsOptions::ignore_invalid = true`, in which case it is filled with invalid diagnostics for values in `size_factors`.
- * It can also be NULL, in which case it is ignored.
+ * This is only used if `CenterSizeFactorsOptions::ignore_invalid = true`, in which case it is filled with diagnostics for invalid values in `size_factors`.
+ * It can also be `NULL`, in which case it is ignored.
  * @param options Further options.
  *
  * @return The mean size factor, to be used to divide each element of `size_factors`.
  */
 template<typename SizeFactor_>
-SizeFactor_ center_size_factors_mean(size_t num, const SizeFactor_* size_factors, SizeFactorDiagnostics* diagnostics, const CenterSizeFactorsOptions& options) {
+SizeFactor_ center_size_factors_mean(const std::size_t num, const SizeFactor_* const size_factors, SizeFactorDiagnostics* const diagnostics, const CenterSizeFactorsOptions& options) {
     static_assert(std::is_floating_point<SizeFactor_>::value);
     SizeFactor_ mean = 0;
-    size_t denom = 0;
+    decltype(I(num)) denom = 0;
 
     if (options.ignore_invalid) {
         SizeFactorDiagnostics tmpdiag;
         auto& diag = (diagnostics == NULL ? tmpdiag : *diagnostics);
-        for (size_t i = 0; i < num; ++i) {
-            auto val = size_factors[i];
+        for (decltype(I(num)) i = 0; i < num; ++i) {
+            const auto val = size_factors[i];
             if (!internal::is_invalid(val, diag)) {
                 mean += val;
                 ++denom;
@@ -103,28 +105,28 @@ SizeFactor_ center_size_factors_mean(size_t num, const SizeFactor_* size_factors
 }
 
 /**
- * When centering, we scale all size factors so that their mean is equal to 1.
+ * Centering the size factors involves scaling all of the size factors so that the mean across cells is equal to 1.
  * The aim is to ensure that the normalized expression values are on roughly the same scale as the original counts.
- * This simplifies interpretation and ensures that any added pseudo-count prior to log-transformation has a predictable shrinkage effect.
+ * This simplifies interpretation and ensures that any pseudo-count added prior to log-transformation has a predictable shrinkage effect.
  * In general, size factors should be centered before calling `normalize_counts()`.
  * 
- * @tparam SizeFactor_ Floating-point type for the size factors.
+ * @tparam SizeFactor_ Floating-point type of the size factors.
  *
  * @param num Number of cells.
  * @param[in,out] size_factors Pointer to an array of length `num`, containing the size factor for each cell.
- * On output, this contains centered size factors.
+ * On output, this contains the centered size factors.
  * @param[out] diagnostics Diagnostics for invalid size factors.
- * This is only used if `CenterSizeFactorsOptions::ignore_invalid = true`, in which case it is filled with invalid diagnostics for values in `size_factors`.
- * It can also be NULL, in which case it is ignored.
+ * This is only used if `CenterSizeFactorsOptions::ignore_invalid = true`, in which case it is filled with diagnostics for invalid values in `size_factors`.
+ * It can also be `NULL`, in which case it is ignored.
  * @param options Further options.
  *
  * @return The mean size factor.
  */
 template<typename SizeFactor_>
-SizeFactor_ center_size_factors(size_t num, SizeFactor_* size_factors, SizeFactorDiagnostics* diagnostics, const CenterSizeFactorsOptions& options) {
-    auto mean = center_size_factors_mean(num, size_factors, diagnostics, options);
+SizeFactor_ center_size_factors(const std::size_t num, SizeFactor_* const size_factors, SizeFactorDiagnostics* const diagnostics, const CenterSizeFactorsOptions& options) {
+    const auto mean = center_size_factors_mean(num, size_factors, diagnostics, options);
     if (mean) {
-        for (size_t i = 0; i < num; ++i){
+        for (decltype(I(num)) i = 0; i < num; ++i){
             size_factors[i] /= mean;
         }
     }
@@ -133,8 +135,9 @@ SizeFactor_ center_size_factors(size_t num, SizeFactor_* size_factors, SizeFacto
 
 /**
  * Compute the mean size factor for each block, but do not scale the size factors themselves.
+ * This is the blocked version of `center_size_factors_mean()`.
  *
- * @tparam SizeFactor_ Floating-point type for the size factors.
+ * @tparam SizeFactor_ Floating-point type of the size factors.
  * @tparam Block_ Integer type for the block assignments.
  *
  * @param num Number of cells.
@@ -142,40 +145,46 @@ SizeFactor_ center_size_factors(size_t num, SizeFactor_* size_factors, SizeFacto
  * @param[in] block Pointer to an array of length `num`, containing the block assignment for each cell.
  * Each assignment should be an integer in \f$[0, N)\f$ where \f$N\f$ is the total number of blocks.
  * @param[out] diagnostics Diagnostics for invalid size factors.
- * This is only used if `CenterSizeFactorsOptions::ignore_invalid = true`, in which case it is filled with invalid diagnostics for values in `size_factors`.
- * It can also be NULL, in which case it is ignored.
+ * This is only used if `CenterSizeFactorsOptions::ignore_invalid = true`, in which case it is filled with diagnostics for invalid values in `size_factors`.
+ * It can also be `NULL`, in which case it is ignored.
  * @param options Further options.
  *
  * @return Vector of length \f$N\f$ containing the mean size factor for each block,
  * to be used to scale the size factors in each block.
  */
 template<typename SizeFactor_, typename Block_>
-std::vector<SizeFactor_> center_size_factors_blocked_mean(size_t num, const SizeFactor_* size_factors, const Block_* block, SizeFactorDiagnostics* diagnostics, const CenterSizeFactorsOptions& options) {
+std::vector<SizeFactor_> center_size_factors_blocked_mean(
+    const std::size_t num,
+    const SizeFactor_* const size_factors,
+    const Block_* const block,
+    SizeFactorDiagnostics* const diagnostics,
+    const CenterSizeFactorsOptions& options)
+{
     static_assert(std::is_floating_point<SizeFactor_>::value);
-    size_t ngroups = tatami_stats::total_groups(block, num);
-    std::vector<SizeFactor_> group_mean(ngroups);
-    std::vector<size_t> group_num(ngroups);
+    const auto ngroups = tatami_stats::total_groups(block, num);
+    auto group_mean = sanisizer::create<std::vector<SizeFactor_> >(ngroups);
+    auto group_num = sanisizer::create<std::vector<decltype(I(num))> >(ngroups);
 
     if (options.ignore_invalid) {
         SizeFactorDiagnostics tmpdiag;
         auto& diag = (diagnostics == NULL ? tmpdiag : *diagnostics);
-        for (size_t i = 0; i < num; ++i) {
-            auto val = size_factors[i];
+        for (decltype(I(num)) i = 0; i < num; ++i) {
+            const auto val = size_factors[i];
             if (!internal::is_invalid(val, diag)) {
-                auto b = block[i];
+                const auto b = block[i];
                 group_mean[b] += val;
                 ++(group_num[b]);
             }
         }
     } else {
-        for (size_t i = 0; i < num; ++i) {
-            auto b = block[i];
+        for (decltype(I(num)) i = 0; i < num; ++i) {
+            const auto b = block[i];
             group_mean[b] += size_factors[i];
             ++(group_num[b]);
         }
     }
 
-    for (size_t g = 0; g < ngroups; ++g) {
+    for (decltype(I(ngroups)) g = 0; g < ngroups; ++g) {
         if (group_num[g]) {
             group_mean[g] /= group_num[g];
         }
@@ -185,9 +194,10 @@ std::vector<SizeFactor_> center_size_factors_blocked_mean(size_t num, const Size
 }
 
 /**
- * Center size factors within each block, using the strategy specified in `CenterSizeFactorsOptions::block_mode`.
+ * Center size factors within each block to obtain interpretable values after normalization, as discussed in `center_size_factors()`.
+ * The exact strategy for handling blocks is controlled by `CenterSizeFactorsOptions::block_mode`.
  *
- * @tparam SizeFactor_ Floating-point type for the size factors.
+ * @tparam SizeFactor_ Floating-point type of the size factors.
  * @tparam Block_ Integer type for the block assignments.
  *
  * @param num Number of cells.
@@ -203,11 +213,17 @@ std::vector<SizeFactor_> center_size_factors_blocked_mean(size_t num, const Size
  * @return Vector of length \f$N\f$ containing the mean size factor for each block.
  */
 template<typename SizeFactor_, typename Block_>
-std::vector<SizeFactor_> center_size_factors_blocked(size_t num, SizeFactor_* size_factors, const Block_* block, SizeFactorDiagnostics* diagnostics, const CenterSizeFactorsOptions& options) {
-    auto group_mean = center_size_factors_blocked_mean(num, size_factors, block, diagnostics, options);
+std::vector<SizeFactor_> center_size_factors_blocked(
+    const std::size_t num,
+    SizeFactor_* const size_factors,
+    const Block_* const block,
+    SizeFactorDiagnostics* const diagnostics,
+    const CenterSizeFactorsOptions& options)
+{
+    const auto group_mean = center_size_factors_blocked_mean(num, size_factors, block, diagnostics, options);
 
     if (options.block_mode == CenterBlockMode::PER_BLOCK) {
-        for (size_t i = 0; i < num; ++i) {
+        for (decltype(I(num)) i = 0; i < num; ++i) {
             const auto& div = group_mean[block[i]];
             if (div) {
                 size_factors[i] /= div;
@@ -217,7 +233,7 @@ std::vector<SizeFactor_> center_size_factors_blocked(size_t num, SizeFactor_* si
     } else if (options.block_mode == CenterBlockMode::LOWEST) {
         SizeFactor_ min = 0;
         bool found = false;
-        for (auto m : group_mean) {
+        for (const auto m : group_mean) {
             // Ignore groups with means of zeros, either because they're full
             // of zeros themselves or they have no cells associated with them.
             if (m) {
@@ -229,7 +245,7 @@ std::vector<SizeFactor_> center_size_factors_blocked(size_t num, SizeFactor_* si
         }
 
         if (min > 0) {
-            for (size_t i = 0; i < num; ++i) {
+            for (decltype(I(num)) i = 0; i < num; ++i) {
                 size_factors[i] /= min;
             }
         }

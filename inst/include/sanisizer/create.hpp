@@ -4,7 +4,7 @@
 #include <utility>
 
 #include "utils.hpp"
-#include "cast.hpp"
+#include "attest.hpp"
 
 /**
  * @file create.hpp
@@ -18,16 +18,19 @@ namespace sanisizer {
  * This protects against overflow when using this integer in the container's constructor or `resize()` method.
  *
  * @tparam Container_ Container class with a `size()` method and a constructor that accepts the size as the first argument.
- * @tparam Input_ Integer type of the input size.
+ * @tparam Value_ Integer type of the input size.
  *
  * @param x Non-negative value representing the desired container size.
  *
  * @return `x` as the container's size's type.
  * If overflow would occur, an `OverflowError` is raised.
  */
-template<class Container_, typename Input_>
-auto as_size_type(Input_ x) {
-    return cast<decltype(I(std::declval<Container_>().size()))>(x);
+template<class Container_, typename Value_>
+constexpr auto as_size_type(Value_ x) {
+    check_negative(x);
+    typedef I<decltype(std::declval<Container_>().size())> Size;
+    check_overflow<Size>(x);
+    return static_cast<Size>(get_value(x));
 }
 
 /**
@@ -35,7 +38,7 @@ auto as_size_type(Input_ x) {
  * This protects against overflow when casting the integer size to the container's size type.
  *
  * @tparam Container_ Container class with a `size()` method and a constructor that accepts the size as the first argument.
- * @tparam Input_ Integer type of the input size.
+ * @tparam Value_ Integer type of the input size.
  * @tparam Args_ Further arguments to pass to the container's constructor.
  *
  * @param x Non-negative value representing the desired container size.
@@ -44,8 +47,8 @@ auto as_size_type(Input_ x) {
  * @return An instance of the container, constructed to be of size `x`.
  * If overflow would occur, an `OverflowError` is raised.
  */
-template<class Container_, typename Input_, typename ... Args_>
-Container_ create(Input_ x, Args_&&... args) {
+template<class Container_, typename Value_, typename ... Args_>
+Container_ create(Value_ x, Args_&&... args) {
     return Container_(as_size_type<Container_>(x), std::forward<Args_>(args)...);
 }
 
@@ -54,7 +57,7 @@ Container_ create(Input_ x, Args_&&... args) {
  * This protects against overflow when casting the integer size to the container's size type.
  *
  * @tparam Container_ Container class with a `size()` method and a `resize()` method that accepts the size as the first argument.
- * @tparam Input_ Integer type of the input size.
+ * @tparam Value_ Integer type of the input size.
  * @tparam Args_ Further arguments to pass to the container's `resize()` method.
  *
  * @param container An existing instance of the container.
@@ -63,8 +66,8 @@ Container_ create(Input_ x, Args_&&... args) {
  * If this would overflow the container's size type, an `OverflowError` is raised.
  * @param args Additional arguments to pass to `resize()` after the size.
  */
-template<class Container_, typename Input_, typename ... Args_>
-void resize(Container_& container, Input_ x, Args_&&... args) {
+template<class Container_, typename Value_, typename ... Args_>
+void resize(Container_& container, Value_ x, Args_&&... args) {
     container.resize(as_size_type<Container_>(x), std::forward<Args_>(args)...);
 }
 

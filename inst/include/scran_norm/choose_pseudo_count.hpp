@@ -3,6 +3,9 @@
 
 #include <algorithm>
 #include <vector>
+#include <cstddef>
+
+#include "utils.hpp"
 
 /**
  * @file choose_pseudo_count.hpp
@@ -17,13 +20,14 @@ namespace scran_norm {
 struct ChoosePseudoCountOptions {
     /**
      * Quantile to use for finding the smallest/largest size factors.
-     * Setting this to zero will use the observed minimum and maximum, though this is usually too extreme in practice.
-     * The default is to take the 5th and 95th percentile, yielding a range that is still representative of most cells.
+     * Setting this to zero will use the observed minimum and maximum, though in practice, this is usually too sensitive to outliers.
+     * The default is to take the 5th and 95th percentile to obtain a range that captures most of the distribution.
      */
     double quantile = 0.05;
 
     /**
-     * Acceptable upper bound on the log-transformation bias.
+     * Acceptable upper bound on the log2-transformation bias.
+     * This is the magnitude of any spurious log2-fold change between the cells with the smallest and largest size factors.
      */
     double max_bias = 0.1;
 
@@ -40,9 +44,9 @@ struct ChoosePseudoCountOptions {
 namespace internal {
 
 template<typename Float_>
-Float_ find_quantile(Float_ quantile, size_t n, Float_* ptr) {
+Float_ find_quantile(Float_ quantile, std::size_t n, Float_* ptr) {
     double raw = static_cast<double>(n - 1) * quantile;
-    size_t index = std::ceil(raw);
+    std::size_t index = std::ceil(raw);
     std::nth_element(ptr, ptr + index, ptr + n);
     double upper = *(ptr + index);
     std::nth_element(ptr, ptr + index - 1, ptr + index);
@@ -57,16 +61,20 @@ Float_ find_quantile(Float_ quantile, size_t n, Float_* ptr) {
 
 /**
  * Choose a pseudo-count for log-transformation (see `NormalizeCountsOptions::pseudo_count`) that aims to control the transformation-induced bias.
- * Specifically, the log-transform can introduce spurious differences in the expected log-normalized expression between cells with very different size factors (Lun, 2018).
- * This bias can be mitigated by increasing the pseudo-count, which effectively shrinks all log-expression values towards the zero-expression baseline.
- * The increased shrinkage is strongest at low counts where the transformation bias is most pronounced, while large counts are mostly unaffected.
  *
- * In practice, the log-transformation bias is modest in datasets where there are stronger sources of variation.
- * When observed, it manifests as a library size-dependent trend in the log-normalized expression values.
- * This is difficult to regress out without also removing biology that is associated with, e.g., total RNA content;
- * rather, a simpler solution is to increase the pseudo-count to suppress the bias.
+ * Log-transformation is commonly applied to sequencing count data prior to further analyses (see `NormalizeCountsOptions::log`).
+ * However, this can introduce spurious differences in the expected log-normalized expression between cells with very different size factors (Lun, 2018).
+ * This bias is typically modest in datasets where there are stronger sources of variation,
+ * but when observed, it manifests as a library size-dependent trend in the log-normalized expression values.
+ * It is difficult to regress out without also removing biology that is associated with, e.g., total RNA content.
  *
- * No centering is performed by this function, so the size factors should be passed through `center_size_factors()` before calling functions here.
+ * A simpler solution is to increase the pseudo-count to suppress the bias.
+ * This shrinks all log-expression values towards the zero-expression baseline, thus also shrinking log-differences between cells towards zero. 
+ * The increased shrinkage is strongest at low counts where the data is least informative and the transformation bias is most pronounced.
+ * At large counts, the shrinkage has less effect as the log-differences are driven by the data.
+ * Our aim is to pick a pseudo-count that is large enough to mitigate the bias while being small enough to avoid shrinking the biological differences.
+ * 
+ * No centering is performed by this function, so the size factors should be passed through `center_size_factors()` before calling this function.
  * Invalid size factors (e.g., zero, negative, non-finite) are automatically ignored, so prior sanitization should not be performed -
  * this ensures that we do not include the replacement values in the various quantile calculations.
  *
@@ -74,6 +82,8 @@ Float_ find_quantile(Float_ quantile, size_t n, Float_* ptr) {
  * Lun ATL (2018).
  * Overcoming systematic errors caused by log-transformation of normalized single-cell RNA sequencing data.
  * _biorXiv_ doi:10.1101/404962
+ *
+ * @tparam Float_ Floating-point type of the size factors.
  *
  * @param num Number of size factors.
  * @param[in] size_factors Pointer to an array of size factors of length `num`.
@@ -84,15 +94,15 @@ Float_ find_quantile(Float_ quantile, size_t n, Float_* ptr) {
  * @return The suggested pseudo-count to control the log-transformation-induced bias below the specified threshold.
  */
 template<typename Float_>
-Float_ choose_pseudo_count_raw(size_t num, Float_* size_factors, const ChoosePseudoCountOptions& options) {
+Float_ choose_pseudo_count_raw(std::size_t num, Float_* const size_factors, const ChoosePseudoCountOptions& options) {
     if (num <= 1) {
         return options.min_value;
     }
 
     // Avoid problems with zeros.
-    size_t counter = 0;
-    for (size_t i = 0; i < num; ++i) {
-        auto val = size_factors[i];
+    decltype(I(num)) counter = 0;
+    for (decltype(I(num)) i = 0; i < num; ++i) {
+        const auto val = size_factors[i];
         if (std::isfinite(val) && val > 0) {
             if (i != counter) {
                 size_factors[counter] = val;
@@ -106,7 +116,7 @@ Float_ choose_pseudo_count_raw(size_t num, Float_* size_factors, const ChoosePse
         return options.min_value;
     }
 
-    double lower_sf, upper_sf;
+    Float_ lower_sf, upper_sf;
     if (options.quantile == 0) {
         lower_sf = *std::min_element(size_factors, size_factors + num);
         upper_sf = *std::max_element(size_factors, size_factors + num);
@@ -116,13 +126,15 @@ Float_ choose_pseudo_count_raw(size_t num, Float_* size_factors, const ChoosePse
     }
 
     // Very confusing formulation in Equation 3, but whatever.
-    Float_ pseudo_count = (1.0 / lower_sf - 1.0 / upper_sf) / (8 * options.max_bias);
+    const Float_ pseudo_count = (1.0 / lower_sf - 1.0 / upper_sf) / (8 * options.max_bias);
 
     return std::max(options.min_value, pseudo_count);
 }
 
 /**
  * This function just wraps `choose_pseudo_count_raw()` with the automatic creation of a writeable buffer for the size factors.
+ *
+ * @tparam Float_ Floating-point type of the size factors.
  *
  * @param num Number of size factors.
  * @param[in] size_factors Pointer to an array of size factors of length `n`.
@@ -132,7 +144,7 @@ Float_ choose_pseudo_count_raw(size_t num, Float_* size_factors, const ChoosePse
  * @return The suggested pseudo-count to control the log-transformation-induced bias below the specified threshold.
  */
 template<typename Float_>
-Float_ choose_pseudo_count(size_t num, const Float_* size_factors, const ChoosePseudoCountOptions& options) {
+Float_ choose_pseudo_count(const std::size_t num, const Float_* const size_factors, const ChoosePseudoCountOptions& options) {
     std::vector<Float_> buffer(size_factors, size_factors + num);
     return choose_pseudo_count_raw(num, buffer.data(), options);
 }

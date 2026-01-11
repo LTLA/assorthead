@@ -2,8 +2,9 @@
 #define SANISIZER_CAP_HPP
 
 #include <limits>
+#include <type_traits>
 
-#include "comparisons.hpp"
+#include "attest.hpp"
 
 /**
  * @file cap.hpp
@@ -13,23 +14,32 @@
 namespace sanisizer {
 
 /**
- * Cap an integer at the largest value of a size type.
+ * Cap a non-negative integer at the largest value of a destination type.
  * This is primarily intended for setting appropriate default values of function arguments and class variables.
  *
- * @tparam Size_ Integer type to return, typically representing some concept of size for an array/container.
- * @tparam Input_ Integer type of the input size.
+ * @tparam Dest_ Integer type of the destination.
+ * @tparam Value_ Integer type of the input value.
+ * This may also be an `Attestation`.
  *
  * @param x Non-negative value to be capped.
  *
- * @return `x` if it can be represented in `Size_`, otherwise the maximum value of `Size_`.
+ * @return `x` if it can be represented in `Dest_`, otherwise the maximum value of `Dest_`.
+ * An error is thrown if `x` is negative.
  */
-template<typename Size_, typename Input_>
-constexpr Size_ cap(Input_ x) {
-    constexpr Size_ maxed = std::numeric_limits<Size_>::max();
-    if (is_greater_than(x, maxed)) {
-        return maxed;
+template<typename Dest_, typename Value_>
+constexpr Dest_ cap(Value_ x) {
+    static_assert(std::is_integral<Dest_>::value);
+    constexpr auto maxed = std::numeric_limits<Dest_>::max();
+    constexpr auto umaxed = as_unsigned(maxed);
+
+    check_negative(x);
+    const auto val = get_value(x);
+    if constexpr(umaxed >= as_unsigned(get_max<Value_>())) {
+        return val;
+    } else if (umaxed >= as_unsigned(val)) {
+        return val;
     } else {
-        return x;
+        return maxed;
     }
 }
 

@@ -1,6 +1,8 @@
 #ifndef SANISIZER_ND_OFFSET_HPP
 #define SANISIZER_ND_OFFSET_HPP
 
+#include <type_traits>
+
 /**
  * @file nd_offset.hpp
  * @brief Offsets for accessing N-dimensional arrays.
@@ -12,12 +14,14 @@ namespace sanisizer {
  * @cond
  */
 template<typename Size_>
-Size_ nd_offset_internal(Size_ extent, Size_ pos) {
+constexpr Size_ nd_offset_internal(Size_ extent, Size_ pos) {
+    static_assert(std::is_integral<Size_>::value);
     return extent * pos;
 }
 
 template<typename Size_, typename... MoreArgs_>
-Size_ nd_offset_internal(Size_ extent, Size_ pos, MoreArgs_... more_args) {
+constexpr Size_ nd_offset_internal(Size_ extent, Size_ pos, MoreArgs_... more_args) {
+    static_assert(std::is_integral<Size_>::value);
     return (pos + nd_offset_internal<Size_>(more_args...)) * extent;
 }
 /**
@@ -48,7 +52,12 @@ Size_ nd_offset_internal(Size_ extent, Size_ pos, MoreArgs_... more_args) {
  * @return Offset into the array for element `(x1, x2, ...)`.
  */
 template<typename Size_, typename FirstIndex_, typename FirstExtent_, typename SecondIndex_, typename... Remaining_>
-Size_ nd_offset(FirstIndex_ x1, FirstExtent_ extent1, SecondIndex_ x2, Remaining_... remaining) {
+constexpr Size_ nd_offset(FirstIndex_ x1, FirstExtent_ extent1, SecondIndex_ x2, Remaining_... remaining) {
+    static_assert(std::is_integral<Size_>::value);
+    static_assert(std::is_integral<FirstIndex_>::value);
+    static_assert(std::is_integral<FirstExtent_>::value);
+    static_assert(std::is_integral<SecondIndex_>::value);
+
     // Note that we don't use Size_ in the function signature, even though everything is cast to Size_.
     // This avoids inadvertent deduction of Size_ from the input types.
     // The user is always forced to explicitly specify Size_ to avoid any risk of accidental overflow.

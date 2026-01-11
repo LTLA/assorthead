@@ -51,7 +51,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -61,11 +61,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -74,11 +74,11 @@ public:
         return true;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         return 0;
     }
 };
@@ -124,7 +124,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -147,11 +147,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -160,19 +160,136 @@ public:
         return true;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         return 0;
     }
 };
 
 /**
- * @brief Helper for delayed calculation of the logarithm of each matrix entry.
+ * @brief Helper for delayed calculation of a logarithm of each matrix entry.
  *
- * This class takes the logarithm of each element of a `Matrix`.
+ * This class takes the logarithm of each element of a `Matrix` with a custom base.
+ * It should be used as the `Operation_` in the `DelayedUnaryIsometricOperation` class.
+ * 
+ * @tparam base_ Base of the logarithm.
+ * This can either be 2, 10 or -1 (for the natural log).
+ * @tparam OutputValue_ Type of the result of the operation.
+ * @tparam InputValue_ Type of the value of the input matrix.
+ * @tparam Index_ Integer type for the row/column indices.
+ */
+template<int base_, typename OutputValue_, typename InputValue_, typename Index_>
+class DelayedUnaryIsometricFixedLogHelper final : public DelayedUnaryIsometricOperationHelper<OutputValue_, InputValue_, Index_> {
+public:
+    std::optional<Index_> nrow() const {
+        return std::nullopt;
+    }
+
+    std::optional<Index_> ncol() const {
+        return std::nullopt;
+    }
+
+public:
+    bool zero_depends_on_row() const {
+        return false;
+    }
+
+    bool zero_depends_on_column() const {
+        return false;
+    }
+
+    bool non_zero_depends_on_row() const {
+        return false;
+    }
+
+    bool non_zero_depends_on_column() const {
+        return false;
+    }
+
+private:
+    static auto logify(InputValue_ x) {
+        if constexpr(base_ == 2) {
+            return std::log2(x);
+        } else if constexpr(base_ == 10) {
+            return std::log10(x);
+        } else {
+            return std::log(x);
+        }
+    }
+
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
+        if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
+            input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
+        }
+        for (Index_ i = 0; i < length; ++i) {
+            output[i] = logify(input[i]);
+        }
+    }
+
+public:
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
+        core(input, length, output);
+    }
+
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
+        core(input, indices.size(), output);
+    }
+
+public:
+    bool is_sparse() const {
+        return false;
+    }
+
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
+        core(input, number, output);
+    }
+
+    OutputValue_ fill(const bool, const Index_) const {
+        // Use the implementation-defined value.
+        return logify(0);
+    }
+};
+/**
+ * @endcond
+ */
+
+/**
+ * Convenient alias for a delayed natural logarithm.
+ * 
+ * @tparam OutputValue_ Type of the result of the operation.
+ * @tparam InputValue_ Type of the value of the input matrix.
+ * @tparam Index_ Integer type for the row/column indices.
+ */
+template<typename OutputValue_, typename InputValue_, typename Index_>
+using DelayedUnaryIsometricLogHelper = DelayedUnaryIsometricFixedLogHelper<-1, OutputValue_, InputValue_, Index_>;
+
+/**
+ * Convenient alias for a delayed logarithm with base 2.
+ * 
+ * @tparam OutputValue_ Type of the result of the operation.
+ * @tparam InputValue_ Type of the value of the input matrix.
+ * @tparam Index_ Integer type for the row/column indices.
+ */
+template<typename OutputValue_, typename InputValue_, typename Index_>
+using DelayedUnaryIsometricLog2Helper = DelayedUnaryIsometricFixedLogHelper<2, OutputValue_, InputValue_, Index_>;
+
+/**
+ * Convenient alias for a delayed logarithm with base 10.
+ * 
+ * @tparam OutputValue_ Type of the result of the operation.
+ * @tparam InputValue_ Type of the value of the input matrix.
+ * @tparam Index_ Integer type for the row/column indices.
+ */
+template<typename OutputValue_, typename InputValue_, typename Index_>
+using DelayedUnaryIsometricLog10Helper = DelayedUnaryIsometricFixedLogHelper<10, OutputValue_, InputValue_, Index_>;
+
+/**
+ * @brief Helper for delayed calculation of a custom logarithm of each matrix entry.
+ *
+ * This class takes the logarithm of each element of a `Matrix` with a custom base.
  * It should be used as the `Operation_` in the `DelayedUnaryIsometricOperation` class.
  * 
  * @tparam OutputValue_ Type of the result of the operation.
@@ -181,17 +298,12 @@ public:
  * @tparam Base_ Type of the base of the logarithm.
  */
 template<typename OutputValue_, typename InputValue_, typename Index_, typename Base_>
-class DelayedUnaryIsometricLogHelper final : public DelayedUnaryIsometricOperationHelper<OutputValue_, InputValue_, Index_> {
+class DelayedUnaryIsometricCustomLogHelper final : public DelayedUnaryIsometricOperationHelper<OutputValue_, InputValue_, Index_> {
 public:
-    /**
-     * Defaults constructor, to compute the natural log.
-     */
-    DelayedUnaryIsometricLogHelper() : my_base(1) {}
-
     /**
      * @param base Base of the logarithm.
      */
-    DelayedUnaryIsometricLogHelper(Base_ base) : my_base(std::log(base)) {}
+    DelayedUnaryIsometricCustomLogHelper(Base_ base) : my_base(std::log(base)) {}
 
 public:
     std::optional<Index_> nrow() const {
@@ -222,7 +334,7 @@ public:
 private:
     Base_ my_base;
 
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -232,11 +344,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -245,13 +357,13 @@ public:
         return false;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         // Use the implementation-defined value.
-        return std::log(static_cast<OutputValue_>(0));
+        return std::log(static_cast<InputValue_>(0)) / my_base;
     }
 };
 
@@ -294,7 +406,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -304,11 +416,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -317,11 +429,11 @@ public:
         return true;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         return 0;
     }
 };
@@ -365,7 +477,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -375,11 +487,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -388,11 +500,11 @@ public:
         return true;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         return 0;
     }
 };
@@ -436,7 +548,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -446,11 +558,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -459,11 +571,11 @@ public:
         return true;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         return 0;
     }
 };
@@ -507,7 +619,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -517,11 +629,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -530,11 +642,11 @@ public:
         return true;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         return 0;
     }
 };
@@ -548,21 +660,9 @@ public:
  * @tparam OutputValue_ Type of the result of the operation.
  * @tparam InputValue_ Type of the value of the input matrix.
  * @tparam Index_ Integer type for the row/column indices.
- * @tparam Base_ Numeric type for the log base.
  */
-template<typename OutputValue_, typename InputValue_, typename Index_, typename Base_>
+template<typename OutputValue_, typename InputValue_, typename Index_>
 class DelayedUnaryIsometricLog1pHelper final : public DelayedUnaryIsometricOperationHelper<OutputValue_, InputValue_, Index_> {
-public:
-    /**
-     * Default constructor, computes the natural log.
-     */
-    DelayedUnaryIsometricLog1pHelper() : my_base(1) {}
-
-    /**
-     * @param base Base of the logarithm.
-     */
-    DelayedUnaryIsometricLog1pHelper(Base_ base) : my_base(std::log(base)) {}
-
 public:
     std::optional<Index_> nrow() const {
         return std::nullopt;
@@ -590,23 +690,21 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
         for (Index_ i = 0; i < length; ++i) {
-            output[i] = std::log1p(input[i]) / my_base;
+            output[i] = std::log1p(input[i]); 
         }
     }
 
-    Base_ my_base;
-
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -615,11 +713,11 @@ public:
         return true;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         return 0;
     }
 };
@@ -663,7 +761,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -673,11 +771,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -686,11 +784,11 @@ public:
         return true;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         return 0;
     }
 };
@@ -734,7 +832,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -744,11 +842,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -757,11 +855,11 @@ public:
         return false;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         return 1;
     }
 };
@@ -805,7 +903,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -815,11 +913,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -828,11 +926,11 @@ public:
         return true;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         return 0;
     }
 };
@@ -876,7 +974,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -886,11 +984,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -899,11 +997,11 @@ public:
         return false;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         // Use the implementation-defined special value.
         return std::acos(0);
     }
@@ -948,7 +1046,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -958,11 +1056,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -971,11 +1069,11 @@ public:
         return false;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         // Use the implementation-defined special value.
         return std::acosh(static_cast<InputValue_>(0));
     }
@@ -1020,7 +1118,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -1030,11 +1128,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -1043,11 +1141,11 @@ public:
         return true;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         return 0;
     }
 };
@@ -1091,7 +1189,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -1101,11 +1199,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -1114,11 +1212,11 @@ public:
         return true;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         return 0;
     }
 };
@@ -1162,7 +1260,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -1172,11 +1270,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -1185,11 +1283,11 @@ public:
         return true;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         return 0;
     }
 };
@@ -1233,7 +1331,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -1243,11 +1341,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -1256,11 +1354,11 @@ public:
         return true;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         return 0;
     }
 };
@@ -1304,7 +1402,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -1314,11 +1412,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -1327,11 +1425,11 @@ public:
         return false;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         return 1;
     }
 };
@@ -1375,7 +1473,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -1385,11 +1483,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -1398,11 +1496,11 @@ public:
         return false;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         return 1;
     }
 };
@@ -1446,7 +1544,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -1456,11 +1554,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -1469,11 +1567,11 @@ public:
         return true;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         return 0;
     }
 };
@@ -1517,7 +1615,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -1527,11 +1625,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -1540,11 +1638,11 @@ public:
         return true;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         return 0;
     }
 };
@@ -1588,7 +1686,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -1598,11 +1696,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -1611,11 +1709,11 @@ public:
         return true;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         return 0;
     }
 };
@@ -1659,7 +1757,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -1669,11 +1767,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -1682,11 +1780,11 @@ public:
         return true;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         return 0;
     }
 };
@@ -1730,7 +1828,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -1740,11 +1838,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -1753,11 +1851,11 @@ public:
         return false;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         // Use the implementation-defined special value.
         return std::tgamma(static_cast<InputValue_>(0));
     }
@@ -1802,7 +1900,7 @@ public:
     }
 
 private:
-    void core(const InputValue_* input, Index_ length, OutputValue_* output) const {
+    void core(const InputValue_* input, const Index_ length, OutputValue_* const output) const {
         if constexpr(std::is_same<InputValue_, OutputValue_>::value) {
             input = output; // basically an assertion to the compiler to allow it to skip aliasing protection.
         }
@@ -1812,11 +1910,11 @@ private:
     }
 
 public:
-    void dense(bool, Index_, Index_, Index_ length, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const Index_, const Index_ length, const InputValue_* const input, OutputValue_* const output) const {
         core(input, length, output);
     }
 
-    void dense(bool, Index_, const std::vector<Index_>& indices, const InputValue_* input, OutputValue_* output) const {
+    void dense(const bool, const Index_, const std::vector<Index_>& indices, const InputValue_* const input, OutputValue_* const output) const {
         core(input, indices.size(), output);
     }
 
@@ -1825,11 +1923,11 @@ public:
         return false;
     }
 
-    void sparse(bool, Index_, Index_ number, const InputValue_* input, const Index_*, OutputValue_* output) const {
+    void sparse(const bool, const Index_, const Index_ number, const InputValue_* const input, const Index_* const, OutputValue_* const output) const {
         core(input, number, output);
     }
 
-    OutputValue_ fill(bool, Index_) const {
+    OutputValue_ fill(const bool, const Index_) const {
         // Use the implementation-defined special value.
         return std::lgamma(static_cast<InputValue_>(0));
     }
@@ -1846,7 +1944,7 @@ template<typename OutputValue_ = double, typename InputValue_ = double, typename
 using DelayedUnaryIsometricSign = DelayedUnaryIsometricSignHelper<OutputValue_, InputValue_, Index_>;
 
 template<typename OutputValue_ = double, typename InputValue_ = double, typename Index_ = int, typename Base_ = InputValue_> 
-using DelayedUnaryIsometricLog = DelayedUnaryIsometricLogHelper<OutputValue_, InputValue_, Index_, Base_>;
+using DelayedUnaryIsometricLog = DelayedUnaryIsometricCustomLogHelper<OutputValue_, InputValue_, Index_, Base_>;
 
 template<typename OutputValue_ = double, typename InputValue_ = double, typename Index_ = int> 
 using DelayedUnaryIsometricSqrt = DelayedUnaryIsometricSqrtHelper<OutputValue_, InputValue_, Index_>;
@@ -1861,7 +1959,7 @@ template<typename OutputValue_ = double, typename InputValue_ = double, typename
 using DelayedUnaryIsometricTrunc = DelayedUnaryIsometricTruncHelper<OutputValue_, InputValue_, Index_>;
 
 template<typename OutputValue_ = double, typename InputValue_ = double, typename Index_ = int, typename Base_ = InputValue_> 
-using DelayedUnaryIsometricLog1p = DelayedUnaryIsometricLog1pHelper<OutputValue_, InputValue_, Index_, Base_>;
+using DelayedUnaryIsometricLog1p = DelayedUnaryIsometricLog1pHelper<OutputValue_, InputValue_, Index_>;
 
 template<typename OutputValue_ = double, typename InputValue_ = double, typename Index_ = int> 
 using DelayedUnaryIsometricRound = DelayedUnaryIsometricRoundHelper<OutputValue_, InputValue_, Index_>;

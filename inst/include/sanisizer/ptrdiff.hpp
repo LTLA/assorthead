@@ -3,8 +3,9 @@
 
 #include <limits>
 #include <utility>
+#include <type_traits>
 
-#include "comparisons.hpp"
+#include "attest.hpp"
 #include "utils.hpp"
 
 /**
@@ -16,22 +17,22 @@ namespace sanisizer {
 
 /**
  * Check if differences between iterators can be safely represented in the iterator's difference type.
- * If `max_diff` is would overflow the difference type, an OverflowError is raised.
  *
  * @tparam Iterator_ Random access iterator that supports subtraction. 
  * @tparam MaxDiff_ Integer type for maximum difference between iterators.
  *
  * @param max_diff Maximum difference between iterators, typically derived from external knowledge (e.g., the array/container size).
+ * This should be non-negative.
+ *
+ * @return On success, `true` is returned.
+ * If `max_diff` is negative or would overflow the difference type, an error is raised.
  */
 template<typename Iterator_, typename MaxDiff_>
-void can_ptrdiff(MaxDiff_ max_diff) {
-    typedef decltype(I(std::declval<Iterator_>() - std::declval<Iterator_>())) Diff;
-    constexpr auto theoretical_max_diff = std::numeric_limits<Diff>::max();
-    if constexpr(!is_greater_than_or_equal(theoretical_max_diff, std::numeric_limits<MaxDiff_>::max())) {
-        if (!is_greater_than_or_equal(theoretical_max_diff, max_diff)) {
-            throw OverflowError("potential overflow detected in sanisizer::can_ptrdiff");
-        }
-    }
+constexpr bool can_ptrdiff(MaxDiff_ max_diff) {
+    check_negative(max_diff);
+    typedef I<decltype(std::declval<Iterator_>() - std::declval<Iterator_>())> Diff;
+    check_overflow<Diff>(max_diff);
+    return true;
 }
 
 // It is tempting to write a ptrdiff() function that checks each subtraction for overflow given 'start' and 'end' iterators.
