@@ -43,7 +43,10 @@ public:
      * @param i Index of the observation.
      * @return Pointer to an array of length equal to `Matrix::num_dimensions()`, containing the coordinates for observation `i`.
      *
-     * This will only be called within a single thread and may modify internal data members of a `RandomAccessExtractor` subclass. 
+     * The pointer returned by this method should not be used after the next call to `get_observation()` for the same `RandomAccessExtractor` instance.
+     * Similarly, it should not be used after the instance is destroyed.
+     *
+     * This method will only be called within a single thread and may modify internal data members of its `RandomAccessExtractor` instance.
      */
     virtual const Data_* get_observation(Index_ i) = 0;
 };
@@ -79,7 +82,10 @@ public:
      * The first call to this method should return the coordinates of the `start` observation from `Matrix::new_extractor()`.
      * The next call should return `start + 1`, etc. until a maximum of `length` calls have been performed.
      *
-     * This method will only be called within a single thread and may modify internal data members of a `ConsecutiveAccessExtractor` subclass. 
+     * The pointer returned by this method should not be used after the next call to `get_observation()` for the same `ConsecutiveAccessExtractor` instance.
+     * Similarly, it should not be used after the instance is destroyed.
+     *
+     * This method will only be called within a single thread and may modify internal data members of its `ConsecutiveAccessExtractor` instance.
      */
     virtual const Data_* get_observation() = 0;
 };
@@ -115,7 +121,10 @@ public:
      * The first call to this method should return the coordinates of the `sequence[0]` observation from `Matrix::new_extractor()`.
      * The next call should return `sequence[1]`, etc. until a maximum of `length` calls have been performed.
      *
-     * This method will only be called within a single thread and may modify internal data members of a `ConsecutiveAccessExtractor` subclass. 
+     * The pointer returned by this method should not be used after the next call to `get_observation()` for the same `IndexedAccessExtractor` instance.
+     * Similarly, it should not be used after the instance is destroyed.
+     *
+     * This method will only be called within a single thread and may modify internal data members of its `IndexedAccessExtractor` instance.
      */
     virtual const Data_* get_observation() = 0;
 };
@@ -171,11 +180,49 @@ public:
 
     /**
      * @param[in] sequence Pointer to an array of sorted and unique indices of observations, to be accessed in the provided order.
-     * It is assumed that the vector will not be deallocated before the destruction of the returned `IndexedAccessWorkspace`.
+     * It is assumed that the vector will not be deallocated before the destruction of the returned `IndexedAccessExtractor`.
      * @param length Number of observations in `sequence`.
      * @return A new indexed-access extractor.
      */
     virtual std::unique_ptr<IndexedAccessExtractor<Index_, Data_> > new_extractor(const Index_* sequence, std::size_t length) const = 0;
+
+public:
+    /**
+     * @return A new random-access extractor.
+     *
+     * Subclasses may override this method to return a pointer to a specific `RandomAccessExtractor` subclass.
+     * This is used for devirtualization in other **kmeans** functions. 
+     * If no override is provided, `new_extractor()` is called instead.
+     */
+    auto new_known_extractor() const {
+        return new_extractor();
+    }
+
+    /**
+     * @param start Start of the contiguous block, see the equivalent `new_extractor()` overload.
+     * @param length Length of the contiguous block, see the equivalent `new_extractor()` overload.
+     * @return A new consecutive-access extractor.
+     *
+     * Subclasses may override this method to return a pointer to a specific `ConsecutiveAccessExtractor` subclass.
+     * This is used for devirtualization in other **kmeans** functions. 
+     * If no override is provided, the relevant `new_extractor()` overload is called instead.
+     */
+    auto new_known_extractor(Index_ start, Index_ length) const {
+        return new_extractor(start, length);
+    }
+
+    /**
+     * @param sequence Pointer to a sorted and unique array of observations, see the equivalent `new_extractor()` overload.
+     * @param length Length of the array, see the equivalent `new_extractor()` overload.
+     * @return A new indexed-access extractor.
+     *
+     * Subclasses may override this method to return a pointer to a specific `IndexedAccessExtractor` subclass.
+     * This is used for devirtualization in other **kmeans** functions. 
+     * If no override is provided, the relevant `new_extractor()` overload is called instead.
+     */
+    auto new_known_extractor(const Index_* sequence, std::size_t length) const {
+        return new_extractor(sequence, length);
+    }
 };
 
 /**

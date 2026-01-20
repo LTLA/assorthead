@@ -33,32 +33,19 @@ struct AnnoyOptions {
     int num_trees = 50;
 
     /**
-     * Factor that is multiplied by the number of neighbors `k` to determine the number of nodes to search in `find_nearest_neighbors()`.
+     * Factor that is multiplied by the number of neighbors `k` to determine the number of nodes to search in `AnnoySearcher::search()`.
      * Larger values improve accuracy at the cost of runtime, see [here](https://github.com/spotify/annoy#tradeoffs) for details.
-     * If set to -1, it defaults to `num_trees`.
+     * This should be greater than or equal to 1 - any other value will be replaced by `num_trees`.
      */
     double search_mult = -1;
 };
 
+/**
+ * @cond
+ */
 template<typename Index_, typename Data_, typename Distance_, typename AnnoyDistance_, typename AnnoyIndex_, typename AnnoyData_, class AnnoyRng_, class AnnoyThreadPolicy_>
 class AnnoyPrebuilt;
 
-/**
- * @brief Searcher on an Annoy index.
- *
- * Instances of this class are usually constructed using `AnnoyPrebuilt::initialize()`.
- *
- * @tparam Index_ Integer type for the observation indices.
- * @tparam Data_ Numeric type for the input and query data.
- * @tparam Distance_ Floating-point type for the distances.
- * @tparam AnnoyDistance_ An **Annoy**-compatible class to compute the distance between vectors, e.g., `Annoy::Euclidean`, `Annoy::Manhattan`.
- * Note that this is not the same as `knncolle::DistanceMetric`.
- * @tparam AnnoyIndex_ Integer type for the observation indices in the Annoy index.
- * @tparam AnnoyData_ Floating-point type for data in the Annoy index.
- * This defaults to a `float` instead of a `double` to sacrifice some accuracy for performance.
- * @tparam AnnoyRng_ An **Annoy** class for random number generation.
- * @tparam AnnoyThreadPolicy_ An **Annoy** class for the threadedness of Annoy index building.
- */
 template<
     typename Index_,
     typename Data_,
@@ -83,25 +70,19 @@ private:
     typename std::conditional<!same_internal_distance, std::vector<AnnoyData_>, bool>::type my_distances;
 
     int get_search_k(int k) const {
-        if (my_parent.my_search_mult < 0) {
-            return -1;
+        if (my_parent.my_search_mult < 1) {
+            return -1; // instructs Annoy to use k * num_trees. 
         } else {
             return my_parent.my_search_mult * static_cast<double>(k) + 0.5; // rounded.
         }
     }
 
 public:
-    /**
-     * @cond
-     */
     AnnoySearcher(const AnnoyPrebuilt<Index_, Data_, Distance_, AnnoyDistance_, AnnoyIndex_, AnnoyData_, AnnoyRng_, AnnoyThreadPolicy_>& parent) : my_parent(parent) {
         if constexpr(!same_internal_data) {
             my_buffer.resize(my_parent.my_dim);
         }
     }
-    /**
-     * @endcond
-     */
 
 private:
     std::pair<std::vector<AnnoyIndex_>*, std::vector<AnnoyData_>*> obtain_pointers(std::vector<Index_>* output_indices, std::vector<Distance_>* output_distances, Index_ k) {
@@ -230,22 +211,6 @@ public:
     }
 };
 
-/**
- * @brief Prebuilt index for an Annoy search.
- *
- * Instances of this class are usually constructed using `AnnoyBuilder::build_raw()`.
- *
- * @tparam Index_ Integer type for the observation indices.
- * @tparam Data_ Numeric type for the input and query data.
- * @tparam Distance_ Floating-point type for the distances.
- * @tparam AnnoyDistance_ An **Annoy**-compatible class to compute the distance between vectors, e.g., `Annoy::Euclidean`, `Annoy::Manhattan`.
- * Note that this is not the same as `knncolle::DistanceMetric`.
- * @tparam AnnoyIndex_ Integer type for the observation indices in the Annoy index.
- * @tparam AnnoyData_ Floating-point type for data in the Annoy index.
- * This defaults to a `float` instead of a `double` to sacrifice some accuracy for performance.
- * @tparam AnnoyRng_ An **Annoy** class for random number generation.
- * @tparam AnnoyThreadPolicy_ An **Annoy** class for the threadedness of Annoy index building.
- */
 template<
     typename Index_,
     typename Data_,
@@ -258,9 +223,6 @@ template<
 >
 class AnnoyPrebuilt final : public knncolle::Prebuilt<Index_, Data_, Distance_> {
 public:
-    /**
-     * @cond
-     */
     template<class Matrix_>
     AnnoyPrebuilt(const Matrix_& data, const AnnoyOptions& options) :
         my_dim(data.num_dimensions()),
@@ -268,7 +230,7 @@ public:
         my_search_mult(options.search_mult),
         my_index(my_dim)
     {
-        auto work = data.new_extractor();
+        auto work = data.new_known_extractor();
         if constexpr(std::is_same<Data_, AnnoyData_>::value) {
             for (Index_ i = 0; i < my_obs; ++i) {
                 auto ptr = work->next();
@@ -286,9 +248,6 @@ public:
         my_index.build(options.num_trees);
         return;
     }
-    /**
-     * @endcond
-     */
 
 private:
     std::size_t my_dim;
@@ -307,13 +266,17 @@ public:
         return my_obs;
     }
 
-    /**
-     * Creates a `AnnoySearcher` instance.
-     */
     std::unique_ptr<knncolle::Searcher<Index_, Data_, Distance_> > initialize() const {
+        return initialize_known();
+    }
+
+    auto initialize_known() const {
         return std::make_unique<AnnoySearcher<Index_, Data_, Distance_, AnnoyDistance_, AnnoyIndex_, AnnoyData_, AnnoyRng_, AnnoyThreadPolicy_> >(*this);
     }
 };
+/**
+ * @endcond
+ */
 
 /**
  * @brief Perform an approximate nearest neighbor search with Annoy.
@@ -377,11 +340,30 @@ public:
     }
 
 public:
-    /**
-     * Creates a `AnnoyPrebuilt` instance.
-     */
     knncolle::Prebuilt<Index_, Data_, Distance_>* build_raw(const Matrix_& data) const {
+        return build_known_raw(data);
+    }
+
+public:
+    /**
+     * Override to assist devirtualization.
+     */
+    auto build_known_raw(const Matrix_& data) const {
         return new AnnoyPrebuilt<Index_, Data_, Distance_, AnnoyDistance_, AnnoyIndex_, AnnoyData_, AnnoyRng_, AnnoyThreadPolicy_>(data, my_options);
+    }
+
+    /**
+     * Override to assist devirtualization.
+     */
+    auto build_known_unique(const Matrix_& data) const {
+        return std::unique_ptr<std::remove_reference_t<decltype(*build_known_raw(data))> >(build_known_raw(data));
+    }
+
+    /**
+     * Override to assist devirtualization.
+     */
+    auto build_known_shared(const Matrix_& data) const {
+        return std::shared_ptr<std::remove_reference_t<decltype(*build_known_raw(data))> >(build_known_raw(data));
     }
 };
 

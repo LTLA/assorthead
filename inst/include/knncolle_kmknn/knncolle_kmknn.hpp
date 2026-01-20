@@ -10,10 +10,10 @@
 #include <limits>
 #include <cmath>
 #include <cstddef>
+#include <type_traits>
 
 /**
- * @file Kmknn.hpp
- *
+ * @file knncolle_kmknn.hpp
  * @brief Implements the k-means with k-nearest neighbors (KMKNN) algorithm.
  */
 
@@ -201,35 +201,21 @@ struct KmknnOptions {
     std::shared_ptr<Refine<Index_, Data_, Distance_, KmeansMatrix_> > refine_algorithm;
 };
 
+/**
+ * @cond
+ */
 template<typename Index_, typename Data_, typename Distance_, class DistanceMetric_>
 class KmknnPrebuilt;
 
-/**
- * @brief KMKNN searcher.
- *
- * Instances of this class are usually constructed using `KmknnPrebuilt::initialize()`.
- *
- * @tparam Index_ Integer type for the observation indices.
- * @tparam Data_ Numeric type for the input and query data.
- * @tparam Distance_ Floating-point type for the distances.
- * @tparam DistanceMetric_ Class implementing the distance metric calculation.
- * This should satisfy the `knncolle::DistanceMetric` interface.
- */
 template<typename Index_, typename Data_, typename Distance_, class DistanceMetric_ = DistanceMetric<Data_, Distance_> >
 class KmknnSearcher final : public knncolle::Searcher<Index_, Data_, Distance_> {
 public:
-    /**
-     * @cond
-     */
     KmknnSearcher(const KmknnPrebuilt<Index_, Data_, Distance_, DistanceMetric_>& parent) : my_parent(parent) {
         my_center_order.reserve(my_parent.my_sizes.size());
         if constexpr(needs_conversion) {
             my_conversion_buffer.resize(my_parent.my_dim);
         }
     }
-    /**
-     * @endcond
-     */
 
 private:                
     const KmknnPrebuilt<Index_, Data_, Distance_, DistanceMetric_>& my_parent;
@@ -315,17 +301,6 @@ public:
     }
 };
 
-/**
- * @brief Index for a KMKNN search.
- *
- * Instances of this class are usually constructed using `KmknnBuilder::build_raw()`.
- *
- * @tparam Index_ Integer type for the indices.
- * @tparam Data_ Numeric type for the input and query data.
- * @tparam Distance_ Floating-point type for the distances.
- * @tparam DistanceMetric_ Class implementing the distance metric calculation.
- * This should satisfy the `knncolle::DistanceMetric` interface.
- */
 template<typename Index_, typename Data_, typename Distance_, class DistanceMetric_ = DistanceMetric<Data_, Distance_> >
 class KmknnPrebuilt final : public knncolle::Prebuilt<Index_, Data_, Distance_> {
 private:
@@ -354,9 +329,6 @@ private:
     std::vector<Distance_> my_dist_to_centroid;
 
 public:
-    /**
-     * @cond
-     */
     template<class KmeansMatrix_ = kmeans::SimpleMatrix<Index_, Data_> >
     KmknnPrebuilt(
         std::size_t num_dim,
@@ -490,9 +462,6 @@ public:
 
         return;
     }
-    /**
-     * @endcond
-     */
 
 private:
     void search_nn(const Common<Data_, Distance_>* target, knncolle::NeighborQueue<Index_, Distance_>& nearest, std::vector<std::pair<Distance_, Index_> >& center_order) const { 
@@ -640,13 +609,17 @@ private:
     friend class KmknnSearcher<Index_, Data_, Distance_, DistanceMetric_>;
 
 public:
-    /**
-     * Creates a `KmknnSearcher` instance.
-     */
     std::unique_ptr<knncolle::Searcher<Index_, Data_, Distance_> > initialize() const {
+        return initialize_known();
+    }
+
+    auto initialize_known() const {
         return std::make_unique<KmknnSearcher<Index_, Data_, Distance_, DistanceMetric_> >(*this);
     }
 };
+/**
+ * @endcond
+ */
 
 /**
  * @brief Perform a nearest neighbor search based on k-means clustering.
@@ -723,21 +696,40 @@ public:
     }
 
 public:
-    /**
-     * Creates a `KmknnPrebuilt` instance.
-     */
     knncolle::Prebuilt<Index_, Data_, Distance_>* build_raw(const Matrix_& data) const {
+        return build_known_raw(data);
+    }
+
+public:
+    /**
+     * Override to assist devirtualization.
+     */
+    auto build_known_raw(const Matrix_& data) const {
         std::size_t ndim = data.num_dimensions();
         auto nobs = data.num_observations();
 
         std::vector<Common<Data_, Distance_> > store(ndim * static_cast<std::size_t>(nobs)); // cast to size_t to avoid overflow problems.
-        auto work = data.new_extractor();
+        auto work = data.new_known_extractor();
         for (Index_ o = 0; o < nobs; ++o) {
             auto ptr = work->next();
             std::copy_n(ptr, ndim, store.begin() + static_cast<std::size_t>(o) * ndim); // cast to size_t to avoid overflow.
         }
 
         return new KmknnPrebuilt<Index_, Data_, Distance_, DistanceMetric_>(ndim, nobs, std::move(store), my_metric, my_options);
+    }
+
+    /**
+     * Override to assist devirtualization.
+     */
+    auto build_known_unique(const Matrix_& data) const {
+        return std::unique_ptr<std::remove_reference_t<decltype(*build_known_raw(data))> >(build_known_raw(data));
+    }
+
+    /**
+     * Override to assist devirtualization.
+     */
+    auto build_known_shared(const Matrix_& data) const {
+        return std::shared_ptr<std::remove_reference_t<decltype(*build_known_raw(data))> >(build_known_raw(data));
     }
 };
 

@@ -54,19 +54,12 @@ struct HnswOptions {
     int ef_search = 10;
 };
 
+/**
+ * @cond
+ */
 template<typename Index_, typename Data_, typename Distance_, typename HnswData_>
 class HnswPrebuilt;
 
-/**
- * @brief Searcher on an Hnsw index.
- *
- * Instances of this class are usually constructed using `HnswPrebuilt::initialize()`.
- *
- * @tparam Index_ Integer type for the observation indices.
- * @tparam Data_ Numeric type for the input and query data.
- * @tparam Distance_ Floating-point type for the distances.
- * @tparam HnswData_ Type of data in the HNSW index, usually floating-point.
- */
 template<typename Index_, typename Data_, typename Distance_, typename HnswData_>
 class HnswSearcher final : public knncolle::Searcher<Index_, Data_, Distance_> {
 private:
@@ -78,17 +71,11 @@ private:
     std::vector<HnswData_> my_buffer;
 
 public:
-    /**
-     * @cond
-     */
     HnswSearcher(const HnswPrebuilt<Index_, Data_, Distance_, HnswData_>& parent) : my_parent(parent) {
         if constexpr(!same_internal_data) {
             my_buffer.resize(my_parent.my_dim);
         }
     }
-    /**
-     * @endcond
-     */
 
 public:
     void search(Index_ i, Index_ k, std::vector<Index_>* output_indices, std::vector<Distance_>* output_distances) {
@@ -194,23 +181,9 @@ public:
     }
 };
 
-/**
- * @brief Prebuilt index for an Hnsw search.
- *
- * Instances of this class are usually constructed using `HnswBuilder::build_raw()`.
- * The `initialize()` method will create an instance of the `HnswSearcher` class.
- *
- * @tparam Index_ Integer type for the observation indices.
- * @tparam Data_ Numeric type for the input and query data.
- * @tparam Distance_ Floating point type for the distances.
- * @tparam HnswData_ Type of data in the HNSW index, usually floating-point.
- */
 template<typename Index_, typename Data_, typename Distance_, typename HnswData_>
 class HnswPrebuilt : public knncolle::Prebuilt<Index_, Data_, Distance_> {
 public:
-    /**
-     * @cond
-     */
     template<class Matrix_>
     HnswPrebuilt(const Matrix_& data, const DistanceConfig<HnswData_>& distance_config, const HnswOptions& options) :
         my_dim(data.num_dimensions()),
@@ -219,7 +192,7 @@ public:
         my_normalize(distance_config.normalize),
         my_index(my_space.get(), my_obs, options.num_links, options.ef_construction)
     {
-        auto work = data.new_extractor();
+        auto work = data.new_known_extractor();
         if constexpr(std::is_same<Data_, HnswData_>::value) {
             for (Index_ i = 0; i < my_obs; ++i) {
                 auto ptr = work->next();
@@ -237,9 +210,6 @@ public:
         my_index.setEf(options.ef_search);
         return;
     }
-    /**
-     * @endcond
-     */
 
 private:
     std::size_t my_dim;
@@ -263,13 +233,18 @@ public:
         return my_obs;
     }
 
-    /**
-     * Creates a `HnswSearcher` instance.
-     */
+public:
     std::unique_ptr<knncolle::Searcher<Index_, Data_, Distance_> > initialize() const {
+        return initialize_known();
+    }
+
+    auto initialize_known() const {
         return std::make_unique<HnswSearcher<Index_, Data_, Distance_, HnswData_> >(*this);
     }
 };
+/**
+ * @endcond
+ */
 
 /**
  * @brief Perform an approximate nearest neighbor search with HNSW.
@@ -332,11 +307,30 @@ public:
     }
 
 public:
-    /**
-     * Creates a `HnswPrebuilt` instance.
-     */
     knncolle::Prebuilt<Index_, Data_, Distance_>* build_raw(const Matrix_& data) const {
+        return build_known_raw(data);
+    }
+
+public:
+    /**
+     * Override to assist devirtualization.
+     */
+    auto build_known_raw(const Matrix_& data) const {
         return new HnswPrebuilt<Index_, Data_, Distance_, HnswData_>(data, my_distance_config, my_options);
+    }
+
+    /**
+     * Override to assist devirtualization.
+     */
+    auto build_known_unique(const Matrix_& data) const {
+        return std::unique_ptr<std::remove_reference_t<decltype(*build_known_raw(data))> >(build_known_raw(data));
+    }
+
+    /**
+     * Override to assist devirtualization.
+     */
+    auto build_known_shared(const Matrix_& data) const {
+        return std::shared_ptr<std::remove_reference_t<decltype(*build_known_raw(data))> >(build_known_raw(data));
     }
 };
 

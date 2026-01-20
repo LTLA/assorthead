@@ -39,6 +39,7 @@ public:
      * For a newly created `MatrixExtractor`, the first call to `next()` should return the coordinates of the first observation in the matrix;
      * the next call should return the coordinates of the second observation;
      * and so on, for up to `Matrix::num_observations()` calls, after which the `MatrixExtractor` should no longer be used.
+     * The pointer returned by each call to `next()` is only guaranteed to be valid until the next call to `next()` or the `MatrixExtractor` is destroyed.
      */
     virtual const Data_* next() = 0;
 };
@@ -84,25 +85,26 @@ public:
      * @return A new consecutive-access extractor.
      */
     virtual std::unique_ptr<MatrixExtractor<Data_> > new_extractor() const = 0;
+
+    /**
+     * @return A new consecutive-access extractor.
+     *
+     * Subclasses may override this method to return a pointer to a specific `MatrixExtractor` subclass.
+     * This is used for devirtualization in other **knncolle** functions. 
+     * If no override is provided, `new_extractor()` is called instead.
+     */
+    auto new_known_extractor() const {
+        return new_extractor();
+    }
 };
 
 /**
- * @brief Extractor for a `SimpleMatrix`.
- *
- * This should be typically constructed by calling `SimpleMatrix::new_extractor()`.
- *
- * @tparam Data_ Numeric type of the data.
+ * @cond
  */
 template<typename Data_>
 class SimpleMatrixExtractor final : public MatrixExtractor<Data_> {
 public:
-    /**
-     * @cond
-     */
     SimpleMatrixExtractor(const Data_* data, std::size_t dim) : my_data(data), my_dim(dim) {}
-    /**
-     * @endcond
-     */
 
 private:
     const Data_* my_data;
@@ -114,6 +116,9 @@ public:
         return my_data + (at++) * my_dim; // already std::size_t's to avoid overflow during multiplication.
     } 
 };
+/**
+ * @endcond
+ */
 
 /**
  * @brief Simple wrapper for an in-memory matrix.
@@ -151,6 +156,13 @@ public:
     }
 
     std::unique_ptr<MatrixExtractor<Data_> > new_extractor() const {
+        return new_known_extractor();
+    }
+
+    /**
+     * Override to assist devirtualization. 
+     */
+    auto new_known_extractor() const {
         return std::make_unique<SimpleMatrixExtractor<Data_> >(my_data, my_num_dim);
     }
 };
