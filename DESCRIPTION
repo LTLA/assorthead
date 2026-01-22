@@ -1,6 +1,6 @@
 Package: assorthead
-Version: 1.5.7
-Date: 2026-01-20
+Version: 1.5.8
+Date: 2026-01-23
 Title: Assorted Header-Only C++ Libraries
 Authors@R: person("Aaron", "Lun", role=c("cre", "aut"), email="infinite.monkeys.with.keyboards@gmail.com")
 Description:

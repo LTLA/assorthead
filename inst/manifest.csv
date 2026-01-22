@@ -25,7 +25,7 @@ kaori,https://github.com/crisprverse/kaori,v1.1.2,"Sequence alignment and counti
 nenesub,https://github.com/libscran/nenesub,v0.2.1,"Subsampling based on nearest neighbors"
 raiigraph,https://github.com/LTLA/raiigraph,v1.2.0,"C++ wrappers around **igraph** data structures"
 scran_qc,https://github.com/libscran/scran_qc,v0.2.0,"Simple quality control for single-cell data"
-scran_norm,https://github.com/libscran/scran_norm,v0.2.1,"Scaling normalization for single-cell data"
+scran_norm,https://github.com/libscran/scran_norm,v0.2.2,"Scaling normalization for single-cell data"
 scran_variances,https://github.com/libscran/scran_variances,v0.2.2,"Variance modelling and feature selection for single-cell data"
 scran_pca,https://github.com/libscran/scran_pca,v0.3.2,"Principal components analysis for single-cell data"
 scran_graph_cluster,https://github.com/libscran/scran_graph_cluster,v0.3.0,"Graph-based clustering for single-cell data"

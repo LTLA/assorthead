@@ -80,12 +80,12 @@ template<typename SizeFactor_>
 SizeFactor_ center_size_factors_mean(const std::size_t num, const SizeFactor_* const size_factors, SizeFactorDiagnostics* const diagnostics, const CenterSizeFactorsOptions& options) {
     static_assert(std::is_floating_point<SizeFactor_>::value);
     SizeFactor_ mean = 0;
-    decltype(I(num)) denom = 0;
+    I<decltype(num)> denom = 0;
 
     if (options.ignore_invalid) {
         SizeFactorDiagnostics tmpdiag;
         auto& diag = (diagnostics == NULL ? tmpdiag : *diagnostics);
-        for (decltype(I(num)) i = 0; i < num; ++i) {
+        for (I<decltype(num)> i = 0; i < num; ++i) {
             const auto val = size_factors[i];
             if (!internal::is_invalid(val, diag)) {
                 mean += val;
@@ -126,7 +126,7 @@ template<typename SizeFactor_>
 SizeFactor_ center_size_factors(const std::size_t num, SizeFactor_* const size_factors, SizeFactorDiagnostics* const diagnostics, const CenterSizeFactorsOptions& options) {
     const auto mean = center_size_factors_mean(num, size_factors, diagnostics, options);
     if (mean) {
-        for (decltype(I(num)) i = 0; i < num; ++i){
+        for (I<decltype(num)> i = 0; i < num; ++i){
             size_factors[i] /= mean;
         }
     }
@@ -163,12 +163,12 @@ std::vector<SizeFactor_> center_size_factors_blocked_mean(
     static_assert(std::is_floating_point<SizeFactor_>::value);
     const auto ngroups = tatami_stats::total_groups(block, num);
     auto group_mean = sanisizer::create<std::vector<SizeFactor_> >(ngroups);
-    auto group_num = sanisizer::create<std::vector<decltype(I(num))> >(ngroups);
+    auto group_num = sanisizer::create<std::vector<I<decltype(num)>> >(ngroups);
 
     if (options.ignore_invalid) {
         SizeFactorDiagnostics tmpdiag;
         auto& diag = (diagnostics == NULL ? tmpdiag : *diagnostics);
-        for (decltype(I(num)) i = 0; i < num; ++i) {
+        for (I<decltype(num)> i = 0; i < num; ++i) {
             const auto val = size_factors[i];
             if (!internal::is_invalid(val, diag)) {
                 const auto b = block[i];
@@ -177,14 +177,14 @@ std::vector<SizeFactor_> center_size_factors_blocked_mean(
             }
         }
     } else {
-        for (decltype(I(num)) i = 0; i < num; ++i) {
+        for (I<decltype(num)> i = 0; i < num; ++i) {
             const auto b = block[i];
             group_mean[b] += size_factors[i];
             ++(group_num[b]);
         }
     }
 
-    for (decltype(I(ngroups)) g = 0; g < ngroups; ++g) {
+    for (I<decltype(ngroups)> g = 0; g < ngroups; ++g) {
         if (group_num[g]) {
             group_mean[g] /= group_num[g];
         }
@@ -223,7 +223,7 @@ std::vector<SizeFactor_> center_size_factors_blocked(
     const auto group_mean = center_size_factors_blocked_mean(num, size_factors, block, diagnostics, options);
 
     if (options.block_mode == CenterBlockMode::PER_BLOCK) {
-        for (decltype(I(num)) i = 0; i < num; ++i) {
+        for (I<decltype(num)> i = 0; i < num; ++i) {
             const auto& div = group_mean[block[i]];
             if (div) {
                 size_factors[i] /= div;
@@ -245,7 +245,7 @@ std::vector<SizeFactor_> center_size_factors_blocked(
         }
 
         if (min > 0) {
-            for (decltype(I(num)) i = 0; i < num; ++i) {
+            for (I<decltype(num)> i = 0; i < num; ++i) {
                 size_factors[i] /= min;
             }
         }

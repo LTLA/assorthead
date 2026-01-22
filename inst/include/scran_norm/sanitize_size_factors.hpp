@@ -74,7 +74,7 @@ SizeFactor_ find_smallest_valid_factor(const std::size_t num, const SizeFactor_*
     SizeFactor_ smallest = 1;
     bool found = false;
 
-    for (decltype(I(num)) i = 0; i < num; ++i) {
+    for (I<decltype(num)> i = 0; i < num; ++i) {
         const auto s = size_factors[i];
         if (std::isfinite(s) && s > 0) {
             if (!found || smallest > s) {
@@ -92,7 +92,7 @@ SizeFactor_ find_largest_valid_factor(const std::size_t num, const SizeFactor_* 
     SizeFactor_ largest = 1;
     bool found = false;
 
-    for (decltype(I(num)) i = 0; i < num; ++i) {
+    for (I<decltype(num)> i = 0; i < num; ++i) {
         const auto s = size_factors[i];
         if (std::isfinite(s) && s > 0) {
             if (!found || largest < s) {
@@ -124,7 +124,7 @@ SizeFactor_ find_largest_valid_factor(const std::size_t num, const SizeFactor_* 
 template<typename SizeFactor_>
 SizeFactorDiagnostics check_size_factor_sanity(const std::size_t num, const SizeFactor_* const size_factors) {
     SizeFactorDiagnostics output;
-    for (decltype(I(num)) i = 0; i < num; ++i) {
+    for (I<decltype(num)> i = 0; i < num; ++i) {
         internal::is_invalid(size_factors[i], output);
     }
     return output;
@@ -206,7 +206,7 @@ void sanitize_size_factors(const std::size_t num, SizeFactor_* const size_factor
             throw std::runtime_error("detected negative size factor");
         } else if (options.handle_negative == SanitizeAction::SANITIZE) {
             smallest = internal::find_smallest_valid_factor(num, size_factors);
-            for (decltype(I(num)) i = 0; i < num; ++i) {
+            for (I<decltype(num)> i = 0; i < num; ++i) {
                 auto& s = size_factors[i];
                 if (s < 0) {
                     s = smallest;
@@ -222,7 +222,7 @@ void sanitize_size_factors(const std::size_t num, SizeFactor_* const size_factor
             if (smallest < 0) {
                 smallest = internal::find_smallest_valid_factor(num, size_factors);
             }
-            for (decltype(I(num)) i = 0; i < num; ++i) {
+            for (I<decltype(num)> i = 0; i < num; ++i) {
                 auto& s = size_factors[i];
                 if (s == 0) {
                     s = smallest;
@@ -235,7 +235,7 @@ void sanitize_size_factors(const std::size_t num, SizeFactor_* const size_factor
         if (options.handle_nan == SanitizeAction::ERROR) {
             throw std::runtime_error("detected NaN size factor");
         } else if (options.handle_nan == SanitizeAction::SANITIZE) {
-            for (decltype(I(num)) i = 0; i < num; ++i) {
+            for (I<decltype(num)> i = 0; i < num; ++i) {
                 auto& s = size_factors[i];
                 if (std::isnan(s)) {
                     s = 1;
@@ -249,7 +249,7 @@ void sanitize_size_factors(const std::size_t num, SizeFactor_* const size_factor
             throw std::runtime_error("detected infinite size factor");
         } else if (options.handle_infinite == SanitizeAction::SANITIZE) {
             auto largest = internal::find_largest_valid_factor(num, size_factors);
-            for (decltype(I(num)) i = 0; i < num; ++i) {
+            for (I<decltype(num)> i = 0; i < num; ++i) {
                 auto& s = size_factors[i];
                 if (std::isinf(s)) {
                     s = largest;

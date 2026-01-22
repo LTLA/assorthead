@@ -26,39 +26,43 @@ namespace scran_norm {
  * @tparam OutputValue_ Type of the result of the operation.
  * @tparam InputValue_ Type of the matrix value used in the operation.
  * @tparam Index_ Integer type for the row/column indices.
- * @tparam SizeFactors_ Container for the size factors.
+ * @tparam ReciprocalSizeFactors_ Container for the reciprocal size factors.
  * This should support `[]`, `size()`, `begin()` and `end()`.
  */
-template<typename OutputValue_, typename InputValue_, typename Index_, typename SizeFactors_>
+template<typename OutputValue_, typename InputValue_, typename Index_, typename ReciprocalSizeFactors_>
 class DelayedLogNormalizeHelper final : public tatami::DelayedUnaryIsometricOperationHelper<OutputValue_, InputValue_, Index_> {
 public:
     /**
-     * @param vector Vector of size factors, of length equal to the number of columns.
-     * @param log_base Base of the log, usually 2.
-     * @param pseudo_count Pseudo-count to add before log-transformation, usually 1.
+     * @param reciprocal_size_factors Vector of the reciprocal of the size factor for each cell.
+     * This should have length equal to the number of columns.
+     * Each value should be non-negative.
+     * @param log_base Base of the logarithm.
+     * This should be positive.
+     * @param pseudo_count Pseudo-count to add before log-transformation.
+     * This should be positive.
      */
-    DelayedLogNormalizeHelper(SizeFactors_ size_factors, OutputValue_ log_base, OutputValue_ pseudo_count) : 
-        my_sf(std::move(size_factors)),
-        my_base(std::log(log_base)),
+    DelayedLogNormalizeHelper(ReciprocalSizeFactors_ reciprocal_size_factors, OutputValue_ log_base, OutputValue_ pseudo_count) : 
+        my_reciprocal_sf(std::move(reciprocal_size_factors)),
+        my_reciprocal_denom(1.0 / std::log(log_base)),
         my_pseudo(pseudo_count)
     {
-        sanisizer::cast<Index_>(my_sf.size());
+        sanisizer::cast<Index_>(my_reciprocal_sf.size()); // check that cast is safe in ncol().
         if (my_pseudo != 1) {
             my_sparse = false;
         }
-        for (const auto x : my_sf) {
-            if (x == 0) {
+        for (const auto x : my_reciprocal_sf) {
+            if (!std::isfinite(x)) {
                 my_sparse = false;
-                my_zero_sf = true;
+                my_has_weird_sf = true;
                 break;
             }
         }
     }
 
 private:
-    SizeFactors_ my_sf;
-    OutputValue_ my_base, my_pseudo;
-    bool my_zero_sf = false, my_sparse = true;
+    ReciprocalSizeFactors_ my_reciprocal_sf;
+    OutputValue_ my_reciprocal_denom, my_pseudo;
+    bool my_has_weird_sf = false, my_sparse = true;
 
 public:
     std::optional<Index_> nrow() const {
@@ -66,7 +70,7 @@ public:
     }
 
     std::optional<Index_> ncol() const {
-        return my_sf.size();
+        return my_reciprocal_sf.size();
     }
 
 public:
@@ -75,7 +79,7 @@ public:
     }
 
     bool zero_depends_on_column() const {
-        return my_zero_sf;
+        return my_has_weird_sf;
     }
 
     bool non_zero_depends_on_row() const {
@@ -88,15 +92,9 @@ public:
 
 private:
     void log_normalize(const Index_ idx, const Index_ length, const InputValue_* input, OutputValue_* const output) const {
-        const auto sf = my_sf[idx];
-        if (my_pseudo == 1) {
-            for (Index_ i = 0; i < length; ++i) {
-                output[i] = std::log1p(input[i] / sf) / my_base;
-            }
-        } else {
-            for (Index_ i = 0; i < length; ++i) {
-                output[i] = std::log(input[i] / sf + my_pseudo) / my_base;
-            }
+        const auto current_rsf = my_reciprocal_sf[idx];
+        for (Index_ i = 0; i < length; ++i) {
+            output[i] = std::log(input[i] * current_rsf + my_pseudo) * my_reciprocal_denom;
         }
     }
 
@@ -107,14 +105,8 @@ public:
         }
 
         if (row) {
-            if (my_pseudo == 1) {
-                for (Index_ i = 0; i < length; ++i) {
-                    output[i] = std::log1p(input[i] / my_sf[i + start]) / my_base;
-                }
-            } else {
-                for (Index_ i = 0; i < length; ++i) {
-                    output[i] = std::log(input[i] / my_sf[i + start] + my_pseudo) / my_base;
-                }
+            for (Index_ i = 0; i < length; ++i) {
+                output[i] = std::log(input[i] * my_reciprocal_sf[i + start] + my_pseudo) * my_reciprocal_denom;
             }
         } else {
             log_normalize(idx, length, input, output);
@@ -128,14 +120,8 @@ public:
         const Index_ length = indices.size();
 
         if (row) {
-            if (my_pseudo == 1) {
-                for (Index_ i = 0; i < length; ++i) {
-                    output[i] = std::log1p(input[i] / my_sf[indices[i]]) / my_base;
-               }
-            } else {
-                for (Index_ i = 0; i < length; ++i) {
-                    output[i] = std::log(input[i] / my_sf[indices[i]] + my_pseudo) / my_base;
-                }
+            for (Index_ i = 0; i < length; ++i) {
+                output[i] = std::log(input[i] * my_reciprocal_sf[indices[i]] + my_pseudo) * my_reciprocal_denom;
             }
         } else {
             log_normalize(idx, length, input, output);
@@ -160,14 +146,8 @@ public:
         }
 
         if (row) {
-            if (my_pseudo == 1) {
-                for (Index_ i = 0; i < number; ++i) {
-                    output_value[i] = std::log1p(input_value[i] / my_sf[index[i]]) / my_base;
-                }
-            } else {
-                for (Index_ i = 0; i < number; ++i) {
-                    output_value[i] = std::log(input_value[i] / my_sf[index[i]] + my_pseudo) / my_base;
-                }
+            for (Index_ i = 0; i < number; ++i) {
+                output_value[i] = std::log(input_value[i] * my_reciprocal_sf[index[i]] + my_pseudo) * my_reciprocal_denom;
             }
         } else {
             log_normalize(idx, number, input_value, output_value);
@@ -177,18 +157,10 @@ public:
     OutputValue_ fill(const bool row, const Index_ idx) const {
         if (row) {
             // This should never be called in the presence of size factors of zero, as these will lead to NaNs.
-            assert(!my_zero_sf);
-            if (my_pseudo == 1) {
-                return 0;
-            } else {
-                return std::log(my_pseudo) / my_base;
-            }
+            assert(!my_has_weird_sf);
+            return std::log(my_pseudo) * my_reciprocal_denom;
         } else {
-            if (my_pseudo == 1) {
-                return std::log1p(static_cast<InputValue_>(0) / my_sf[idx]) / my_base;
-            } else {
-                return std::log(static_cast<InputValue_>(0) / my_sf[idx] + my_pseudo) / my_base;
-            }
+            return std::log(static_cast<InputValue_>(0) * my_reciprocal_sf[idx] + my_pseudo) * my_reciprocal_denom;
         }
     }
 };
@@ -277,11 +249,14 @@ std::shared_ptr<tatami::Matrix<OutputValue_, Index_> > normalize_counts(
         throw std::runtime_error("length of 'size_factors' should be equal to the number of columns of 'counts'");
     }
 
+    for (auto& x : size_factors) { 
+        x = static_cast<OutputValue_>(1.0) / x;
+    }
 
     if (!options.log) {
         return std::make_shared<tatami::DelayedUnaryIsometricOperation<OutputValue_, InputValue_, Index_> >(
             std::move(counts), 
-            std::make_shared<tatami::DelayedUnaryIsometricDivideVectorHelper<true, OutputValue_, InputValue_, Index_, SizeFactors_> >(std::move(size_factors), false)
+            std::make_shared<tatami::DelayedUnaryIsometricMultiplyVectorHelper<OutputValue_, InputValue_, Index_, SizeFactors_> >(std::move(size_factors), false)
         );
     } else {
         return std::make_shared<tatami::DelayedUnaryIsometricOperation<OutputValue_, InputValue_, Index_> >(

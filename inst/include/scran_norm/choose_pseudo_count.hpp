@@ -100,8 +100,8 @@ Float_ choose_pseudo_count_raw(std::size_t num, Float_* const size_factors, cons
     }
 
     // Avoid problems with zeros.
-    decltype(I(num)) counter = 0;
-    for (decltype(I(num)) i = 0; i < num; ++i) {
+    I<decltype(num)> counter = 0;
+    for (I<decltype(num)> i = 0; i < num; ++i) {
         const auto val = size_factors[i];
         if (std::isfinite(val) && val > 0) {
             if (i != counter) {
