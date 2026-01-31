@@ -8,12 +8,17 @@
 #include "Prebuilt.hpp"
 #include "Matrix.hpp"
 #include "report_all_neighbors.hpp"
+#include "utils.hpp"
 
 #include <vector>
-#include <type_traits>
 #include <limits>
 #include <memory>
 #include <cstddef>
+#include <string>
+#include <cstring>
+#include <filesystem>
+
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file Bruteforce.hpp
@@ -22,6 +27,11 @@
  */
 
 namespace knncolle {
+
+/**
+ * Name of the brute-force algorithm when registering a loading function to `load_prebuilt_registry()`.
+ */
+inline static constexpr const char* bruteforce_prebuilt_save_name = "knncolle::Bruteforce";
 
 /**
  * @cond
@@ -50,8 +60,8 @@ private:
 
 public:
     void search(Index_ i, Index_ k, std::vector<Index_>* output_indices, std::vector<Distance_>* output_distances) {
-        my_nearest.reset(k + 1);
-        auto ptr = my_parent.my_data.data() + static_cast<std::size_t>(i) * my_parent.my_dim; // cast to avoid overflow.
+        my_nearest.reset(k + 1); // +1 is safe as k < num_obs.
+        auto ptr = my_parent.my_data.data() + sanisizer::product_unsafe<std::size_t>(i, my_parent.my_dim);
         my_parent.search(ptr, my_nearest);
         my_nearest.report(output_indices, output_distances, i);
         normalize(output_distances);
@@ -78,7 +88,7 @@ public:
     }
 
     Index_ search_all(Index_ i, Distance_ d, std::vector<Index_>* output_indices, std::vector<Distance_>* output_distances) {
-        auto ptr = my_parent.my_data.data() + static_cast<std::size_t>(i) * my_parent.my_dim; // cast to avoid overflow.
+        auto ptr = my_parent.my_data.data() + sanisizer::product_unsafe<std::size_t>(i, my_parent.my_dim);
 
         if (!output_indices && !output_distances) {
             Index_ count = 0;
@@ -133,10 +143,9 @@ public:
 
 private:
     void search(const Data_* query, NeighborQueue<Index_, Distance_>& nearest) const {
-        auto copy = my_data.data();
         Distance_ threshold_raw = std::numeric_limits<Distance_>::infinity();
-        for (Index_ x = 0; x < my_obs; ++x, copy += my_dim) {
-            auto dist_raw = my_metric->raw(my_dim, query, copy);
+        for (Index_ x = 0; x < my_obs; ++x) {
+            auto dist_raw = my_metric->raw(my_dim, query, my_data.data() + sanisizer::product_unsafe<std::size_t>(x, my_dim));
             if (dist_raw <= threshold_raw) {
                 nearest.add(x, dist_raw);
                 if (nearest.is_full()) {
@@ -149,9 +158,8 @@ private:
     template<bool count_only_, typename Output_>
     void search_all(const Data_* query, Distance_ threshold, Output_& all_neighbors) const {
         Distance_ threshold_raw = my_metric->denormalize(threshold);
-        auto copy = my_data.data();
-        for (Index_ x = 0; x < my_obs; ++x, copy += my_dim) {
-            Distance_ raw = my_metric->raw(my_dim, query, copy);
+        for (Index_ x = 0; x < my_obs; ++x) {
+            Distance_ raw = my_metric->raw(my_dim, query, my_data.data() + sanisizer::product_unsafe<std::size_t>(x, my_dim));
             if (threshold_raw >= raw) {
                 if constexpr(count_only_) {
                     ++all_neighbors; // expect this to be an integer.
@@ -172,6 +180,33 @@ public:
     auto initialize_known() const {
         return std::make_unique<BruteforceSearcher<Index_, Data_, Distance_, DistanceMetric_> >(*this);
     }
+
+public:
+    void save(const std::filesystem::path& dir) const {
+        quick_save(dir / "ALGORITHM", bruteforce_prebuilt_save_name, std::strlen(bruteforce_prebuilt_save_name));
+        quick_save(dir / "DATA", my_data.data(), my_data.size());
+        quick_save(dir / "NUM_OBS", &my_obs, 1);
+        quick_save(dir / "NUM_DIM", &my_dim, 1);
+
+        const auto distdir = dir / "DISTANCE";
+        std::filesystem::create_directory(distdir);
+        my_metric->save(distdir);
+    }
+
+    BruteforcePrebuilt(const std::filesystem::path& dir) {
+        quick_load(dir / "NUM_OBS", &my_obs, 1);
+        quick_load(dir / "NUM_DIM", &my_dim, 1);
+
+        my_data.resize(sanisizer::product<I<decltype(my_data.size())> >(sanisizer::attest_gez(my_obs), my_dim));
+        quick_load(dir / "DATA", my_data.data(), my_data.size());
+
+        auto dptr = load_distance_metric_raw<Data_, Distance_>(dir / "DISTANCE");
+        auto xptr = dynamic_cast<DistanceMetric_*>(dptr);
+        if (xptr == NULL) {
+            throw std::runtime_error("cannot cast the loaded distance metric to a DistanceMetric_");
+        }
+        my_metric.reset(xptr);
+    }
 };
 /**
  * @endcond
@@ -187,7 +222,7 @@ public:
  *
  * @tparam Index_ Integer type for the indices.
  * @tparam Data_ Numeric type for the input and query data.
- * @tparam Distance_ Floating point type for the distances.
+ * @tparam Distance_ Numeric type for the distances, usually floating-point.
  * @tparam Matrix_ Class of the input data matrix. 
  * This should satisfy the `Matrix` interface.
  * @tparam DistanceMetric_ Class implementing the distance metric calculation.
@@ -221,12 +256,13 @@ public:
      */
     auto build_known_raw(const Matrix_& data) const {
         std::size_t ndim = data.num_dimensions();
-        Index_ nobs = data.num_observations();
+        const Index_ nobs = data.num_observations();
         auto work = data.new_known_extractor();
 
-        std::vector<Data_> store(ndim * static_cast<std::size_t>(nobs)); // cast to avoid overflow.
+        // We assume that that vector::size_type <= size_t, otherwise data() wouldn't be a contiguous array.
+        std::vector<Data_> store(sanisizer::product<typename std::vector<Data_>::size_type>(ndim, sanisizer::attest_gez(nobs)));
         for (Index_ o = 0; o < nobs; ++o) {
-            std::copy_n(work->next(), ndim, store.begin() + static_cast<std::size_t>(o) * ndim); // cast to size_t to avoid overflow.
+            std::copy_n(work->next(), ndim, store.data() + sanisizer::product_unsafe<std::size_t>(o, ndim));
         }
 
         return new BruteforcePrebuilt<Index_, Data_, Distance_, DistanceMetric_>(ndim, nobs, std::move(store), my_metric);
@@ -236,14 +272,14 @@ public:
      * Override to assist devirtualization.
      */
     auto build_known_unique(const Matrix_& data) const {
-        return std::unique_ptr<std::remove_reference_t<decltype(*build_known_raw(data))> >(build_known_raw(data));
+        return std::unique_ptr<I<decltype(*build_known_raw(data))> >(build_known_raw(data));
     }
 
     /**
      * Override to assist devirtualization.
      */
     auto build_known_shared(const Matrix_& data) const {
-        return std::shared_ptr<std::remove_reference_t<decltype(*build_known_raw(data))> >(build_known_raw(data));
+        return std::shared_ptr<I<decltype(*build_known_raw(data))> >(build_known_raw(data));
     }
 };
 

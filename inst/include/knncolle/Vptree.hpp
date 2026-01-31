@@ -7,6 +7,7 @@
 #include "Builder.hpp"
 #include "Matrix.hpp"
 #include "report_all_neighbors.hpp"
+#include "utils.hpp"
 
 #include <vector>
 #include <random>
@@ -14,6 +15,11 @@
 #include <tuple>
 #include <memory>
 #include <cstddef>
+#include <string>
+#include <cstring>
+#include <filesystem>
+
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file Vptree.hpp
@@ -22,6 +28,11 @@
  */
 
 namespace knncolle {
+
+/**
+ * Name of the VP-tree algorithm when registering a loading function to `load_prebuilt_registry()`.
+ */
+inline static constexpr const char* vptree_prebuilt_save_name = "knncolle::Vptree";
 
 /**
  * @cond
@@ -41,8 +52,8 @@ private:
 
 public:
     void search(Index_ i, Index_ k, std::vector<Index_>* output_indices, std::vector<Distance_>* output_distances) {
-        my_nearest.reset(k + 1);
-        auto iptr = my_parent.my_data.data() + static_cast<std::size_t>(my_parent.my_new_locations[i]) * my_parent.my_dim; // cast to avoid overflow.
+        my_nearest.reset(k + 1); // +1 is safe as k < num_obs.
+        auto iptr = my_parent.my_data.data() + sanisizer::product_unsafe<std::size_t>(my_parent.my_new_locations[i], my_parent.my_dim);
         Distance_ max_dist = std::numeric_limits<Distance_>::max();
         my_parent.search_nn(0, iptr, max_dist, my_nearest);
         my_nearest.report(output_indices, output_distances, i);
@@ -72,7 +83,7 @@ public:
     }
 
     Index_ search_all(Index_ i, Distance_ d, std::vector<Index_>* output_indices, std::vector<Distance_>* output_distances) {
-        auto iptr = my_parent.my_data.data() + static_cast<std::size_t>(my_parent.my_new_locations[i]) * my_parent.my_dim; // cast to avoid overflow.
+        auto iptr = my_parent.my_data.data() + sanisizer::product_unsafe<std::size_t>(my_parent.my_new_locations[i], my_parent.my_dim);
 
         if (!output_indices && !output_distances) {
             Index_ count = 0;
@@ -176,11 +187,11 @@ private:
             std::swap(items[lower], items[i]);
             const auto& vantage = items[lower];
             node.index = vantage.second;
-            const Data_* vantage_ptr = coords + static_cast<std::size_t>(vantage.second) * my_dim; // cast to avoid overflow.
+            const Data_* vantage_ptr = coords + sanisizer::product_unsafe<std::size_t>(vantage.second, my_dim);
 
             // Compute distances to the new vantage point.
             for (Index_ i = lower + 1; i < upper; ++i) {
-                const Data_* loc = coords + static_cast<std::size_t>(items[i].second) * my_dim; // cast to avoid overflow.
+                const Data_* loc = coords + sanisizer::product_unsafe<std::size_t>(items[i].second, my_dim);
                 items[i].first = my_metric->raw(my_dim, vantage_ptr, loc);
             }
 
@@ -231,16 +242,16 @@ public:
             // so we'll just use a deterministically 'random' number to ensure
             // we get the same ties for any given dataset but a different stream
             // of numbers between datasets. Casting to get well-defined overflow. 
-            uint64_t base = 1234567890, m1 = my_obs, m2 = my_dim;
-            std::mt19937_64 rand(base * m1 +  m2);
+            const std::mt19937_64::result_type base = 1234567890, m1 = my_obs, m2 = my_dim;
+            std::mt19937_64 rand(base * m1 + m2);
 
             build(0, my_obs, my_data.data(), items, rand);
 
             // Resorting data in place to match order of occurrence within
             // 'nodes', for better cache locality.
-            std::vector<uint8_t> used(my_obs);
-            std::vector<Data_> buffer(my_dim);
-            my_new_locations.resize(my_obs);
+            auto used = sanisizer::create<std::vector<char> >(sanisizer::attest_gez(my_obs));
+            auto buffer = sanisizer::create<std::vector<Data_> >(sanisizer::attest_gez(my_dim));
+            sanisizer::resize(my_new_locations, sanisizer::attest_gez(my_obs));
             auto host = my_data.data();
 
             for (Index_ o = 0; o < num_obs; ++o) {
@@ -254,12 +265,12 @@ public:
                     continue;
                 }
 
-                auto optr = host + static_cast<std::size_t>(o) * my_dim;
+                auto optr = host + sanisizer::product_unsafe<std::size_t>(o, my_dim);
                 std::copy_n(optr, my_dim, buffer.begin());
                 Index_ replacement = current.index;
 
                 do {
-                    auto rptr = host + static_cast<std::size_t>(replacement) * my_dim;
+                    auto rptr = host + sanisizer::product_unsafe<std::size_t>(replacement, my_dim);
                     std::copy_n(rptr, my_dim, optr);
                     used[replacement] = 1;
 
@@ -277,7 +288,7 @@ public:
 
 private:
     void search_nn(Index_ curnode_index, const Data_* target, Distance_& max_dist, NeighborQueue<Index_, Distance_>& nearest) const { 
-        auto nptr = my_data.data() + static_cast<std::size_t>(curnode_index) * my_dim; // cast to avoid overflow.
+        auto nptr = my_data.data() + sanisizer::product_unsafe<std::size_t>(curnode_index, my_dim);
         Distance_ dist = my_metric->normalize(my_metric->raw(my_dim, nptr, target));
 
         // If current node is within the maximum distance:
@@ -311,7 +322,7 @@ private:
 
     template<bool count_only_, typename Output_>
     void search_all(Index_ curnode_index, const Data_* target, Distance_ threshold, Output_& all_neighbors) const { 
-        auto nptr = my_data.data() + static_cast<std::size_t>(curnode_index) * my_dim; // cast to avoid overflow.
+        auto nptr = my_data.data() + sanisizer::product_unsafe<std::size_t>(curnode_index, my_dim);
         Distance_ dist = my_metric->normalize(my_metric->raw(my_dim, nptr, target));
 
         // If current node is within the maximum distance:
@@ -354,6 +365,41 @@ public:
     auto initialize_known() const {
         return std::make_unique<VptreeSearcher<Index_, Data_, Distance_, DistanceMetric_> >(*this);
     }
+
+public:
+    void save(const std::filesystem::path& dir) const {
+        quick_save(dir / "ALGORITHM", vptree_prebuilt_save_name, std::strlen(vptree_prebuilt_save_name));
+        quick_save(dir / "DATA", my_data.data(), my_data.size());
+        quick_save(dir / "NUM_OBS", &my_obs, 1);
+        quick_save(dir / "NUM_DIM", &my_dim, 1);
+        quick_save(dir / "NODES", my_nodes.data(), my_nodes.size());
+        quick_save(dir / "NEW_LOCATIONS", my_new_locations.data(), my_new_locations.size());
+
+        const auto distdir = dir / "DISTANCE";
+        std::filesystem::create_directory(distdir);
+        my_metric->save(distdir);
+    }
+
+    VptreePrebuilt(const std::filesystem::path& dir) {
+        quick_load(dir / "NUM_OBS", &my_obs, 1);
+        quick_load(dir / "NUM_DIM", &my_dim, 1);
+
+        my_data.resize(sanisizer::product<I<decltype(my_data.size())> >(sanisizer::attest_gez(my_obs), my_dim));
+        quick_load(dir / "DATA", my_data.data(), my_data.size());
+
+        sanisizer::resize(my_nodes, sanisizer::attest_gez(my_obs));
+        quick_load(dir / "NODES", my_nodes.data(), my_nodes.size());
+
+        sanisizer::resize(my_new_locations, sanisizer::attest_gez(my_obs));
+        quick_load(dir / "NEW_LOCATIONS", my_new_locations.data(), my_new_locations.size());
+
+        auto dptr = load_distance_metric_raw<Data_, Distance_>(dir / "DISTANCE");
+        auto xptr = dynamic_cast<DistanceMetric_*>(dptr);
+        if (xptr == NULL) {
+            throw std::runtime_error("cannot cast the loaded distance metric to a DistanceMetric_");
+        }
+        my_metric.reset(xptr);
+    }
 };
 /**
  * @endcond
@@ -373,9 +419,18 @@ public:
  * This reduces the memory usage of the tree and total number of distance calculations for any search.
  * It can also be very useful when the concept of an intermediate is not well-defined (e.g., for non-numeric data), though this is not particularly relevant for **knncolle**.
  *
+ * Note that the VP tree search is theoretically "exact" but the behavior of the implementation will be affected by round-off error for floating-point inputs.
+ * Search decisions based on the triangle inequality may not be correct in some edge cases involving tied distances.
+ * This manifests as a different selection of neighbors compared to an exhaustive search (e.g., by `BruteforceBuilder`),
+ * typically when (i) an observation is equidistant to multiple other observations that are not duplicates of each other
+ * and (ii) the tied distances occur at the `k`-th nearest neighbor for `Searcher::search()` or are tied with `threshold` for `Searcher::search_all()`.
+ * In practice, any errors are very rare and can probably be ignored for most applications.
+ * If more accuracy is required, a partial mitigation is to just increase `k` or `threshold` to reduce the risk of incorrect search decisions,
+ * and then filter the results to the desired set of neighbors.
+ *
  * @tparam Index_ Integer type for the observation indices.
  * @tparam Data_ Numeric type for the input and query data.
- * @tparam Distance_ Floating point type for the distances.
+ * @tparam Distance_ Numeric type for the distances, usually floating-point.
  * @tparam Matrix_ Class of the input data matrix. 
  * This should satisfy the `Matrix` interface.
  * @tparam DistanceMetric_ Class implementing the distance metric calculation.
@@ -422,9 +477,10 @@ public:
         Index_ nobs = data.num_observations();
         auto work = data.new_known_extractor();
 
-        std::vector<Data_> store(ndim * static_cast<std::size_t>(nobs)); // cast to avoid overflow.
+        // We assume that that vector::size_type <= size_t, otherwise data() wouldn't be a contiguous array.
+        std::vector<Data_> store(sanisizer::product<typename std::vector<Data_>::size_type>(ndim, sanisizer::attest_gez(nobs)));
         for (Index_ o = 0; o < nobs; ++o) {
-            std::copy_n(work->next(), ndim, store.begin() + static_cast<std::size_t>(o) * ndim); // cast to avoid overflow.
+            std::copy_n(work->next(), ndim, store.data() + sanisizer::product_unsafe<std::size_t>(o, ndim));
         }
 
         return new VptreePrebuilt<Index_, Data_, Distance_, DistanceMetric_>(ndim, nobs, std::move(store), my_metric);
@@ -434,14 +490,14 @@ public:
      * Override to assist devirtualization.
      */
     auto build_known_unique(const Matrix_& data) const {
-        return std::unique_ptr<std::remove_reference_t<decltype(*build_known_raw(data))> >(build_known_raw(data));
+        return std::unique_ptr<I<decltype(*build_known_raw(data))> >(build_known_raw(data));
     }
 
     /**
      * Override to assist devirtualization.
      */
     auto build_known_shared(const Matrix_& data) const {
-        return std::shared_ptr<std::remove_reference_t<decltype(*build_known_raw(data))> >(build_known_raw(data));
+        return std::shared_ptr<I<decltype(*build_known_raw(data))> >(build_known_raw(data));
     }
 };
 

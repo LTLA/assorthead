@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <cstddef>
+#include <filesystem>
 
 #include "Searcher.hpp"
 
@@ -22,7 +23,7 @@ namespace knncolle {
  *
  * @tparam Index_ Integer type for the observation indices.
  * @tparam Data_ Numeric type for the query data.
- * @tparam Distance_ Floating point type for the distances.
+ * @tparam Distance_ Numeric type for the distances, usually floating-point.
  */
 template<typename Index_, typename Data_, typename Distance_>
 class Prebuilt {
@@ -57,6 +58,34 @@ public:
      * @return Pointer to a `Searcher` instance.
      */
     virtual std::unique_ptr<Searcher<Index_, Data_, Distance_> > initialize() const = 0;
+
+    /**
+     * Save the prebuilt index to disk, to be reloaded with `load_prebuilt_raw()` and friends.
+     *
+     * An implementation of this method should create an `ALGORITHM` file inside `dir` that contains the search algorithm's name.
+     * This should be an ASCII file with no newlines, where the algorithm name should follow the `<library>::<algorithm>` format, e.g., `knncolle::Vptree`.
+     * This will be used by `load_prebuilt_raw()` to determine the exact loader function to call. 
+     *
+     * Other than the `ALGORITHM` file, each implementation may create any number of additional files/directories of any format inside `dir`.
+     * We recommend that the name of each file/directory immediately starts with an upper case letter and is in all-capitals.
+     * This allows applications to add more custom files without the risk of conflicts, e.g., by naming them without an upper-case letter. 
+     *
+     * An implementation of this method is not required to use portable file formats.
+     * `load_prebuilt_raw()` is only expected to work on the same system (i.e., architecture, compiler, compilation settings) that was used for the `save()` call.
+     * Any additional portability is at the discretion of the implementation, e.g., it is common to assume IEEE floating-point and two's-complement integers.
+     *
+     * An implementation of this method is not required to create files that are readable by different versions of the implementation. 
+     * Thus, the files created by this method are generally unsuitable for archival storage.
+     * However, implementations are recommended to at least provide enough information to throw an exception if an incompatible version of `load_prebuilt_raw()` is used.
+     *
+     * If a subclass does not implement this method, an error is thrown by default.
+     *
+     * @param dir Path to a directory in which to save the index.
+     * This directory should already exist.
+     */
+    virtual void save([[maybe_unused]] const std::filesystem::path& dir) const {
+        throw std::runtime_error("saving is not supported");
+    }
 
 public:
     /**

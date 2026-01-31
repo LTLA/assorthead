@@ -10,7 +10,11 @@
 
 #include "Bruteforce.hpp"
 #include "Vptree.hpp"
+
 #include "find_nearest_neighbors.hpp"
+#include "load_prebuilt.hpp"
+
+#include "NumericType.hpp"
 
 /**
  * @file knncolle.hpp

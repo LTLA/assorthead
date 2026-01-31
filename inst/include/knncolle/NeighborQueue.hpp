@@ -1,9 +1,14 @@
 #ifndef KNNCOLLE_NEIGHBOR_QUEUE_HPP
 #define KNNCOLLE_NEIGHBOR_QUEUE_HPP
 
+#include "utils.hpp"
+
 #include <queue>
 #include <vector>
 #include <algorithm>
+#include <cassert>
+
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file NeighborQueue.hpp
@@ -24,7 +29,7 @@ namespace knncolle {
  * The appropriate `report()` overload can then be used to remove the observation of interest from its own neighbor list.
  *
  * @tparam Index_ Integer type for the observation indices.
- * @tparam Distance_ Floating point type for the distances.
+ * @tparam Distance_ Numeric type for the distances, usually floating-point.
  */
 template<typename Index_, typename Distance_>
 class NeighborQueue {
@@ -44,7 +49,7 @@ public:
      * This should be a positive integer.
      */
     void reset(Index_ k) {
-        my_neighbors = k;
+        my_neighbors = sanisizer::cast<I<decltype(my_neighbors)> >(sanisizer::attest_gez(k));
         my_full = false;
 
         // Popping any existing elements out, just in case. This shouldn't
@@ -109,7 +114,9 @@ public:
     void report(std::vector<Index_>* output_indices, std::vector<Distance_>* output_distances, Index_ self) {
         // We expect that nearest is non-empty, as a search should at least
         // find 'self' (or duplicates thereof).
-        auto num_expected = my_nearest.size() - 1u;
+        assert(!my_nearest.empty());
+        auto num_expected = my_nearest.size() - 1;
+
         if (output_indices) {
             output_indices->clear();
             output_indices->reserve(num_expected);
@@ -156,6 +163,31 @@ public:
         }
     } 
 
+private:
+    template<bool has_indices_, bool has_distances_>
+    void report_internal(std::vector<Index_>* output_indices, std::vector<Distance_>* output_distances) {
+        auto position = my_nearest.size();
+
+        if constexpr(has_indices_) {
+            sanisizer::resize(*output_indices, position);
+        }
+        if constexpr(has_distances_) {
+            sanisizer::resize(*output_distances, position);
+        }
+
+        while (!my_nearest.empty()) {
+            const auto& top = my_nearest.top();
+            --position;
+            if constexpr(has_indices_) {
+                (*output_indices)[position] = top.second;
+            }
+            if constexpr(has_distances_) {
+                (*output_distances)[position] = top.first;
+            }
+            my_nearest.pop();
+        }
+    } 
+
 public:
     /**
      * Report the indices and distances of the nearest neighbors in the queue.
@@ -168,26 +200,14 @@ public:
      * Otherwise, on output, this will have the same length as `*output_indices` and contain distances to each of those neighbors.
      */
     void report(std::vector<Index_>* output_indices, std::vector<Distance_>* output_distances) {
-        auto position = my_nearest.size();
-        if (output_indices) {
-            output_indices->resize(position);
+        if (output_indices && output_distances) {
+            report_internal<true, true>(output_indices, output_distances);
+        } else if (output_indices) {
+            report_internal<true, false>(output_indices, NULL);
+        } else if (output_distances) {
+            report_internal<false, true>(NULL, output_distances);
         }
-        if (output_distances) {
-            output_distances->resize(position);
-        }
-
-        while (!my_nearest.empty()) {
-            const auto& top = my_nearest.top();
-            --position;
-            if (output_indices) {
-                (*output_indices)[position] = top.second;
-            }
-            if (output_distances) {
-                (*output_distances)[position] = top.first;
-            }
-            my_nearest.pop();
-        }
-    } 
+    }
 
 private:
     bool my_full = false;
