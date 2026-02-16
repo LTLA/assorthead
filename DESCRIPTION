@@ -1,6 +1,6 @@
 Package: assorthead
-Version: 1.5.9
-Date: 2026-01-31
+Version: 1.5.10
+Date: 2026-02-17
 Title: Assorted Header-Only C++ Libraries
 Authors@R: person("Aaron", "Lun", role=c("cre", "aut"), email="infinite.monkeys.with.keyboards@gmail.com")
 Description:
@@ -25,3 +25,4 @@ biocViews:
     DataImport,
     DifferentialExpression,
     Alignment
+RoxygenNote: 7.3.3
