@@ -62,8 +62,12 @@ Markers<include_stat_, Index_, Stat_> choose_blocked_raw(
     const std::size_t ngroups = tatami_stats::total_groups/*<std::size_t>*/(label, NC);
     const std::size_t nblocks = tatami_stats::total_groups/*<std::size_t>*/(block, NC);
 
-    auto pqueues = sanisizer::create<std::vector<PairwiseTopQueues<Stat_, Index_> > >(options.num_threads);
     const auto num_keep = get_num_keep<Index_>(ngroups, options.number);
+    if (num_keep == 0 || NC == 0 || matrix.nrow() == 0) {
+        return report_empty_markers<include_stat_, Index_, Stat_>(ngroups);
+    }
+
+    auto pqueues = sanisizer::create<std::vector<PairwiseTopQueues<Stat_, Index_> > >(options.num_threads);
 
     // Creating the combinations between block and not.
     const auto ncombos = sanisizer::product<std::size_t>(ngroups, nblocks); // check that all producs below are safe.

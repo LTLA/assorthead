@@ -57,8 +57,12 @@ Markers<include_stat_, Index_, Stat_> choose_raw(
     auto group_sizes = tatami_stats::tabulate_groups(label, NC);
     const auto ngroups = group_sizes.size();
 
-    auto pqueues = sanisizer::create<std::vector<PairwiseTopQueues<Stat_, Index_> > >(options.num_threads);
     const auto num_keep = get_num_keep<Index_>(ngroups, options.number);
+    if (num_keep == 0 || NC == 0 || matrix.nrow() == 0) {
+        return report_empty_markers<include_stat_, Index_, Stat_>(ngroups);
+    }
+
+    auto pqueues = sanisizer::create<std::vector<PairwiseTopQueues<Stat_, Index_> > >(options.num_threads);
 
     scan_matrix<Stat_>(
         matrix,
