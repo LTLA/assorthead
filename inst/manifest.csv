@@ -50,6 +50,6 @@ uzuki2,https://github.com/ArtifactDB/uzuki2,v2.0.0,"Storing simple R lists insid
 ritsuko,https://github.com/ArtifactDB/ritsuko,v0.6.1,"Helper functions for ArtifactDB libraries"
 takane,https://github.com/ArtifactDB/takane,v0.9.0,"ArtifactDB file validators"
 chihaya,https://github.com/ArtifactDB/chihaya,v1.1.2,"A C++ validator for delayed array operations"
-sanisizer,https://github.com/LTLA/sanisizer,v0.2.0,"Sanitize sizes to avoid integer overflow"
+sanisizer,https://github.com/LTLA/sanisizer,v0.2.1,"Sanitize sizes to avoid integer overflow"
 topicks,https://github.com/libscran/topicks,v0.2.2,"Pick top genes for downstream analyses"
 factorize,https://github.com/libscran/factorize,v0.1.0,"Pick top genes for downstream analyses"

@@ -4,7 +4,7 @@
 #include <utility>
 
 #include "utils.hpp"
-#include "attest.hpp"
+#include "cast.hpp"
 
 /**
  * @file create.hpp
@@ -26,8 +26,7 @@ namespace sanisizer {
  */
 template<typename Container_, typename Value_>
 constexpr auto as_size_type(Value_ x) {
-    check_overflow<I<decltype(std::declval<Container_>().size())> >(x);
-    return get_value(x);
+    return cast<I<decltype(std::declval<Container_>().size())> >(x);
 }
 
 /**
