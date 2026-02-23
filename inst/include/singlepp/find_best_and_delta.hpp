@@ -7,8 +7,6 @@
 
 namespace singlepp {
 
-namespace internal {
-
 template<typename Label_, typename Float_>
 std::pair<Label_, Float_> find_best_and_delta(const std::vector<Float_>& scores) {
     if (scores.size() <= 1) {
@@ -32,8 +30,6 @@ std::pair<Label_, Float_> find_best_and_delta(const std::vector<Float_>& scores)
     }
     
     return std::pair<Label_, Float_>(best_idx, topscore - second);
-}
-
 }
 
 }

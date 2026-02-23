@@ -135,14 +135,12 @@ void classify_single(
     const ClassifySingleBuffers<Label_, Float_>& buffers,
     const ClassifySingleOptions<Float_>& options) 
 {
-    if (trained.get_test_nrow() != test.nrow()) {
+    if (trained.test_nrow() != test.nrow()) {
         throw std::runtime_error("number of rows in 'test' is not the same as that used to build 'trained'");
     }
-    internal::annotate_cells_single(
+    annotate_cells_single(
         test, 
-        trained.get_subset(),
-        trained.get_references(), 
-        trained.get_markers(), 
+        trained,
         options.quantile, 
         options.fine_tune, 
         options.fine_tune_threshold, 
@@ -154,48 +152,7 @@ void classify_single(
 }
 
 /**
- * Variant of `classify_single()` that should be used when the test and reference datasets do not have the same number/order of genes.
- * This is done by limiting the classification to the intersection of genes between the two datasets.
- *
- * @tparam Value_ Numeric type for the matrix values.
- * @tparam Index_ Integer type for the row/column indices.
- * @tparam Label_ Integer type for the reference labels.
- * @tparam Float_ Floating-point type for the correlations and scores.
- *
- * @param test Expression matrix of the test dataset, where rows are genes and columns are cells.
- * This should have the same order and identity of genes as the `test_nrow` and `test_id` used to create `trained`.
- * @param trained Classifier returned by `train_single_intersect()`.
- * @param[out] buffers Buffers in which to store the classification output.
- * Each non-`NULL` pointer should refer to an array of length equal to the number of columns in `test`.
- * @param options Further options.
- */
-template<typename Value_, typename Index_, typename Float_, typename Label_>
-void classify_single_intersect(
-    const tatami::Matrix<Value_, Index_>& test, 
-    const TrainedSingleIntersect<Index_, Float_>& trained,
-    const ClassifySingleBuffers<Label_, Float_>& buffers,
-    const ClassifySingleOptions<Float_>& options) 
-{
-    if (trained.get_test_nrow() != static_cast<Index_>(-1) && trained.get_test_nrow() != test.nrow()) {
-        throw std::runtime_error("number of rows in 'test' is not the same as that used to build 'trained'");
-    }
-    internal::annotate_cells_single(
-        test, 
-        trained.get_test_subset(),
-        trained.get_references(), 
-        trained.get_markers(), 
-        options.quantile, 
-        options.fine_tune, 
-        options.fine_tune_threshold, 
-        buffers.best, 
-        buffers.scores, 
-        buffers.delta,
-        options.num_threads
-    );
-}
-
-/**
- * @brief Results of `classify_single()` and `classify_single_intersect()`.
+ * @brief Results of `classify_single()` and `classify_single()`.
  * @tparam Label_ Integer type for the reference labels.
  * @tparam Float_ Floating-point type for the correlations and scores.
  */
@@ -235,28 +192,6 @@ struct ClassifySingleResults {
 };
 
 /**
- * @cond
- */
-namespace internal {
-
-template<typename Label_, typename Float_>
-ClassifySingleBuffers<Label_, Float_> results_to_buffers(ClassifySingleResults<Label_, Float_>& results) {
-    ClassifySingleBuffers<Label_, Float_> output;
-    output.best = results.best.data();
-    output.delta = results.delta.data();
-    output.scores.reserve(results.scores.size());
-    for (auto& s : results.scores) {
-        output.scores.emplace_back(s.data());
-    }
-    return output;
-}
-
-}
-/**
- * @endcond
- */
-
-/**
  * Overload of `classify_single()` that allocates space for the output statistics.
  *
  * @tparam Label_ Integer type for the reference labels.
@@ -277,36 +212,17 @@ ClassifySingleResults<Label_, Float_> classify_single(
     const TrainedSingle<Index_, Float_>& trained,
     const ClassifySingleOptions<Float_>& options) 
 {
-    ClassifySingleResults<Label_, Float_> output(test.ncol(), trained.get_references().size());
-    auto buffers = internal::results_to_buffers(output);
-    classify_single(test, trained, buffers, options);
-    return output;
-}
+    ClassifySingleResults<Label_, Float_> output(test.ncol(), trained.num_labels());
 
-/**
- * Overload of `classify_single_intersect()` that allocates space for the output statistics.
- *
- * @tparam Label_ Integer type for the reference labels.
- * @tparam Value_ Numeric type for the matrix values.
- * @tparam Index_ Integer type for the row/column indices.
- * @tparam Float_ Floating-point type for the correlations and scores.
- *
- * @param test Expression matrix of the test dataset, where rows are genes and columns are cells.
- * This should have the same order and identity of genes as the `test_nrow` and `test_ids` used to create `trained`.
- * @param trained Classifier returned by `train_single_intersect()`.
- * @param options Further options.
- *
- * @return Results of the classification for each cell in the test dataset.
- */ 
-template<typename Label_ = DefaultLabel, typename Value_, typename Index_, typename Float_>
-ClassifySingleResults<Label_, Float_> classify_single_intersect(
-    const tatami::Matrix<Value_, Index_>& test,
-    const TrainedSingleIntersect<Index_, Float_>& trained,
-    const ClassifySingleOptions<Float_>& options) 
-{
-    ClassifySingleResults<Label_, Float_> output(test.ncol(), trained.get_references().size());
-    auto buffers = internal::results_to_buffers(output);
-    classify_single_intersect(test, trained, buffers, options);
+    ClassifySingleBuffers<Label_, Float_> buffers;
+    buffers.best = output.best.data();
+    buffers.delta = output.delta.data();
+    buffers.scores.reserve(output.scores.size());
+    for (auto& s : output.scores) {
+        buffers.scores.emplace_back(s.data());
+    }
+
+    classify_single(test, trained, buffers, options);
     return output;
 }
 

@@ -9,7 +9,6 @@
 
 #include "Markers.hpp"
 #include "Intersection.hpp"
-#include "choose_classic_markers.hpp"
 #include "train_single.hpp"
 #include "train_integrated.hpp"
 #include "classify_single.hpp"

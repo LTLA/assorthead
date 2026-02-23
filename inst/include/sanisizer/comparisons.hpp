@@ -21,12 +21,9 @@ namespace sanisizer {
  * @param right Non-negative value on the right hand side of the comparison.
  *
  * @return Whether `left` is equal to `right`.
- * An error is thrown if either value is negative.
  */
 template<typename Left_, typename Right_>
 constexpr bool is_equal(Left_ left, Right_ right) {
-    check_negative(left);
-    check_negative(right);
     return as_unsigned(get_value(left)) == as_unsigned(get_value(right));
 }
 
@@ -40,12 +37,9 @@ constexpr bool is_equal(Left_ left, Right_ right) {
  * @param right Non-negative value on the right hand side of the comparison.
  *
  * @return Whether `left` is less than `right`.
- * An error is thrown if either value is negative.
  */
 template<typename Left_, typename Right_>
 constexpr bool is_less_than(Left_ left, Right_ right) {
-    check_negative(left);
-    check_negative(right);
     return as_unsigned(get_value(left)) < as_unsigned(get_value(right));
 }
 
@@ -59,12 +53,9 @@ constexpr bool is_less_than(Left_ left, Right_ right) {
  * @param right Non-negative value on the right hand side of the comparison.
  *
  * @return Whether `left` is less than or equal to `right`.
- * An error is thrown if either value is negative.
  */
 template<typename Left_, typename Right_>
 constexpr bool is_less_than_or_equal(Left_ left, Right_ right) {
-    check_negative(left);
-    check_negative(right);
     return as_unsigned(get_value(left)) <= as_unsigned(get_value(right));
 }
 
@@ -78,12 +69,9 @@ constexpr bool is_less_than_or_equal(Left_ left, Right_ right) {
  * @param right Non-negative value on the right hand side of the comparison.
  *
  * @return Whether `left` is greater than `right`.
- * An error is thrown if either value is negative.
  */
 template<typename Left_, typename Right_>
 constexpr bool is_greater_than(Left_ left, Right_ right) {
-    check_negative(left);
-    check_negative(right);
     return as_unsigned(get_value(left)) > as_unsigned(get_value(right));
 }
 
@@ -97,12 +85,9 @@ constexpr bool is_greater_than(Left_ left, Right_ right) {
  * @param right Non-negative value on the right hand side of the comparison.
  *
  * @return Whether `left` is greater than or equal to `right`.
- * An error is thrown if either value is negative.
  */
 template<typename Left_, typename Right_>
 constexpr bool is_greater_than_or_equal(Left_ left, Right_ right) {
-    check_negative(left);
-    check_negative(right);
     return as_unsigned(get_value(left)) >= as_unsigned(get_value(right));
 }
 
@@ -116,13 +101,9 @@ constexpr bool is_greater_than_or_equal(Left_ left, Right_ right) {
  * @param second Second non-negative value. 
  *
  * @return The smaller of `first` and `second`, in the smaller integer type of `First_` and `Second_`.
- * An error is thrown if either value is negative.
  */
 template<typename First_, typename Second_>
 constexpr auto min(First_ first, Second_ second) {
-    check_negative(first);
-    check_negative(second);
-
     const auto fval = get_value(first);
     const auto sval = get_value(second);
     const bool first_larger = as_unsigned(fval) > as_unsigned(sval);
@@ -152,13 +133,9 @@ constexpr auto min(First_ first, Second_ second) {
  * @param second Second non-negative value. 
  *
  * @return The larger of `first` and `second`, in the larger integer type of `First_` and `Second_`.
- * An error is thrown if either value is negative.
  */
 template<typename First_, typename Second_>
 constexpr auto max(First_ first, Second_ second) {
-    check_negative(first);
-    check_negative(second);
-
     const auto fval = get_value(first);
     const auto sval = get_value(second);
     const bool first_larger = as_unsigned(fval) > as_unsigned(sval);

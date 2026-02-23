@@ -23,7 +23,7 @@ namespace singlepp {
  *
  * Typically, the first element of the pair contains the row index of a gene in the test dataset,
  * while the second element of the pair contains the row index of the same gene in the reference dataset.
- * This convention is used by `intersect_genes()`, `train_single_intersect()` and `prepare_integrated_input_intersect()`.
+ * This convention is used by `intersect_genes()` and the relevant overloads of `train_single()` and `prepare_integrated_input()`.
  *
  * A row index for a matrix should occur no more than once in the `Intersection` object.
  * That is, all the first elements should be unique and all of the second elements should be unique.

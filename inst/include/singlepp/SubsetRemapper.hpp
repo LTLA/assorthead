@@ -7,10 +7,9 @@
 #include <limits>
 #include <cstddef>
 #include <type_traits>
+#include <cassert>
 
 namespace singlepp {
-
-namespace internal {
 
 /*
  * This class remaps the indices in the RankVector to the subset of interest.
@@ -39,70 +38,60 @@ namespace internal {
 template<typename Index_>
 class SubsetRemapper {
 private:
+    Index_ my_capacity;
+
     // This uses a vector instead of an unordered_map for fast remap()
     // inside the inner loop of the fine-tuning iterations.
-    std::vector<std::pair<bool, Index_> > my_mapping;
+    std::vector<Index_> my_mapping;
     std::vector<Index_> my_used;
-    Index_ my_counter = 0;
 
 public:
+    SubsetRemapper(const Index_ capacity) : my_capacity(capacity) {
+        sanisizer::resize(my_mapping, capacity, capacity);
+        sanisizer::reserve(my_used, capacity);
+    }
+
     void add(Index_ i) {
-        if (static_cast<typename std::make_unsigned<Index_>::type>(i) >= my_mapping.size()) {
-            my_mapping.resize(i + 1);
-        }
-        if (!my_mapping[i].first) {
-            my_mapping[i].first = true;
-            my_mapping[i].second = my_counter;
+        assert(i < my_capacity);
+        if (my_mapping[i] == my_capacity) {
+            my_mapping[i] = my_used.size();
             my_used.push_back(i);
-            ++my_counter;
         }
     }
 
     void clear() {
-        my_counter = 0;
         for (auto u : my_used) {
-            my_mapping[u].first = false;
+            my_mapping[u] = my_capacity;
         }
         my_used.clear();
     }
 
-    void reserve(typename decltype(my_mapping)::size_type n) {
-        my_mapping.reserve(n);
+    Index_ size() const {
+        return my_used.size();
+    }
+
+    Index_ capacity() const {
+        return my_capacity;
     }
 
 public:
     template<typename Stat_>
-    void remap(const RankedVector<Stat_, Index_>& input, RankedVector<Stat_, Index_>& output) const {
+    void remap(typename RankedVector<Stat_, Index_>::const_iterator begin, typename RankedVector<Stat_, Index_>::const_iterator end, RankedVector<Stat_, Index_>& output) const {
         output.clear();
-
-        auto mapsize = my_mapping.size();
-        if (static_cast<typename std::make_unsigned<Index_>::type>(std::numeric_limits<Index_>::max()) < mapsize) {
-            // Avoid unnecessary check if the size is already greater than the largest possible index.
-            // This also avoids the need to cast indices to size_t for comparison to my_mapping.size().
-            for (const auto& x : input) {
-                const auto& target = my_mapping[x.second];
-                if (target.first) {
-                    output.emplace_back(x.first, target.second);
-                }
-            }
-
-        } else {
-            // Otherwise, it is safe to cast the size to Index_ outside the
-            // loop so that we don't need to cast x.second to size_t inside the loop.
-            Index_ maxed = mapsize;
-            for (const auto& x : input) {
-                if (maxed > x.second) {
-                    const auto& target = my_mapping[x.second];
-                    if (target.first) {
-                        output.emplace_back(x.first, target.second);
-                    }
-                }
+        for (; begin != end; ++begin) {
+            assert(sanisizer::is_less_than(begin->second, my_capacity));
+            const auto& target = my_mapping[begin->second];
+            if (target != my_capacity) {
+                output.emplace_back(begin->first, target);
             }
         }
     }
-};
 
-}
+    template<typename Stat_>
+    void remap(const RankedVector<Stat_, Index_>& input, RankedVector<Stat_, Index_>& output) const {
+        remap(input.begin(), input.end(), output);
+    }
+};
 
 }
 

@@ -14,8 +14,8 @@
 namespace sanisizer {
 
 /**
- * Cast an integer to the type of the size of a container.
- * This protects against overflow when using this integer in the container's constructor or `resize()` method.
+ * Cast an integer to the size type of a container.
+ * This protects against overflow when using this integer in the container's constructor or `resize()`/`reserve()` methods.
  *
  * @tparam Container_ Container class with a `size()` method and a constructor that accepts the size as the first argument.
  * @tparam Value_ Integer type of the input size.
@@ -23,19 +23,16 @@ namespace sanisizer {
  * @param x Non-negative value representing the desired container size.
  *
  * @return `x` as the container's size's type.
- * If overflow would occur, an `OverflowError` is raised.
  */
-template<class Container_, typename Value_>
+template<typename Container_, typename Value_>
 constexpr auto as_size_type(Value_ x) {
-    check_negative(x);
-    typedef I<decltype(std::declval<Container_>().size())> Size;
-    check_overflow<Size>(x);
-    return static_cast<Size>(get_value(x));
+    check_overflow<I<decltype(std::declval<Container_>().size())> >(x);
+    return get_value(x);
 }
 
 /**
  * Create a new container of a specified size.
- * This protects against overflow when casting the integer size to the container's size type.
+ * This protects against overflow when casting the integer size to the container's size type, see `as_size_type()` for details.
  *
  * @tparam Container_ Container class with a `size()` method and a constructor that accepts the size as the first argument.
  * @tparam Value_ Integer type of the input size.
@@ -45,7 +42,6 @@ constexpr auto as_size_type(Value_ x) {
  * @param args Additional arguments to pass to the `Container_` constructor after the size.
  *
  * @return An instance of the container, constructed to be of size `x`.
- * If overflow would occur, an `OverflowError` is raised.
  */
 template<class Container_, typename Value_, typename ... Args_>
 Container_ create(Value_ x, Args_&&... args) {
@@ -54,7 +50,7 @@ Container_ create(Value_ x, Args_&&... args) {
 
 /**
  * Resize a container to the desired size.
- * This protects against overflow when casting the integer size to the container's size type.
+ * This protects against overflow when casting the integer size to the container's size type, see `as_size_type()` for details.
  *
  * @tparam Container_ Container class with a `size()` method and a `resize()` method that accepts the size as the first argument.
  * @tparam Value_ Integer type of the input size.
@@ -63,12 +59,29 @@ Container_ create(Value_ x, Args_&&... args) {
  * @param container An existing instance of the container.
  * This is resized to size `x`.
  * @param x Non-negative value representing the desired container size.
- * If this would overflow the container's size type, an `OverflowError` is raised.
  * @param args Additional arguments to pass to `resize()` after the size.
  */
 template<class Container_, typename Value_, typename ... Args_>
 void resize(Container_& container, Value_ x, Args_&&... args) {
     container.resize(as_size_type<Container_>(x), std::forward<Args_>(args)...);
+}
+
+/**
+ * Reserve a container to the desired size.
+ * This protects against overflow when casting the integer size to the container's size type, see `as_size_type()` for details.
+ *
+ * @tparam Container_ Container class with a `size()` method and a `reserve()` method that accepts the size as the first argument.
+ * @tparam Value_ Integer type of the input size.
+ * @tparam Args_ Further arguments to pass to the container's `reserve()` method.
+ *
+ * @param container An existing instance of the container.
+ * On return, its allocation is set to `x`.
+ * @param x Non-negative value representing the desired container size.
+ * @param args Additional arguments to pass to `reserve()` after the size.
+ */
+template<class Container_, typename Value_, typename ... Args_>
+void reserve(Container_& container, Value_ x, Args_&&... args) {
+    container.reserve(as_size_type<Container_>(x), std::forward<Args_>(args)...);
 }
 
 }

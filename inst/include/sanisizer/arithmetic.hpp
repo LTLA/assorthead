@@ -33,11 +33,9 @@ constexpr bool needs_sum_check() {
 
 template<typename Dest_, typename First_, typename Second_>
 constexpr auto sum_protected(First_ first, Second_ second) {
-    check_negative(first);
     check_overflow<Dest_>(first);
     const Dest_ first_val = get_value(first);
 
-    check_negative(second);
     check_overflow<Dest_>(second);
     const Dest_ second_val = get_value(second);
 
@@ -45,13 +43,13 @@ constexpr auto sum_protected(First_ first, Second_ second) {
         static_assert(std::is_integral<Dest_>::value);
         constexpr Dest_ dest_maxed = std::numeric_limits<Dest_>::max();
         if (static_cast<Dest_>(dest_maxed - first_val) < second_val) {
-            throw std::overflow_error("overflow detected in sanisize::sum");
+            throw std::overflow_error("overflow detected in sanisizer::sum");
         }
-        return Attestation<Dest_, true, dest_maxed>(static_cast<Dest_>(first_val + second_val));
+        return Attestation<Dest_, dest_maxed>(static_cast<Dest_>(first_val + second_val));
 
     } else {
         constexpr Dest_ maxsum = static_cast<Dest_>(get_max<First_>()) + static_cast<Dest_>(get_max<Second_>());
-        return Attestation<Dest_, true, maxsum>(static_cast<Dest_>(first_val + second_val));
+        return Attestation<Dest_, maxsum>(static_cast<Dest_>(first_val + second_val));
     }
 }
 
@@ -92,7 +90,7 @@ constexpr Dest_ sum_unprotected(First_ first, Second_ second, Args_... more) {
  * @param more Additional non-negative values to add.
  *
  * @return Sum of all arguments as a `Dest_`.
- * An error is raised if any values are negative or if an overflow would occur.
+ * An error is raised if an overflow would occur.
  */
 template<typename Dest_, typename First_, typename ... Args_>
 constexpr Dest_ sum(First_ first, Args_... more) {
@@ -137,11 +135,9 @@ constexpr bool needs_product_check() {
 
 template<typename Dest_, typename First_, typename Second_>
 constexpr auto product_protected(First_ first, Second_ second) {
-    check_negative(first);
     check_overflow<Dest_>(first);
     const Dest_ first_val = get_value(first);
 
-    check_negative(second);
     check_overflow<Dest_>(second);
     const Dest_ second_val = get_value(second);
 
@@ -149,13 +145,13 @@ constexpr auto product_protected(First_ first, Second_ second) {
         static_assert(std::is_integral<Dest_>::value);
         constexpr Dest_ dest_maxed = std::numeric_limits<Dest_>::max();
         if (first_val && static_cast<Dest_>(dest_maxed / first_val) < second_val) {
-            throw std::overflow_error("overflow detected in sanisize::product");
+            throw std::overflow_error("overflow detected in sanisizer::product");
         }
-        return Attestation<Dest_, true, dest_maxed>(static_cast<Dest_>(first_val * second_val));
+        return Attestation<Dest_, dest_maxed>(static_cast<Dest_>(first_val * second_val));
 
     } else {
         constexpr Dest_ maxprod = static_cast<Dest_>(get_max<First_>()) * static_cast<Dest_>(get_max<Second_>());
-        return Attestation<Dest_, true, maxprod>(static_cast<Dest_>(first_val * second_val));
+        return Attestation<Dest_, maxprod>(static_cast<Dest_>(first_val * second_val));
     }
 }
 
@@ -200,7 +196,7 @@ constexpr Dest_ product_unprotected(First_ left, Second_ right, Args_... more) {
  * @param more Additional non-negative values to multiply.
  *
  * @return Product of all arguments as a `Dest_`.
- * An error is raised if any values are negative or if an overflow would occur.
+ * An error is raised if an overflow would occur.
  */
 template<typename Dest_, typename First_, typename ... Args_>
 constexpr Dest_ product(First_ first, Args_... more) {

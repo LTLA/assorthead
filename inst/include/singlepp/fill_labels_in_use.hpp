@@ -7,8 +7,6 @@
 
 namespace singlepp {
 
-namespace internal {
-
 template<typename Stat_, typename Label_>
 std::pair<Label_, Stat_> fill_labels_in_use(const std::vector<Stat_>& scores, Stat_ threshold, std::vector<Label_>& in_use) {
     static_assert(std::is_floating_point<Stat_>::value);
@@ -74,8 +72,6 @@ std::pair<Label_, Stat_> update_labels_in_use(const std::vector<Stat_>& scores, 
 
     in_use.resize(counter);
     return std::make_pair(best_label, max_score - next_score); 
-}
-
 }
 
 }

@@ -15,11 +15,11 @@ namespace singlepp {
 
 /**
  * A vector of vectors of marker lists, with one list for each pairwise comparison between labels in the reference dataset.
- * This is used to determine which genes should be used to compute correlations in `train_single()` and `train_single_intersect()`.
+ * This is used to determine which genes should be used to compute correlations in `train_single()`. 
  *
  * For a `Markers` object `markers`, let us consider the vector at `markers[0][1]`.
  * This vector should contain a list of marker genes for label 0 compared to label 1.
- * Each gene is represented as the row index of the reference expression matrix, i.e., `ref` in `train_single()` and `train_single_intersect()`.
+ * Each gene is represented as the row index of the reference expression matrix, i.e., `ref` in `train_single()`. 
  * The vector should also be sorted by the "strength" of the markers such that the earliest entries are the strongest markers for that pairwise comparison.
  * Typically, this vector is created by identifying the genes that are upregulated in label 0 compared to 1 and sorting by decreasing effect size.
  * So, for example, `markers[0][1][0]` should contain the row index of the most upregulated gene in this comparison.

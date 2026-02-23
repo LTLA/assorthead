@@ -2,7 +2,6 @@
 #define SANISIZER_CAST_HPP
 
 #include "attest.hpp"
-#include "utils.hpp"
 
 /**
  * @file cast.hpp
@@ -22,11 +21,10 @@ namespace sanisizer {
  * @param x Non-negative value to be casted.
  *
  * @return `x` as its input type (or the corresponding integer type, if it was an `Attestation`).
- * An error is thrown if `x` is negative or overflow would occur.
+ * An error is thrown if overflow would occur.
  */
 template<typename Size_, typename Value_>
 constexpr auto can_cast(Value_ x) {
-    check_negative(x);
     check_overflow<Size_>(x);
     return get_value(x);
 }
@@ -42,7 +40,7 @@ constexpr auto can_cast(Value_ x) {
  * @param x Non-negative value to be casted.
  *
  * @return `x` as a `Dest_`.
- * An error is thrown if `x` is negative or overflow would occur.
+ * An error is thrown if overflow would occur.
  */
 template<typename Dest_, typename Value_>
 constexpr Dest_ cast(Value_ x) {

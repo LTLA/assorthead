@@ -49,10 +49,10 @@ bool float_to_int_overflows(Float_ floored_x) {
  * @tparam Integer_ Integer type.
  * @tparam Float_ Floating-point type.
  *
- * @param x Non-negative floating-point number, usually holding some kind of size. 
+ * @param x Floating-point number, usually holding some kind of size. 
  *
  * @return The value of `x` as an integer, after truncation.
- * An exception is raised if the input is non-finite or overflow would occur.
+ * An exception is raised if `x` is negative, non-finite or overflow would occur.
  */
 template<typename Integer_, typename Float_>
 Integer_ from_float(Float_ x) {
@@ -91,7 +91,6 @@ Integer_ from_float(Float_ x) {
  */
 template<typename Float_, typename Integer_>
 Float_ to_float(Integer_ x) {
-    check_negative(x);
     const auto val = get_value(x);
 
     // protect against the various -1 operations.
