@@ -104,6 +104,8 @@ inline void cluster_multilevel(const igraph_t* graph, const igraph_vector_t* wei
 /**
  * Overload of `cluster_multilevel()` that accepts C++ containers instead of the raw **igraph** pointers.
  *
+ * It is assumed that `igraph_setup()` or `raiigraph::initialize()` has already been called before running this function.
+ *
  * @param graph A graph.
  * Typically, the nodes are cells and edges are formed between similar cells.
  * @param weights Vector of weights of length equal to the number of edges in `graph`. 

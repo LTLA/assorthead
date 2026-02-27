@@ -232,9 +232,10 @@ template<
     typename Combo_,
     typename Stat_,
     class AucResultInitialize_,
-    class AucResultProcess_
+    class AucResultProcess_,
+    class AucResultFinalize_
 >
-void scan_matrix_by_row_custom_auc(
+int scan_matrix_by_row_custom_auc(
     const tatami::Matrix<Value_, Index_>& matrix, 
     const std::size_t ngroups,
     const Group_* const group,
@@ -248,8 +249,9 @@ void scan_matrix_by_row_custom_auc(
     std::vector<Stat_>& combo_vars,
     std::vector<Stat_>& combo_detected,
     const bool do_auc,
-    AucResultInitialize_ auc_result_init, // generate workspace for processing the final AUC results.
-    AucResultProcess_ auc_result_process, // process the pairwise AUC comparisons into the final AUC results.
+    AucResultInitialize_ auc_result_init, // generate workspace for processing the AUC results.
+    AucResultProcess_ auc_result_process, // process the pairwise AUC comparisons into AUC results for each gene.
+    AucResultFinalize_ auc_result_finalize, // finalize any AUC workspace handlinmg after AUC results are generated for all genes.
     const int num_threads
 ) {
     const Index_ NC = matrix.ncol();
@@ -266,7 +268,7 @@ void scan_matrix_by_row_custom_auc(
         assert(nblocks == 1);
     }
 
-    tatami::parallelize([&](const int t, const Index_ start, const Index_ length) -> void {
+    auto num_used = tatami::parallelize([&](const int t, const Index_ start, const Index_ length) -> void {
         auto vbuffer = tatami::create_container_of_Index_size<std::vector<Value_> >(NC);
         const bool do_means = !combo_means.empty();
         const bool do_detected = !combo_detected.empty();
@@ -428,7 +430,13 @@ void scan_matrix_by_row_custom_auc(
                 }
             }
         }
+
+        if (do_auc) {
+            auc_result_finalize(t, *auc_res_work);
+        }
     }, matrix.nrow(), num_threads);
+
+    return num_used;
 }
 
 template<
@@ -472,12 +480,14 @@ void scan_matrix_by_row_full_auc(
         combo_vars,
         combo_detected,
         /* do_auc = */ auc != NULL,
-        /* auc_result_initialize = */ [&](int) -> bool {
+        /* auc_result_initialize = */ [](int) -> bool {
             return false;
         },
         /* auc_result_process = */ [&](const Index_ gene, AucScanWorkspace<Value_, Group_, Stat_, Index_>& auc_work, bool) -> void {
             const auto auc_ptr = auc + sanisizer::product_unsafe<std::size_t>(gene, ngroups, ngroups);
             process_auc_for_rows(auc_work, ngroups, nblocks, threshold, auc_ptr);
+        },
+        /* auc_result_finalize = */ [](int, bool) -> void {
         },
         num_threads
     );

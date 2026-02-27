@@ -664,7 +664,7 @@ void score_markers_pairwise_blocked(
     const auto ngroups = output.mean.size();
     const auto nblocks = tatami_stats::total_groups(block, NC); 
 
-    const auto combinations = internal::create_combinations(ngroups, group, block, NC);
+    const auto combinations = internal::create_combinations(ngroups, group, nblocks, block, NC);
     const auto combo_sizes = internal::tabulate_combinations<Index_>(ngroups, nblocks, combinations);
     const auto ncombos = combo_sizes.size();
 

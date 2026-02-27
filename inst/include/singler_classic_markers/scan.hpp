@@ -10,22 +10,23 @@
 
 namespace singler_classic_markers {
 
-template<typename Stat_, typename Value_, typename Index_, typename Combo_, class Setup_, class Function_>
-void scan_matrix(
+template<typename Stat_, typename Value_, typename Index_, typename Combo_, class Setup_, class Function_, class Finalize_>
+int scan_matrix(
     const tatami::Matrix<Value_, Index_>& matrix,
     const std::size_t ncombos,
     const Combo_* combo,
-    const std::vector<Index_> combo_sizes,
+    const std::vector<Index_>& combo_sizes,
     Setup_ setup,
     Function_ fun,
+    Finalize_ finalize,
     const int num_threads
 ) {
     const auto NR = matrix.nrow();
     const auto NC = matrix.ncol();
 
-    tatami::parallelize([&](const int t, const Index_ start, const Index_ length) -> void {
+    return tatami::parallelize([&](const int t, const Index_ start, const Index_ length) -> void {
         auto vbuffer = tatami::create_container_of_Index_size<std::vector<Value_> >(NC);
-        auto customwork = setup(t);
+        auto customwork = setup();
 
         auto medians = sanisizer::create<std::vector<Stat_> >(ncombos);
         auto workspace = sanisizer::create<std::vector<std::vector<Value_> > >(ncombos);
@@ -50,7 +51,7 @@ void scan_matrix(
                     w.clear();
                 }
 
-                fun(t, r, medians, customwork);
+                fun(r, medians, customwork);
             }
 
         } else {
@@ -68,9 +69,11 @@ void scan_matrix(
                     w.clear();
                 }
 
-                fun(t, r, medians, customwork);
+                fun(r, medians, customwork);
             }
         }
+
+        finalize(t, customwork);
     }, NR, num_threads);
 }
 

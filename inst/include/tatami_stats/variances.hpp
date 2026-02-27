@@ -82,9 +82,10 @@ struct MockVector {
  * This uses the standard two-pass algorithm with naive accumulation of the sum of squared differences;
  * thus, it is best used with a sufficiently high-precision `Output_` like `double`.
  *
- * @tparam Output_ Type of the output data.
- * @tparam Value_ Type of the input data.
- * @tparam Index_ Type of the row/column indices.
+ * @tparam Output_ Floating-point type of the output data.
+ * This should be capable of storing NaNs.
+ * @tparam Value_ Numeric type of the input data.
+ * @tparam Index_ Integer type of the row/column indices.
  *
  * @param[in] value Pointer to an array of length `num`, containing the values of the structural non-zeros.
  * @param num_nonzero Length of the array pointed to by `value`.
@@ -162,9 +163,10 @@ std::pair<Output_, Output_> direct(const Value_* value, Index_ num_nonzero, Inde
  * This uses the standard two-pass algorithm with naive accumulation of the sum of squared differences;
  * thus, it is best used with a sufficiently high-precision `Output_` like `double`.
  *
- * @tparam Output_ Type of the output data.
- * @tparam Value_ Type of the input data.
- * @tparam Index_ Type of the row/column indices.
+ * @tparam Output_ Floating-point type of the output data.
+ * This should be capable of storing NaNs.
+ * @tparam Value_ Numeric type of the input data.
+ * @tparam Index_ Integer type of the row/column indices.
  *
  * @param[in] ptr Pointer to an array of length `num`, containing the values of the objective vector.
  * @param num Length of the objective vector, i.e., length of the array at `ptr`.
@@ -188,9 +190,10 @@ std::pair<Output_, Output_> direct(const Value_* ptr, Index_ num, bool skip_nan)
  * The idea is to repeatedly call `add()` for `ptr` corresponding to observed vectors from 0 to \f$m - 1\f$,
  * and then finally call `finish()` to obtain the mean and variance for each objective vector.
  *
- * @tparam Output_ Type of the output data.
- * @tparam Value_ Type of the input data.
- * @tparam Index_ Type of the row/column indices.
+ * @tparam Output_ Floating-point type of the output data.
+ * This should be capable of storing NaNs.
+ * @tparam Value_ Numeric type of the input data.
+ * @tparam Index_ Integer type of the row/column indices.
  */
 template<typename Output_, typename Value_, typename Index_>
 class RunningDense {
@@ -208,7 +211,7 @@ public:
         my_mean(mean),
         my_variance(variance),
         my_skip_nan(skip_nan),
-        my_ok_count(skip_nan ? tatami::can_cast_Index_to_container_size<decltype(my_ok_count)>(num) : static_cast<Index_>(0))
+        my_ok_count(skip_nan ? tatami::can_cast_Index_to_container_size<I<decltype(my_ok_count)> >(num) : static_cast<Index_>(0))
     {}
 
     /**
@@ -286,9 +289,10 @@ private:
  * Compute running means and variances from sparse data using Welford's method.
  * This does the same as `RunningDense` but for sparse observed vectors.
  *
- * @tparam Output_ Type of the output data.
- * @tparam Value_ Type of the input data.
- * @tparam Index_ Type of the row/column indices.
+ * @tparam Output_ Floating-point type of the output data.
+ * This should be capable of storing NaNs.
+ * @tparam Value_ Numeric type of the input data.
+ * @tparam Index_ Integer type of the row/column indices.
  */
 template<typename Output_, typename Value_, typename Index_>
 class RunningSparse {
@@ -308,10 +312,10 @@ public:
         my_num(num),
         my_mean(mean),
         my_variance(variance),
-        my_nonzero(tatami::can_cast_Index_to_container_size<decltype(my_nonzero)>(num)),
+        my_nonzero(tatami::can_cast_Index_to_container_size<I<decltype(my_nonzero)> >(num)),
         my_skip_nan(skip_nan),
         my_subtract(subtract),
-        my_nan(skip_nan ? tatami::can_cast_Index_to_container_size<decltype(my_nan)>(num) : static_cast<Index_>(0))
+        my_nan(skip_nan ? tatami::can_cast_Index_to_container_size<I<decltype(my_nan)> >(num) : static_cast<Index_>(0))
     {}
 
     /**
@@ -402,9 +406,10 @@ private:
  * This may use either Welford's method or the standard two-pass method,
  * depending on the dimension in `row` and the preferred access dimension of `p`.
  *
- * @tparam Value_ Type of the matrix value, should be numeric.
- * @tparam Index_ Type of the row/column indices.
- * @tparam Output_ Type of the output value.
+ * @tparam Value_ Numeric type of the input data.
+ * @tparam Index_ Integer type of the row/column indices.
+ * @tparam Output_ Floating-point type of the output data.
+ * This should be capable of storing NaNs.
  *
  * @param row Whether to compute the variance for each row.
  * If false, the variance is computed for each column instead.
@@ -498,9 +503,10 @@ void apply(bool row, const tatami::Matrix<Value_, Index_>* p, Output_* output, c
 /**
  * Wrapper around `apply()` for column variances.
  *
- * @tparam Output_ Type of the output value.
- * @tparam Value_ Type of the matrix value, should be numeric.
- * @tparam Index_ Type of the row/column indices.
+ * @tparam Output_ Floating-point type of the output data.
+ * This should be capable of storing NaNs.
+ * @tparam Value_ Numeric type of the input data.
+ * @tparam Index_ Integer type of the row/column indices.
  *
  * @param mat Instance of a `tatami::Matrix`.
  * @param vopt Variance calculation options.
@@ -539,9 +545,10 @@ std::vector<Output_> by_column(const tatami::Matrix<Value_, Index_>* p) {
 /**
  * Wrapper around `apply()` for column variances.
  *
- * @tparam Output_ Type of the output value.
- * @tparam Value_ Type of the matrix value, should be numeric.
- * @tparam Index_ Type of the row/column indices.
+ * @tparam Output_ Floating-point type of the output data.
+ * This should be capable of storing NaNs.
+ * @tparam Value_ Numeric type of the input data.
+ * @tparam Index_ Integer type of the row/column indices.
  *
  * @param mat Instance of a `tatami::Matrix`.
  * @param vopt Variance calculation options.

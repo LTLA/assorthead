@@ -37,12 +37,16 @@ public:
 
     const Value_* fetch(const Index_ i, Value_* const buffer) {
         const auto offset = sanisizer::product_unsafe<I<decltype(my_storage.size())> >(my_secondary, i);
+#ifndef TATAMI_DEBUG_FORCE_COPY
         if constexpr(has_data<Value_, Storage_>::value) {
             return my_storage.data() + offset;
         } else {
+#endif
             std::copy_n(my_storage.begin() + offset, my_secondary, buffer);
             return buffer;
+#ifndef TATAMI_DEBUG_FORCE_COPY
         }
+#endif
     }
 
 private:
@@ -58,12 +62,16 @@ public:
 
     const Value_* fetch(const Index_ i, Value_* const buffer) {
         const auto offset = sanisizer::nd_offset<I<decltype(my_storage.size())> >(my_block_start, my_secondary, i);
+#ifndef TATAMI_DEBUG_FORCE_COPY
         if constexpr(has_data<Value_, Storage_>::value) {
             return my_storage.data() + offset;
         } else {
+#endif
             std::copy_n(my_storage.begin() + offset, my_block_length, buffer);
             return buffer;
+#ifndef TATAMI_DEBUG_FORCE_COPY
         }
+#endif
     }
 
 private:
@@ -289,10 +297,10 @@ public:
         const bool row,
         std::shared_ptr<const Oracle<Index_> > oracle,
         const Index_ block_start,
-        const Index_ block_end,
+        const Index_ block_length,
         const Options& opt)
     const {
-        return std::make_unique<PseudoOracularDenseExtractor<Value_, Index_> >(std::move(oracle), dense(row, block_start, block_end, opt));
+        return std::make_unique<PseudoOracularDenseExtractor<Value_, Index_> >(std::move(oracle), dense(row, block_start, block_length, opt));
     }
 
     std::unique_ptr<OracularDenseExtractor<Value_, Index_> > dense(const bool row, std::shared_ptr<const Oracle<Index_> > oracle, VectorPtr<Index_> indices_ptr, const Options& opt) const {
@@ -311,10 +319,10 @@ public:
         const bool row,
         std::shared_ptr<const Oracle<Index_> > oracle,
         const Index_ block_start,
-        const Index_ block_end,
+        const Index_ block_length,
         const Options& opt)
     const {
-        return std::make_unique<PseudoOracularSparseExtractor<Value_, Index_> >(std::move(oracle), sparse(row, block_start, block_end, opt));
+        return std::make_unique<PseudoOracularSparseExtractor<Value_, Index_> >(std::move(oracle), sparse(row, block_start, block_length, opt));
     }
 
     std::unique_ptr<OracularSparseExtractor<Value_, Index_> > sparse(const bool row, std::shared_ptr<const Oracle<Index_> > oracle, VectorPtr<Index_> indices_ptr, const Options& opt) const {

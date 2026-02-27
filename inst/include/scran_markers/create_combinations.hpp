@@ -18,7 +18,8 @@ namespace internal {
 // dimension. This 2D array layout is used for all 'combo_*'-prefixed arrays
 // like 'combo_weights', 'combo_means', etc.
 template<typename Group_, typename Block_>
-std::vector<std::size_t> create_combinations(const std::size_t ngroups, const Group_* const group, const Block_* const block, const std::size_t NC) {
+std::vector<std::size_t> create_combinations(const std::size_t ngroups, const Group_* const group, const std::size_t nblocks, const Block_* const block, const std::size_t NC) {
+    sanisizer::product<std::size_t>(ngroups, nblocks); // check that all products below are safe.
     auto combinations = sanisizer::create<std::vector<std::size_t> >(NC);
     for (I<decltype(NC)> c = 0; c < NC; ++c) {
         combinations[c] = sanisizer::nd_offset<std::size_t>(group[c], ngroups, block[c]); // group is the faster changing dimension.

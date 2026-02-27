@@ -72,10 +72,10 @@ Index_ translocate_nans(Value_* ptr, Index_& num) {
  * @param num Length of the objective vector, i.e., length of the array at `ptr`.
  * @param skip_nan See `Options::skip_nan` for details.
  *
- * @tparam Output_ Type of the output value.
- * This should be floating-point to store potential averages.
- * @tparam Value_ Type of the input values.
- * @tparam Index_ Type of the row/column indices.
+ * @tparam Output_ Floating-point type of the output value.
+ * This should be capable of storing NaNs.
+ * @tparam Value_ Numeric type of the input values.
+ * @tparam Index_ Integer type of the row/column indices.
  *
  * @return The median of values in `[ptr, ptr + n)`.
  */
@@ -128,10 +128,10 @@ Output_ direct(Value_* ptr, Index_ num, bool skip_nan) {
  * i.e., `num_all - num_nonzero` is the number of zeros.
  * @param skip_nan See `Options::skip_nan` for details.
  *
- * @tparam Output_ Type of the output value.
- * This should be floating-point to store potential averages.
- * @tparam Value_ Type of the input values.
- * @tparam Index_ Type of the row/column indices.
+ * @tparam Output_ Floating-point type of the output value.
+ * This should be capable of storing NaNs.
+ * @tparam Value_ Numeric type of the input values.
+ * @tparam Index_ Integer type of the row/column indices.
  *
  * @return The median of values in the sparse vector.
  */
@@ -222,10 +222,10 @@ Output_ direct(Value_* value, Index_ num_nonzero, Index_ num_all, bool skip_nan)
 /**
  * Compute medians for each element of a chosen dimension of a `tatami::Matrix`.
  *
- * @tparam Value_ Type of the matrix value, should be numeric.
- * @tparam Index_ Type of the row/column indices.
- * @tparam Output_ Type of the output value.
- * This should be floating-point to store potential averages.
+ * @tparam Value_ Numeric type of the input values.
+ * @tparam Index_ Integer type of the row/column indices.
+ * @tparam Output_ Floating-point type of the output value.
+ * This should be capable of storing NaNs.
  *
  * @param row Whether to compute the median for each row.
  * If false, the median is computed for each column instead.
@@ -283,10 +283,10 @@ void apply(bool row, const tatami::Matrix<Value_, Index_>* p, Output_* output, c
 /**
  * Wrapper around `apply()` for column medians.
  *
- * @tparam Output_ Type of the output.
- * This should be floating-point to store potential averages.
- * @tparam Value_ Type of the matrix value.
- * @tparam Index_ Type of the row/column indices.
+ * @tparam Output_ Floating-point type of the output value.
+ * This should be capable of storing NaNs.
+ * @tparam Value_ Numeric type of the input values.
+ * @tparam Index_ Integer type of the row/column indices.
  *
  * @param mat Instance of a `tatami::Matrix`.
  * @param mopt Median calculation options.
@@ -325,10 +325,10 @@ std::vector<Output_> by_column(const tatami::Matrix<Value_, Index_>* p) {
 /**
  * Wrapper around `apply()` for row medians.
  *
- * @tparam Output_ Type of the output.
- * This should be floating-point to store potential averages.
- * @tparam Value_ Type of the matrix value.
- * @tparam Index_ Type of the row/column indices.
+ * @tparam Output_ Floating-point type of the output value.
+ * This should be capable of storing NaNs.
+ * @tparam Value_ Numeric type of the input values.
+ * @tparam Index_ Integer type of the row/column indices.
  *
  * @param mat Instance of a `tatami::Matrix`.
  * @param mopt Median calculation options.

@@ -66,10 +66,10 @@ public:
 
         auto cache_size_in_elements = sanisizer::product<std::size_t>(my_secondary_dim_stats.chunk_length, primary_extract_length);
         if (my_needs_value) {
-            my_cache_data.resize(sanisizer::cast<decltype(my_cache_data.size())>(cache_size_in_elements));
+            sanisizer::resize(my_cache_data, cache_size_in_elements);
         }
         if (my_needs_index) {
-            my_cache_index.resize(sanisizer::cast<decltype(my_cache_index.size())>(cache_size_in_elements));
+            sanisizer::resize(my_cache_index, cache_size_in_elements);
         }
         tatami::resize_container_to_Index_size(my_cache_count, my_secondary_dim_stats.chunk_length);
 
@@ -79,9 +79,6 @@ public:
         for (Index_ i = 0; i < my_secondary_dim_stats.chunk_length; ++i, current_offset += primary_extract_length) {
             my_cache_offsets.push_back(current_offset);
         }
-
-        // Protect pointer differences against overflow when refining primary limits.
-        sanisizer::can_ptrdiff<decltype(my_index_buffer.begin())>(my_secondary_dim_stats.dimension_extent);
 
         // Check that resizing will work correctly for these vectors.
         tatami::can_cast_Index_to_container_size<decltype(my_index_buffer)>(my_secondary_dim_stats.dimension_extent);
@@ -171,7 +168,6 @@ private:
         }
 
         if (start != end && my_needs_value) {
-            // pointer difference won't overflow as we checked can_ptrdiff() in the constructor.
             const hsize_t refined_extraction_start = extraction_start + static_cast<hsize_t>(start - my_index_buffer.begin());
             const hsize_t refined_extraction_len = end - start;
             my_h5comp->dataspace.selectHyperslab(H5S_SELECT_SET, &refined_extraction_len, &refined_extraction_start);
@@ -253,15 +249,12 @@ public:
 
         auto alloc = sanisizer::product<std::size_t>(my_cache.get_max_slabs(), my_primary_extract_length);
         if (my_needs_index) {
-            my_cache_index.resize(sanisizer::cast<decltype(my_cache_index.size())>(alloc));
+            sanisizer::resize(my_cache_index, alloc);
         }
         if (my_needs_value) {
-            my_cache_data.resize(sanisizer::cast<decltype(my_cache_data.size())>(alloc));
+            sanisizer::resize(my_cache_data, alloc);
         }
         my_slab_ptrs.resize(tatami::cast_Index_to_container_size<decltype(my_slab_ptrs)>(my_secondary_dim), NULL);
-
-        // Protect pointer differences against overflow when refining primary limits.
-        sanisizer::can_ptrdiff<decltype(my_index_buffer.begin())>(my_secondary_dim);
 
         // Check that resizing will work correctly for these vectors.
         tatami::can_cast_Index_to_container_size<decltype(my_index_buffer)>(my_secondary_dim);
@@ -374,7 +367,7 @@ private:
                 }
                 if (my_needs_value) {
                     my_value_ptrs.push_back(slab_ptr->value + slab_ptr->number);
-                    my_found.push_back(x - start); // pointer subtraction is safe as we checked can_ptrdiff in the constructor.
+                    my_found.push_back(x - start);
                 }
                 ++(slab_ptr->number);
             }

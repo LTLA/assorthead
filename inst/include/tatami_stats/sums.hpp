@@ -44,9 +44,10 @@ struct Options {
  * Compute the sum across an objective vector using naive accumulation.
  * This is best used with a sufficiently high-precision `Output_`, hence the default of `double`.
  *
- * @tparam Output_ Type of the output data.
- * @tparam Value_ Type of the input data.
- * @tparam Index_ Type of the row/column index.
+ * @tparam Output_ Numeric type of the output value.
+ * It is assumed that this is large enough to store the sums. 
+ * @tparam Value_ Numeric type of the matrix value.
+ * @tparam Index_ Integer type of the row/column indices.
  *
  * @param[in] ptr Pointer to an array of length `num`, containing the values of the objective vector.
  * @param num Size of the array at `ptr`.
@@ -86,9 +87,10 @@ Output_ direct(const Value_* ptr, Index_ num, bool skip_nan) {
  * This class uses naive accumulation to obtain the sum for each objective vector.
  * Callers should use a sufficiently high-precision `Output_` such as `double` to mitigate round-off errors.
  *
- * @tparam Output_ Type of the output data.
- * @tparam Value_ Type of the input value.
- * @tparam Index_ Type of the row/column indices.
+ * @tparam Output_ Numeric type of the output value.
+ * It is assumed that this is large enough to store the sums. 
+ * @tparam Value_ Numeric type of the matrix value.
+ * @tparam Index_ Integer type of the row/column indices.
  */
 template<typename Output_, typename Value_, typename Index_>
 class RunningDense {
@@ -136,9 +138,10 @@ private:
  * Compute running sums from sparse data. 
  * This is the counterpart to `RunningDense`, but for sparse observed vectors.
  *
- * @tparam Output_ Type of the output data.
- * @tparam Value_ Type of the input value.
- * @tparam Index_ Type of the row/column indices.
+ * @tparam Output_ Numeric type of the output value.
+ * It is assumed that this is large enough to store the sums. 
+ * @tparam Value_ Numeric type of the matrix value.
+ * @tparam Index_ Integer type of the row/column indices.
  */
 template<typename Output_, typename Value_, typename Index_>
 class RunningSparse {
@@ -193,9 +196,10 @@ private:
  * Note that all sums are obtained using naive accumulation,
  * so it is best to use a sufficiently high-precision `Output_` to mitigate round-off errors.
  *
- * @tparam Value_ Type of the matrix value, should be numeric.
- * @tparam Index_ Type of the row/column indices.
- * @tparam Output_ Type of the output value.
+ * @tparam Value_ Numeric type of the matrix value.
+ * @tparam Index_ Integer type of the row/column indices.
+ * @tparam Output_ Numeric type of the output value.
+ * It is assumed that this is large enough to store the sums. 
  *
  * @param row Whether to compute the sum for each row.
  * If false, the sum is computed for each column instead.
@@ -292,9 +296,10 @@ void apply(bool row, const tatami::Matrix<Value_, Index_>* p, Output_* output, c
 /**
  * Wrapper around `apply()` for column sums.
  *
- * @tparam Value_ Type of the matrix value, should be summable.
- * @tparam Index_ Type of the row/column indices.
- * @tparam Output_ Type of the output value.
+ * @tparam Value_ Numeric type of the matrix value.
+ * @tparam Index_ Integer type of the row/column indices.
+ * @tparam Output_ Numeric type of the output value.
+ * It is assumed that this is large enough to store the sums. 
  *
  * @param mat Instance of a `tatami::Matrix`.
  * @param sopt Summation options.
@@ -332,9 +337,10 @@ std::vector<Output_> by_column(const tatami::Matrix<Value_, Index_>* p) {
 /**
  * Wrapper around `apply()` for row sums.
  *
- * @tparam Output_ Type of the output value.
- * @tparam Value_ Type of the matrix value, should be summable.
- * @tparam Index_ Type of the row/column indices.
+ * @tparam Output_ Numeric type of the output value.
+ * It is assumed that this is large enough to store the sums. 
+ * @tparam Value_ Numeric type of the matrix value.
+ * @tparam Index_ Integer type of the row/column indices.
  *
  * @param mat Instance of a `tatami::Matrix`.
  * @param sopt Summation options.

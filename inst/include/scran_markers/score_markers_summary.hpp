@@ -289,34 +289,33 @@ struct ScoreMarkersSummaryResults {
  */
 namespace internal {
 
+// Inner vector is optional as we might not need it if SummaryBuffers::min_rank=NULL for a group.
 template<typename Stat_, typename Index_>
-using MinrankTopQueues = std::vector<std::vector<topicks::TopQueue<Stat_, Index_> > >;
+using MinrankTopQueues = std::vector<std::optional<std::vector<topicks::TopQueue<Stat_, Index_> > > >;
 
 template<typename Stat_, typename Index_, typename Rank_>
 void preallocate_minrank_queues( 
     const std::size_t ngroups,
-    std::vector<MinrankTopQueues<Stat_, Index_> >& all_queues,
+    MinrankTopQueues<Stat_, Index_>& queue,
     const std::vector<SummaryBuffers<Stat_, Rank_> >& summaries,
     const Index_ limit,
-    const bool keep_ties,
-    const int num_threads
+    const bool keep_ties
 ) { 
     topicks::TopQueueOptions<Stat_> qopt;
     qopt.keep_ties = keep_ties;
     qopt.check_nan = true;
 
-    sanisizer::resize(all_queues, num_threads);
-    for (int t = 0; t < num_threads; ++t) {
-        sanisizer::resize(all_queues[t], ngroups);
+    sanisizer::resize(queue, ngroups);
+    for (I<decltype(ngroups)> g1 = 0; g1 < ngroups; ++g1) {
+        if (summaries[g1].min_rank == NULL) {
+            continue;
+        }
+        queue[g1].emplace();
 
-        for (I<decltype(ngroups)> g1 = 0; g1 < ngroups; ++g1) {
-            if (summaries[g1].min_rank == NULL) {
-                continue;
-            }
-
-            for (I<decltype(ngroups)> g2 = 0; g2 < ngroups; ++g2) {
-                all_queues[t][g1].emplace_back(limit, true, qopt);
-            }
+        auto& g_queue = *(queue[g1]);
+        sanisizer::reserve(g_queue, ngroups);
+        for (I<decltype(ngroups)> g2 = 0; g2 < ngroups; ++g2) {
+            g_queue.emplace_back(limit, true, qopt);
         }
     }
 }
@@ -337,10 +336,10 @@ void compute_summary_stats_per_gene(
         summarize_comparisons(ngroups, pairwise_buffer_ptr + in_offset, gr, gene, cursummary, summary_qcalcs, summary_buffer);
 
         if (cursummary.min_rank) {
-            auto& cur_queues = minrank_queues[gr];
+            auto& gr_queue = *(minrank_queues[gr]);
             for (I<decltype(ngroups)> gr2 = 0; gr2 < ngroups; ++gr2) {
                 if (gr != gr2) {
-                    cur_queues[gr2].emplace(pairwise_buffer_ptr[in_offset + gr2], gene);
+                    gr_queue[gr2].emplace(pairwise_buffer_ptr[in_offset + gr2], gene);
                 }
             }
         }
@@ -351,11 +350,19 @@ template<typename Stat_, typename Index_, typename Rank_>
 void report_minrank_from_queues(
     const Index_ ngenes,
     const std::size_t ngroups,
-    std::vector<MinrankTopQueues<Stat_, Index_> >& all_queues,
+    std::vector<std::optional<MinrankTopQueues<Stat_, Index_> > >& all_queues,
     const std::vector<SummaryBuffers<Stat_, Rank_> >& summaries,
     const int num_threads,
     const bool keep_ties
 ) {
+    if (all_queues.empty()) {
+        // If no queues were populated with ranks, this means that the matrix had no rows at all. 
+        // If that's the case, there's no point iterating through the groups.
+        // We don't need to fill the min_rank array because ngenes == 0.
+        // Thus, we can just return immediately.
+        return;
+    }
+
     tatami::parallelize([&](const int, const std::size_t start, const std::size_t length) -> void {
         std::vector<Index_> tie_buffer;
 
@@ -369,15 +376,20 @@ void report_minrank_from_queues(
             const auto maxrank_placeholder = sanisizer::cast<Rank_>(ngenes);
             std::fill_n(mr_out, ngenes, maxrank_placeholder);
 
+            auto& first_mr_queue = *(all_queues.front());
             for (I<decltype(ngroups)> gr2 = 0; gr2 < ngroups; ++gr2) {
                 if (gr == gr2) {
                     continue;
                 }
-                auto& current_out = all_queues.front()[gr][gr2];
+
+                // Moving contents into a thread-local variable to minimize false sharing,
+                // at least while we repeatedly update the queue within this thread.
+                auto current_out = std::move((*(first_mr_queue[gr]))[gr2]);
 
                 const auto num_queues = all_queues.size();
                 for (I<decltype(num_queues)> q = 1; q < num_queues; ++q) {
-                    auto& current_in = all_queues[q][gr][gr2];
+                    auto& current_mr_queue = *(all_queues[q]);
+                    auto current_in = std::move((*(current_mr_queue[gr]))[gr2]); // moving it to minimize false sharing.
                     while (!current_in.empty()) {
                         current_out.push(current_in.top());
                         current_in.pop();
@@ -434,15 +446,15 @@ void process_simple_summary_effects(
     const ScoreMarkersSummaryBuffers<Stat_, Rank_>& output,
     const int num_threads
 ) {
-    std::vector<MinrankTopQueues<Stat_, Index_> > cohens_d_minrank_all_queues, delta_mean_minrank_all_queues, delta_detected_minrank_all_queues;
+    std::optional<std::vector<std::optional<MinrankTopQueues<Stat_, Index_> > > > cohens_d_minrank_all_queues, delta_mean_minrank_all_queues, delta_detected_minrank_all_queues;
     if (output.cohens_d.size()) {
-        preallocate_minrank_queues(ngroups, cohens_d_minrank_all_queues, output.cohens_d, minrank_limit, minrank_keep_ties, num_threads);
+        cohens_d_minrank_all_queues.emplace(sanisizer::cast<I<decltype(cohens_d_minrank_all_queues->size())> >(num_threads));
     }
     if (output.delta_mean.size()) {
-        preallocate_minrank_queues(ngroups, delta_mean_minrank_all_queues, output.delta_mean, minrank_limit, minrank_keep_ties, num_threads);
+        delta_mean_minrank_all_queues.emplace(sanisizer::cast<I<decltype(delta_mean_minrank_all_queues->size())> >(num_threads));
     }
     if (output.delta_detected.size()) {
-        preallocate_minrank_queues(ngroups, delta_detected_minrank_all_queues, output.delta_detected, minrank_limit, minrank_keep_ties, num_threads);
+        delta_detected_minrank_all_queues.emplace(sanisizer::cast<I<decltype(delta_detected_minrank_all_queues->size())> >(num_threads));
     }
 
     std::optional<std::vector<Stat_> > total_weights_per_group;
@@ -466,7 +478,7 @@ void process_simple_summary_effects(
     }
 
     const auto ngroups2 = sanisizer::product<typename std::vector<Stat_>::size_type>(ngroups, ngroups);
-    tatami::parallelize([&](const int t, const Index_ start, const Index_ length) -> void {
+    const auto nused = tatami::parallelize([&](const int t, const Index_ start, const Index_ length) -> void {
         std::vector<Stat_> pairwise_buffer(ngroups2);
         std::vector<Stat_> summary_buffer(ngroups);
         auto summary_qcalcs = setup_multiple_quantiles<Stat_>(summary_quantiles, ngroups);
@@ -477,6 +489,20 @@ void process_simple_summary_effects(
             qbuffer.emplace();
             qrevbuffer.emplace();
             qcalc.emplace(nblocks, average_info.quantile());
+        }
+
+        std::optional<MinrankTopQueues<Stat_, Index_> > cohens_d_minrank_queue, delta_mean_minrank_queue, delta_detected_minrank_queue;
+        if (output.cohens_d.size()) {
+            cohens_d_minrank_queue.emplace();
+            preallocate_minrank_queues(ngroups, *cohens_d_minrank_queue, output.cohens_d, minrank_limit, minrank_keep_ties);
+        }
+        if (output.delta_mean.size()) {
+            delta_mean_minrank_queue.emplace();
+            preallocate_minrank_queues(ngroups, *delta_mean_minrank_queue, output.delta_mean, minrank_limit, minrank_keep_ties);
+        }
+        if (output.delta_detected.size()) {
+            delta_detected_minrank_queue.emplace();
+            preallocate_minrank_queues(ngroups, *delta_detected_minrank_queue, output.delta_detected, minrank_limit, minrank_keep_ties);
         }
 
         for (Index_ gene = start, end = start + length; gene < end; ++gene) {
@@ -508,7 +534,7 @@ void process_simple_summary_effects(
                 } else {
                     compute_pairwise_cohens_d_blockquantile(tmp_means, tmp_variances, ngroups, nblocks, threshold, *qbuffer, *qrevbuffer, *qcalc, pairwise_buffer.data());
                 }
-                compute_summary_stats_per_gene(gene, ngroups, pairwise_buffer.data(), summary_buffer, summary_qcalcs, cohens_d_minrank_all_queues[t], output.cohens_d);
+                compute_summary_stats_per_gene(gene, ngroups, pairwise_buffer.data(), summary_buffer, summary_qcalcs, *cohens_d_minrank_queue, output.cohens_d);
             }
 
             if (output.delta_mean.size()) {
@@ -518,7 +544,7 @@ void process_simple_summary_effects(
                 } else {
                     compute_pairwise_simple_diff_blockquantile(tmp_means, ngroups, nblocks, *qbuffer, *qcalc, pairwise_buffer.data());
                 }
-                compute_summary_stats_per_gene(gene, ngroups, pairwise_buffer.data(), summary_buffer, summary_qcalcs, delta_mean_minrank_all_queues[t], output.delta_mean);
+                compute_summary_stats_per_gene(gene, ngroups, pairwise_buffer.data(), summary_buffer, summary_qcalcs, *delta_mean_minrank_queue, output.delta_mean);
             }
 
             if (output.delta_detected.size()) {
@@ -528,21 +554,33 @@ void process_simple_summary_effects(
                 } else {
                     compute_pairwise_simple_diff_blockquantile(tmp_det, ngroups, nblocks, *qbuffer, *qcalc, pairwise_buffer.data());
                 }
-                compute_summary_stats_per_gene(gene, ngroups, pairwise_buffer.data(), summary_buffer, summary_qcalcs, delta_detected_minrank_all_queues[t], output.delta_detected);
+                compute_summary_stats_per_gene(gene, ngroups, pairwise_buffer.data(), summary_buffer, summary_qcalcs, *delta_detected_minrank_queue, output.delta_detected);
             }
+        }
+
+        // Only flushing it to the output buffer at the very end to minimize false sharing.
+        if (output.cohens_d.size()) {
+            (*cohens_d_minrank_all_queues)[t] = std::move(cohens_d_minrank_queue);
+        }
+        if (output.delta_mean.size()) {
+            (*delta_mean_minrank_all_queues)[t] = std::move(delta_mean_minrank_queue);
+        }
+        if (output.delta_detected.size()) {
+            (*delta_detected_minrank_all_queues)[t] = std::move(delta_detected_minrank_queue);
         }
     }, ngenes, num_threads);
 
     if (output.cohens_d.size()) {
-        report_minrank_from_queues(ngenes, ngroups, cohens_d_minrank_all_queues, output.cohens_d, num_threads, minrank_keep_ties);
+        cohens_d_minrank_all_queues->resize(nused);
+        report_minrank_from_queues(ngenes, ngroups, *cohens_d_minrank_all_queues, output.cohens_d, num_threads, minrank_keep_ties);
     }
-
     if (output.delta_mean.size()) {
-        report_minrank_from_queues(ngenes, ngroups, delta_mean_minrank_all_queues, output.delta_mean, num_threads, minrank_keep_ties);
+        delta_mean_minrank_all_queues->resize(nused);
+        report_minrank_from_queues(ngenes, ngroups, *delta_mean_minrank_all_queues, output.delta_mean, num_threads, minrank_keep_ties);
     }
-
     if (output.delta_detected.size()) {
-        report_minrank_from_queues(ngenes, ngroups, delta_detected_minrank_all_queues, output.delta_detected, num_threads, minrank_keep_ties);
+        delta_detected_minrank_all_queues->resize(nused);
+        report_minrank_from_queues(ngenes, ngroups, *delta_detected_minrank_all_queues, output.delta_detected, num_threads, minrank_keep_ties);
     }
 }
 
@@ -675,25 +713,23 @@ void score_markers_summary(
     internal::validate_quantiles(options.compute_summary_quantiles);
 
     if (!output.auc.empty()) {
-        std::vector<MinrankTopQueues<Stat_, Index_> > auc_minrank_all_queues;
-        preallocate_minrank_queues(ngroups, auc_minrank_all_queues, output.auc, minrank_limit, options.min_rank_preserve_ties, options.num_threads);
+        auto auc_minrank_all_queues = sanisizer::create<std::vector<std::optional<MinrankTopQueues<Stat_, Index_> > > >(options.num_threads);
 
         struct AucResultWorkspace {
-            AucResultWorkspace(const std::size_t ngroups, MinrankTopQueues<Stat_, Index_>& queues, const std::optional<std::vector<double> >& summary_quantiles) :
+            AucResultWorkspace(const std::size_t ngroups, const std::optional<std::vector<double> >& summary_quantiles) :
                 pairwise_buffer(sanisizer::product<typename std::vector<Stat_>::size_type>(ngroups, ngroups)),
                 summary_buffer(sanisizer::cast<typename std::vector<Stat_>::size_type>(ngroups)),
-                queue_ptr(&queues),
                 summary_qcalcs(setup_multiple_quantiles<Stat_>(summary_quantiles, ngroups))
             {};
 
         public:
             std::vector<Stat_> pairwise_buffer;
             std::vector<Stat_> summary_buffer;
-            MinrankTopQueues<Stat_, Index_>* queue_ptr;
             MaybeMultipleQuantiles<Stat_> summary_qcalcs;
+            MinrankTopQueues<Stat_, Index_> queue;
         };
 
-        scan_matrix_by_row_custom_auc<single_block_>(
+        const auto num_used = scan_matrix_by_row_custom_auc<single_block_>(
             matrix, 
             ngroups,
             group,
@@ -707,28 +743,22 @@ void score_markers_summary(
             combo_vars,
             combo_detected,
             /* do_auc = */ true,
-            /* auc_result_initialize = */ [&](const int t) -> AucResultWorkspace {
-                return AucResultWorkspace(ngroups, auc_minrank_all_queues[t], options.compute_summary_quantiles);
+            /* auc_result_initialize = */ [&](const int) -> AucResultWorkspace {
+                AucResultWorkspace res_work(ngroups, options.compute_summary_quantiles);
+                preallocate_minrank_queues(ngroups, res_work.queue, output.auc, minrank_limit, options.min_rank_preserve_ties);
+                return res_work;
             },
-            /* auc_result_process = */ [&](
-                const Index_ gene,
-                AucScanWorkspace<Value_, Group_, Stat_, Index_>& auc_work,
-                AucResultWorkspace& res_work
-            ) -> void {
+            /* auc_result_process = */ [&](const Index_ gene, AucScanWorkspace<Value_, Group_, Stat_, Index_>& auc_work, AucResultWorkspace& res_work) -> void {
                 process_auc_for_rows(auc_work, ngroups, nblocks, options.threshold, res_work.pairwise_buffer.data());
-                compute_summary_stats_per_gene(
-                    gene,
-                    ngroups,
-                    res_work.pairwise_buffer.data(),
-                    res_work.summary_buffer,
-                    res_work.summary_qcalcs,
-                    *(res_work.queue_ptr),
-                    output.auc
-                );
+                compute_summary_stats_per_gene(gene, ngroups, res_work.pairwise_buffer.data(), res_work.summary_buffer, res_work.summary_qcalcs, res_work.queue, output.auc);
+            },
+            /* auc_result_finalize = */ [&](const int t, AucResultWorkspace& res_work) -> void {
+                auc_minrank_all_queues[t] = std::move(res_work.queue);
             },
             options.num_threads
         );
 
+        auc_minrank_all_queues.resize(num_used);
         report_minrank_from_queues(ngenes, ngroups, auc_minrank_all_queues, output.auc, options.num_threads, options.min_rank_preserve_ties);
 
     } else if (matrix.prefer_rows()) {
@@ -897,7 +927,7 @@ void score_markers_summary_blocked(
     const auto ngroups = output.mean.size();
     const auto nblocks = tatami_stats::total_groups(block, NC); 
 
-    const auto combinations = internal::create_combinations(ngroups, group, block, NC);
+    const auto combinations = internal::create_combinations(ngroups, group, nblocks, block, NC);
     const auto combo_sizes = internal::tabulate_combinations<Index_>(ngroups, nblocks, combinations);
     const auto ncombos = combo_sizes.size();
 

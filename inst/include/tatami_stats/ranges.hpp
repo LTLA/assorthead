@@ -73,8 +73,8 @@ constexpr Value_ choose_maximum_placeholder() {
 /**
  * Directly compute the minimum or maximum of a dense objective vector.
  *
- * @tparam Value_ Type of the input data.
- * @tparam Index_ Type of the row/column indices.
+ * @tparam Value_ Numeric type of the input data.
+ * @tparam Index_ Integer type of the row/column indices.
  *
  * @param[in] ptr Pointer to an array of length `num`, containing the values of the objective vector.
  * @param num Length of the objective vector, i.e., length of the array at `ptr`.
@@ -134,14 +134,14 @@ Value_ direct(const Value_* ptr, Index_ num, bool minimum, bool skip_nan) {
 /**
  * Compute the extremes of a sparse objective vector.
  *
- * @tparam Value_ Type of the input data.
- * @tparam Index_ Type of the row/column indices.
+ * @tparam Value_ Numeric type of the input data.
+ * @tparam Index_ Integer type of the row/column indices.
  *
  * @param[in] value Pointer to an array of length `num_nonzero`, containing the values of the structural non-zeros.
  * @param num_nonzero Number of structural non-zeros in the objective vector.
  * @param num_all Length of the objective vector, including the structural zeros not in `value`.
  * This should be greater than or equal to `num_nonzero`.
- * @tparam minimum Whether to compute the minimum.
+ * @param minimum Whether to compute the minimum.
  * If false, the maximum is computed instead.
  * @param skip_nan See `Options::skip_nan` for details.
  *
@@ -187,9 +187,10 @@ Value_ direct(const Value_* value, Index_ num_nonzero, Index_ num_all, bool mini
  * The idea is to repeatedly call `add()` for `ptr` corresponding to observed vectors from 0 to \f$m - 1\f$,
  * which computes the running minimum/maximum for each objective vector at each invocation.
  *
- * @tparam Output_ Type of the output data.
- * @tparam Value_ Type of the input data.
- * @tparam Index_ Type of the row/column indices.
+ * @tparam Output_ Numeric type of the output data.
+ * It is assumed that this is large enough to store the maxima/minima. 
+ * @tparam Value_ Numeric type of the input data.
+ * @tparam Index_ Integer type of the row/column indices.
  */
 template<typename Output_, typename Value_, typename Index_>
 class RunningDense {
@@ -300,9 +301,10 @@ private:
  * Compute running minima and maximuma from sparse data. 
  * This does the same as `RunningDense` but for sparse observed vectors.
  *
- * @tparam Output_ Type of the output data.
- * @tparam Value_ Type of the input value.
- * @tparam Index_ Type of the row/column indices.
+ * @tparam Output_ Numeric type of the output data.
+ * It is assumed that this is large enough to store the maxima/minima. 
+ * @tparam Value_ Numeric type of the input data.
+ * @tparam Index_ Integer type of the row/column indices.
  */
 template<typename Output_, typename Value_, typename Index_>
 class RunningSparse {
@@ -422,9 +424,10 @@ private:
 /**
  * Compute ranges for each element of a chosen dimension of a `tatami::Matrix`.
  *
- * @tparam Value_ Type of the matrix value, should be numeric.
- * @tparam Index_ Type of the row/column indices.
- * @tparam Output_ Type of the output value.
+ * @tparam Value_ Numeric type of the input data.
+ * @tparam Index_ Integer type of the row/column indices.
+ * @tparam Output_ Numeric type of the output data.
+ * It is assumed that this is large enough to store the maxima/minima. 
  *
  * @param row Whether to compute the range for each row.
  * If false, the range is computed for each column instead.
@@ -550,9 +553,10 @@ void apply(bool row, const tatami::Matrix<Value_, Index_>* p, Output_* min_out, 
 /**
  * Wrapper around `apply()` for column ranges.
  *
- * @tparam Output Type of the output value.
- * @tparam Value_ Type of the matrix value.
- * @tparam Index_ Type of the row/column indices.
+ * @tparam Output_ Numeric type of the output data.
+ * It is assumed that this is large enough to store the maxima/minima. 
+ * @tparam Value_ Numeric type of the input data.
+ * @tparam Index_ Integer type of the row/column indices.
  *
  * @param mat Instance of a `tatami::Matrix`.
  * @param ropt Range calculation options.
@@ -593,9 +597,10 @@ std::pair<std::vector<Output_>, std::vector<Output_> > by_column(const tatami::M
 /**
  * Wrapper around `apply()` for row ranges.
  *
- * @tparam Output Type of the output value.
- * @tparam Value_ Type of the matrix value.
- * @tparam Index_ Type of the row/column indices.
+ * @tparam Output_ Numeric type of the output data.
+ * It is assumed that this is large enough to store the maxima/minima. 
+ * @tparam Value_ Numeric type of the input data.
+ * @tparam Index_ Integer type of the row/column indices.
  *
  * @param mat Instance of a `tatami::Matrix`.
  * @param ropt Range calculation options.

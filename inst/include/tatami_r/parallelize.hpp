@@ -86,14 +86,14 @@ inline void set_executor(manticore::Executor* ptr) {
  * This function is only available if `TATAMI_R_PARALLELIZE_UNKNOWN` is defined.
  */ 
 template<class Function_, class Index_>
-void parallelize(const Function_ fun, const Index_ ntasks, int nthreads) {
+int parallelize(const Function_ fun, const Index_ ntasks, int nthreads) {
     if (ntasks == 0) {
-        return;
+        return 0;
     }
 
     if (nthreads <= 1 || ntasks == 1) {
         fun(0, 0, ntasks);
-        return;
+        return 1;
     }
 
     Index_ tasks_per_worker = ntasks / nthreads;
@@ -108,7 +108,7 @@ void parallelize(const Function_ fun, const Index_ ntasks, int nthreads) {
     mexec.initialize(nthreads, "failed to execute R command");
 
     std::vector<std::thread> runners;
-    runners.reserve(nthreads);
+    sanisizer::reserve(runners, nthreads);
     auto errors = sanisizer::create<std::vector<std::exception_ptr> >(nthreads);
 
     Index_ start = 0;
@@ -142,6 +142,8 @@ void parallelize(const Function_ fun, const Index_ ntasks, int nthreads) {
             std::rethrow_exception(err);
         }
     }
+
+    return nthreads;
 }
 
 }

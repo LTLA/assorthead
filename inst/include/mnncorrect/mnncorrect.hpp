@@ -8,6 +8,7 @@
 #include <cstddef>
 
 #include "knncolle/knncolle.hpp"
+#include "sanisizer/sanisizer.hpp"
 
 #include "AutomaticOrder.hpp"
 #include "restore_input_order.hpp"
@@ -26,8 +27,8 @@ namespace mnncorrect {
 
 /**
  * @brief Options for `compute()`.
- * @tparam Index_ Integer type for the observation indices.
- * @tparam Float_ Floating-point type for the input/output data.
+ * @tparam Index_ Integer type of the observation indices.
+ * @tparam Float_ Floating-point type of the input/output data.
  * @tparam Matrix_ Class of the input data matrix for the neighbor search.
  * This should satisfy the `knncolle::Matrix` interface.
  * Alternatively, it may be a `knncolle::SimpleMatrix`.
@@ -35,14 +36,16 @@ namespace mnncorrect {
 template<typename Index_, typename Float_, class Matrix_ = knncolle::Matrix<Index_, Float_> >
 struct Options {
     /**
-     * Number of neighbors for the various search steps, primarily to identify MNN pairs.
-     * This can also be interpreted as the lower bound on the number of observations in each "subpopulation". 
-     * Larger values increase improve the stability of the correction, at the cost of reduced resolution when matching subpopulations across batches.
+     * Number of neighbors to use in the various search steps - specifically, identification of MNN pairs and calculation of the centers of mass. 
+     * It can be interpreted as the lower bound on the number of observations in each "subpopulation". 
+     *
+     * Larger values improve the stability of the correction by increasing the number of MNN pairs and including more observations in each center of mass.
+     * However, this comes at the cost of reduced resolution when matching subpopulations across batches.
      */
     int num_neighbors = 15;
 
     /**
-     * Number of steps for the recursive neighbor search to compute the center of mass.
+     * Number of steps for the recursive neighbor search to compute the center of mass for each MNN-involved observationc.
      * Larger values mitigate the kissing effect but increase the risk of including inappropriately distant subpopulations into the center of mass.
      */
     int num_steps = 1;
@@ -54,7 +57,7 @@ struct Options {
     std::shared_ptr<knncolle::Builder<Index_, Float_, Float_, Matrix_> > builder;
 
     /**
-     * Policy to use to choose the merge order.
+     * Policy for choosing the merge order.
      */
     MergePolicy merge_policy = MergePolicy::RSS;
 
@@ -71,7 +74,7 @@ struct Options {
 namespace internal {
 
 template<typename Index_, typename Float_, class Matrix_>
-void compute(std::size_t num_dim, const std::vector<Index_>& num_obs, const std::vector<const Float_*>& batches, Float_* output, const Options<Index_, Float_, Matrix_>& options) {
+void compute(const std::size_t num_dim, const std::vector<Index_>& num_obs, const std::vector<const Float_*>& batches, Float_* const output, const Options<Index_, Float_, Matrix_>& options) {
     auto builder = options.builder;
     if (!builder) {
         typedef knncolle::EuclideanDistance<Float_, Float_> Euclidean;
@@ -100,29 +103,32 @@ void compute(std::size_t num_dim, const std::vector<Index_>& num_obs, const std:
 
 /**
  * This function implements a variant of the mutual nearest neighbors (MNN) method for batch correction (Haghverdi _et al._, 2018).
- * Two cells from different batches can form an MNN pair if they each belong in each other's set of nearest neighbors.
- * The MNN pairs are assumed to represent cells from corresponding subpopulations across the two batches.
- * Any differences in location between the paired cells represents an estimate of the batch effect in that part of the high-dimensional space.
+ * Two observations from different batches can form an MNN pair if they each belong in each other's set of nearest neighbors.
+ * The MNN pairs are assumed to represent observations from corresponding subpopulations across the two batches.
+ * Any differences in location between the paired observations represents an estimate of the batch effect in that part of the high-dimensional space.
  *
- * We consider one batch to be the "reference" and the other to be the "target", where the aim is to correct the latter to the (unchanged) former. 
- * For each 
- * Each MNN pair is used to define a correction vector 
- * For each observation in the target batch, we find the closest MNN pairs (based on the locations of the paired observation in the same batch)
- * and we compute a robust average of the correction vectors involving those pairs.
- * This average is used to obtain a single correction vector that is applied to the target observation to obtain corrected values.
+ * We consider one batch to be the "reference" and the other to be the "target", where the aim is to correct the latter to the former. 
+ * Each MNN pair defines a correction vector that moves the target observation towards its paired reference observation.
+ * For each observation in the target batch, we identify the closest observation in the same batch that is part of a MNN pair (i.e., "MNN-involved observations").
+ * We apply that pair's correction vector to the observation to obtain its corrected coordinates.
  *
  * Each MNN pair's correction vector is computed between the "center of mass" locations for the paired observations.
  * The center of mass for each observation is defined by recursively searching the neighbors of each MNN-involved observation
  * (and then the neighbors of those neighbors, up to a recursion depth of `Options::num_steps`) and computing the mean of their coordinates.
  * This improves the correction by mitigating the "kissing effect", i.e., where the correction vectors only form between the surfaces of the mass of points in each batch.
  *
+ * In the case of >2 batches, we define a merge order based on `Options::merge_policy`.
+ * For the first batch to be merged, we identify MNN pairs to all other batches at once.
+ * The subsequent correction effectively distributes the first batch's observations to all other batches.
+ * This process is repeated for all remaining batches until only one batch remains that contains all observations.
+ *
  * @see
  * Haghverdi L et al. (2018).
  * Batch effects in single-cell RNA-sequencing data are corrected by matching mutual nearest neighbors.
  * _Nature Biotech._ 36, 421-427
  *
- * @tparam Index_ Integer type for the observation index. 
- * @tparam Float_ Floating-point type for the input/output data.
+ * @tparam Index_ Integer type of the observation index. 
+ * @tparam Float_ Floating-point type of the input/output data.
  * @tparam Matrix_ Class of the input data matrix for the neighbor search.
  * This should satisfy the `knncolle::Matrix` interface.
  * Alternatively, it may be a `knncolle::SimpleMatrix`.
@@ -139,15 +145,15 @@ void compute(std::size_t num_dim, const std::vector<Index_>& num_obs, const std:
  * @param options Further options.
  */
 template<typename Index_, typename Float_, class Matrix_>
-void compute(std::size_t num_dim, const std::vector<Index_>& num_obs, const std::vector<const Float_*>& batches, Float_* output, const Options<Index_, Float_, Matrix_>& options) {
+void compute(const std::size_t num_dim, const std::vector<Index_>& num_obs, const std::vector<const Float_*>& batches, Float_* const output, const Options<Index_, Float_, Matrix_>& options) {
     internal::compute(num_dim, num_obs, batches, output, options);
 }
 
 /**
- * A convenience overload to merge contiguous batches contained in the same array.
+ * Overload of `compute()` to merge contiguous batches contained in the same array.
  *
- * @tparam Index_ Integer type for the observation index. 
- * @tparam Float_ Floating-point type for the input/output data.
+ * @tparam Index_ Integer type of the observation index. 
+ * @tparam Float_ Floating-point type of the input/output data.
  * @tparam Matrix_ Class of the input data matrix for the neighbor search.
  * This should satisfy the `knncolle::Matrix` interface.
  * Alternatively, it may be a `knncolle::SimpleMatrix`.
@@ -165,25 +171,30 @@ void compute(std::size_t num_dim, const std::vector<Index_>& num_obs, const std:
  * @param options Further options.
  */
 template<typename Index_, typename Float_, class Matrix_>
-void compute(std::size_t num_dim, const std::vector<Index_>& num_obs, const Float_* input, Float_* output, const Options<Index_, Float_, Matrix_>& options) {
+void compute(const std::size_t num_dim, const std::vector<Index_>& num_obs, const Float_* const input, Float_* const output, const Options<Index_, Float_, Matrix_>& options) {
     std::vector<const Float_*> batches;
     batches.reserve(num_obs.size());
-    for (auto n : num_obs) {
-        batches.push_back(input);
-        input += static_cast<std::size_t>(n) * num_dim; // cast to size_t's to avoid overflow.
+
+    Index_ accumulated = 0;
+    for (const auto n : num_obs) {
+        batches.push_back(input + sanisizer::product_unsafe<std::size_t>(accumulated, num_dim));
+
+        // After this check, all internal functions may assume that the total number of observations fits in an Index_.
+        accumulated = sanisizer::sum<decltype(I(accumulated))>(accumulated, n);
     }
+
     compute(num_dim, num_obs, batches, output, options);
 }
 
 /**
- * Merge batches where observations are arbitrarily ordered in the same array.
+ * Overload of `compute()` to merge batches where observations are arbitrarily ordered in the same array.
  *
- * @tparam Index_ Integer type for the observation index. 
- * @tparam Float_ Floating-point type for the input/output data.
+ * @tparam Index_ Integer type of the observation index. 
+ * @tparam Float_ Floating-point type of the input/output data.
  * @tparam Matrix_ Class of the input data matrix for the neighbor search.
  * This should satisfy the `knncolle::Matrix` interface.
  * Alternatively, it may be a `knncolle::SimpleMatrix`.
- * @tparam Batch_ Integer type for the batch IDs.
+ * @tparam Batch_ Integer type of the batch IDs.
  *
  * @param num_dim Number of dimensions.
  * @param num_obs Number of observations across all batches.
@@ -197,9 +208,9 @@ void compute(std::size_t num_dim, const std::vector<Index_>& num_obs, const Floa
  * @param options Further options.
  */
 template<typename Index_, typename Float_, typename Batch_, class Matrix_>
-void compute(std::size_t num_dim, Index_ num_obs, const Float_* input, const Batch_* batch, Float_* output, const Options<Index_, Float_, Matrix_>& options) {
-    const BatchIndex nbatches = (num_obs ? static_cast<BatchIndex>(*std::max_element(batch, batch + num_obs)) + 1 : 0);
-    std::vector<Index_> sizes(nbatches);
+void compute(const std::size_t num_dim, const Index_ num_obs, const Float_* const input, const Batch_* const batch, Float_* const output, const Options<Index_, Float_, Matrix_>& options) {
+    const BatchIndex nbatches = (num_obs ? sanisizer::sum<BatchIndex>(*std::max_element(batch, batch + num_obs), 1) : static_cast<BatchIndex>(0));
+    auto sizes = sanisizer::create<std::vector<Index_> >(nbatches);
     for (Index_ o = 0; o < num_obs; ++o) {
         ++sizes[batch[o]];
     }
@@ -218,25 +229,23 @@ void compute(std::size_t num_dim, Index_ num_obs, const Float_* input, const Bat
         return;
     }
 
-    std::size_t accumulated = 0; // use size_t to avoid overflow issues during later multiplication.
-    std::vector<std::size_t> offsets(nbatches);
+    Index_ accumulated = 0;
+    auto offsets = sanisizer::create<std::vector<Index_> >(nbatches);
+    std::vector<Float_> tmp(sanisizer::product<typename std::vector<Float_>::size_type>(num_dim, num_obs));
+    auto ptrs = sanisizer::create<std::vector<const Float_*> >(nbatches);
     for (BatchIndex b = 0; b < nbatches; ++b) {
+        ptrs[b] = tmp.data() + sanisizer::product_unsafe<std::size_t>(accumulated, num_dim);
         offsets[b] = accumulated;
-        accumulated += sizes[b];
-    }
-
-    // Dumping everything by order into another vector.
-    std::vector<Float_> tmp(num_dim * static_cast<std::size_t>(num_obs)); // cast to size_t to avoid overflow.
-    std::vector<const Float_*> ptrs(nbatches);
-    for (BatchIndex b = 0; b < nbatches; ++b) {
-        ptrs[b] = tmp.data() + offsets[b] * num_dim; // already size_t's, so no need to cast to avoid overflow.
+        accumulated += sizes[b]; // this won't overflow as know that num_obs fits in an Index_.
     }
 
     for (Index_ o = 0; o < num_obs; ++o) {
-        auto current = input + static_cast<std::size_t>(o) * num_dim; // cast to size_t to avoid overflow.
         auto& offset = offsets[batch[o]];
-        auto destination = tmp.data() + num_dim * offset; // already size_t's, so no need to cast to avoid overflow.
-        std::copy_n(current, num_dim, destination);
+        std::copy_n(
+            input + sanisizer::product_unsafe<std::size_t>(o, num_dim),
+            num_dim,
+            tmp.data() + sanisizer::product_unsafe<std::size_t>(offset, num_dim)
+        );
         ++offset;
     }
 

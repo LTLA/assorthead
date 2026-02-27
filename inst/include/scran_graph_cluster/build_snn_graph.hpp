@@ -397,7 +397,7 @@ BuildSnnGraphResults<Node_, Weight_> build_snn_graph(
 #if __has_include("igraph.h")
 /**
  * Convert the edges in `BuildSnnGraphResults` to a **igraph** graph object for use in **igraph** functions.
- * See also `edges_to_graph()`.
+ * This uses `edges_to_graph()`, which automatically calls `raiigraph::initialize()`.
  *
  * @tparam Node_ Integer type of the node indices.
  * @tparam Weight_ Floating-point type of the edge weights.
@@ -408,7 +408,7 @@ BuildSnnGraphResults<Node_, Weight_> build_snn_graph(
  */
 template<typename Node_ = DefaultNode, typename Weight_ = DefaultWeight>
 raiigraph::Graph convert_to_graph(const BuildSnnGraphResults<Node_, Weight_>& result) {
-    return edges_to_graph(result.edges.size(), result.edges.data(), result.num_cells, IGRAPH_UNDIRECTED);
+    return edges_to_graph(result.edges.size(), result.edges.data(), result.num_cells, false);
 }
 #endif
 

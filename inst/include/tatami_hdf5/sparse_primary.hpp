@@ -143,10 +143,10 @@ public:
 
         auto pool_size = sanisizer::product<std::size_t>(max_non_zeros, my_cache.get_max_slabs());
         if (needs_value) {
-            my_value_pool.resize(sanisizer::cast<decltype(my_value_pool.size())>(pool_size));
+            sanisizer::resize(my_value_pool, pool_size);
         }
         if (needs_index) {
-            my_index_pool.resize(sanisizer::cast<decltype(my_index_pool.size())>(pool_size));
+            sanisizer::resize(my_index_pool, pool_size);
         }
     }
 
@@ -246,7 +246,6 @@ public:
         my_block_past_end(block_start + block_length)
     {
         tatami::can_cast_Index_to_container_size<decltype(my_index_buffer)>(details.max_non_zeros); // Ensure that we can resize my_index_buffer safely.
-        sanisizer::can_ptrdiff<decltype(my_index_buffer.begin())>(details.max_non_zeros); // Protect pointer differences against overflow when refining primary limits.
     }
 
 private:
@@ -337,9 +336,6 @@ public:
         if (this->my_needs_value) {
             tatami::can_cast_Index_to_container_size<decltype(my_data_buffer)>(details.max_non_zeros);
         }
-
-        // Protect pointer differences against overflow when refining primary limits.
-        sanisizer::can_ptrdiff<decltype(my_index_buffer.begin())>(details.max_non_zeros);
     }
 
 private:
@@ -459,10 +455,10 @@ public:
         initialize(details, my_h5comp);
 
         if (needs_cached_value) {
-            my_full_value_buffer.resize(sanisizer::cast<decltype(my_full_value_buffer.size())>(my_cache.get_max_size()));
+            sanisizer::resize(my_full_value_buffer, my_cache.get_max_size());
         }
         if (needs_cached_index) {
-            my_full_index_buffer.resize(sanisizer::cast<decltype(my_full_index_buffer.size())>(my_cache.get_max_size()));
+            sanisizer::resize(my_full_index_buffer, my_cache.get_max_size());
         }
     }
 
@@ -693,10 +689,7 @@ public:
         my_block_past_end(block_start + block_length),
         my_needs_value(needs_value),
         my_needs_index(needs_index)
-    {
-        // Protect pointer differences against overflow when refining primary limits.
-        sanisizer::can_ptrdiff<decltype(this->my_full_index_buffer.begin())>(my_secondary_dim);
-    }
+    {}
 
 private:
     Index_ my_secondary_dim;
@@ -815,9 +808,6 @@ public:
         my_needs_index(needs_index)
     {
         populate_sparse_primary_remap_vector<sparse_>(indices, my_remap, my_first_index, my_past_last_index);
-
-        // Protect pointer differences against overflow when refining primary limits.
-        sanisizer::can_ptrdiff<decltype(this->my_full_index_buffer.begin())>(my_secondary_dim);
     }
 
 private:

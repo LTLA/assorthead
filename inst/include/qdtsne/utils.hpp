@@ -50,6 +50,11 @@ Index_ perplexity_to_k(const double perplexity) {
 }
 
 /**
+ * Class of the random number generator used in **qdtsne**.
+ */
+typedef std::mt19937_64 RngEngine;
+
+/**
  * Initializes the starting locations of each observation in the embedding.
  * We do so using our own implementation of the Box-Muller transform,
  * to avoid problems with differences in the distribution functions across C++ standard library implementations.
@@ -63,9 +68,8 @@ Index_ perplexity_to_k(const double perplexity) {
  * @param seed Seed for the random number generator.
  */
 template<std::size_t num_dim_, typename Float_ = double>
-void initialize_random(Float_* const Y, const std::size_t num_points, const unsigned long long seed = 42) {
-    // The constructor accepts an unsigned type, so any overflow should just wrap around harmlessly. 
-    std::mt19937_64 rng(seed);
+void initialize_random(Float_* const Y, const std::size_t num_points, const typename RngEngine::result_type seed = 42) {
+    RngEngine rng(seed);
 
     // Presumably a size_t can store the product in order to allocate Y in the first place.
     std::size_t num_total = sanisizer::product_unsafe<std::size_t>(num_points, num_dim_);
@@ -76,14 +80,14 @@ void initialize_random(Float_* const Y, const std::size_t num_points, const unsi
 
     // Box-Muller gives us two random values at a time.
     for (std::size_t i = 0; i < num_total; i += 2) {
-        auto paired = aarand::standard_normal<Float_>(rng);
+        const auto paired = aarand::standard_normal<Float_>(rng);
         Y[i] = paired.first;
         Y[i + 1] = paired.second;
     }
 
     if (odd) {
         // Adding the poor extra for odd total lengths.
-        auto paired = aarand::standard_normal<Float_>(rng);
+        const auto paired = aarand::standard_normal<Float_>(rng);
         Y[num_total] = paired.first;
     }
 
@@ -102,7 +106,7 @@ void initialize_random(Float_* const Y, const std::size_t num_points, const unsi
  * @return A vector of length `num_points * num_dim_` containing random draws from a standard normal distribution. 
  */
 template<std::size_t num_dim_, typename Float_ = double>
-std::vector<Float_> initialize_random(const std::size_t num_points, const unsigned long long seed = 42) {
+std::vector<Float_> initialize_random(const std::size_t num_points, const typename RngEngine::result_type seed = 42) {
     std::vector<Float_> Y(sanisizer::product<typename std::vector<Float_>::size_type>(num_points, num_dim_));
     initialize_random<num_dim_>(Y.data(), num_points, seed);
     return Y;
@@ -113,21 +117,28 @@ std::vector<Float_> initialize_random(const std::size_t num_points, const unsign
  * @tparam Run_ Function to execute a range of tasks.
  *
  * @param num_workers Number of workers.
+ * This should be positive.
  * @param num_tasks Number of tasks.
- * @param run_task_range Function to iterate over a range of tasks within a worker.
+ * This should be non-negative.
+ * @param run_task_range Function to iterate over a range of tasks within a worker,
+ * see the argument of the same name in `subpar::parallelize_range()`.
+ *
+ * return Number of used workers.
+ * This will be no greater than `num_workers`.
  *
  * By default, this is an alias to `subpar::parallelize_range()`.
- * However, if the `QDTSNE_CUSTOM_PARALLEL` function-like macro is defined, it is called instead. 
- * Any user-defined macro should accept the same arguments as `subpar::parallelize_range()`.
+ * Its purpose is to enable **qdtsne**-specific customization to the parallelization scheme without affecting other libraries that use **subpar**.
+ * If the `QDTSNE_CUSTOM_PARALLEL` macro is defined, it will be used instead of `subpar::parallelize_range()` whenever `parallelize()` is called. 
+ * Any user-defined macro should follow the same requirements as the `SUBPAR_CUSTOM_PARALLELIZE_RANGE` override for `subpar::parallelize_range()`.
  */
 template<typename Task_, class Run_>
-void parallelize(const int num_workers, const Task_ num_tasks, Run_ run_task_range) {
+int parallelize(const int num_workers, const Task_ num_tasks, Run_ run_task_range) {
 #ifndef QDTSNE_CUSTOM_PARALLEL
     // Don't make this nothrow_ = true, there's too many allocations and the
     // derived methods for the nearest neighbors search could do anything...
-    subpar::parallelize(num_workers, num_tasks, std::move(run_task_range));
+    return subpar::parallelize_range(num_workers, num_tasks, std::move(run_task_range));
 #else
-    QDTSNE_CUSTOM_PARALLEL(num_workers, num_tasks, run_task_range);
+    return QDTSNE_CUSTOM_PARALLEL(num_workers, num_tasks, run_task_range);
 #endif
 }
 
@@ -135,9 +146,7 @@ void parallelize(const int num_workers, const Task_ num_tasks, Run_ run_task_ran
  * @cond
  */
 template<typename Input_>
-std::remove_cv_t<std::remove_reference_t<Input_> > I(const Input_ x) {
-    return x;
-}
+using I = typename std::remove_cv<typename std::remove_reference<Input_>::type>::type;
 /**
  * @endcond
  */

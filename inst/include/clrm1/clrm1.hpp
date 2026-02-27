@@ -34,7 +34,15 @@ struct Options {
 
 /**
  * Compute CLRm1 size factors for each cell in an ADT count matrix.
- * Note that the output size factors are not centered; this should be done by the caller if the scale of the counts is to be preserved during normalization.
+ *
+ * The centered log-ratio (CLR) method is defined, in R notation, as `exp(mean(log1p(x)))` where `x` is the vector of counts across all tags for a cell.
+ * This aims to capture any systematic fold-difference across most tags between two cells, while diluting the compositional biases introduced by the occasional upregulated tag.
+ * In the CLRm1 method, we replace `exp()` with `expm1()`, where the extra subtraction provides some symmetry and seems to improve accuracy.
+ *
+ * Note that the size factors computed by this function are not actually centered, despite the name of the method.
+ * Centering should be done manually by the caller (e.g., using `scran_norm::center_size_factors()`) to preserve the scale of the counts after scaling normalization.
+ *
+ * Tags with all-zero counts across all cells are uninformative and ignored in the calculations described above.
  *
  * @tparam Value_ Type of the matrix value.
  * @tparam Index_ Integer type for the row/column indices.
@@ -50,11 +58,13 @@ void compute(const tatami::Matrix<Value_, Index_>& matrix, const Options& option
     auto ptr = tatami::wrap_shared_ptr(&matrix);
 
     if (options.remove_all_zero) {
-        tatami_stats::counts::zero::Options czopt;
-        czopt.num_threads = options.num_threads;
-        auto num_zeros = tatami_stats::counts::zero::by_row(&matrix, czopt);
+        const auto num_zeros = tatami_stats::counts::zero::by_row<Index_>(matrix, [&]{
+            tatami_stats::counts::zero::Options czopt;
+            czopt.num_threads = options.num_threads;
+            return czopt;
+        }());
 
-        Index_ NR = matrix.nrow(), NC = matrix.ncol();
+        const Index_ NR = matrix.nrow(), NC = matrix.ncol();
         std::vector<Index_> keep;
         for (Index_ s = 0; s < NR; ++s) {
             if (num_zeros[s] < NC) {
@@ -68,13 +78,15 @@ void compute(const tatami::Matrix<Value_, Index_>& matrix, const Options& option
         }
     }
 
-    tatami_stats::sums::Options sopt;
-    sopt.num_threads = options.num_threads;
     tatami::DelayedUnaryIsometricOperation<Output_, Value_, Index_> logmat(std::move(ptr), std::make_shared<tatami::DelayedUnaryIsometricLog1p<Value_, Output_, Index_> >());
-    tatami_stats::sums::apply(false, logmat, output, sopt);
+    tatami_stats::sums::apply(false, logmat, output, [&]{
+        tatami_stats::sums::Options sopt;
+        sopt.num_threads = options.num_threads;
+        return sopt;
+    }());
 
-    Output_ denom = 1.0/(logmat.nrow());
-    Index_ NC = matrix.ncol();
+    const Output_ denom = 1.0/(logmat.nrow());
+    const Index_ NC = matrix.ncol();
     for (Index_ c = 0; c < NC; ++c) {
         output[c] = std::expm1(output[c] * denom);
     }

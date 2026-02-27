@@ -4,6 +4,7 @@
 #include <vector>
 #include <algorithm>
 #include <cstddef>
+#include <type_traits>
 
 #include "sanisizer/sanisizer.hpp"
 #include "tatami/tatami.hpp"
@@ -17,8 +18,18 @@
 namespace tatami_stats {
 
 /**
+ * @cond
+ */
+template<typename Input_>
+using I = std::remove_cv_t<std::remove_reference_t<Input_> >;
+/**
+ * @endcond
+ */
+
+/**
  * Count the total number of groups, typically for per-group memory allocations.
  *
+ * @tparam Number_ Integer type for the number of groups.
  * @tparam Group_ Integer type for the group assignments.
  *
  * @param[in] group Pointer to an array of group assignments per observation.
@@ -28,10 +39,10 @@ namespace tatami_stats {
  * @return Total number of groups, i.e., \f$G\f$.
  * Note that not all groups may actually have non-zero occurrences in `group`.
  */
-template<typename Group_>
-std::size_t total_groups(const Group_* group, std::size_t n) {
+template<typename Number_ = std::size_t, typename Group_>
+Number_ total_groups(const Group_* group, std::size_t n) {
     if (n) {
-        return sanisizer::sum<std::size_t>(*std::max_element(group, group + n), 1);
+        return sanisizer::sum<Number_>(*std::max_element(group, group + n), 1);
     } else {
         return 0;
     }
@@ -51,8 +62,8 @@ std::size_t total_groups(const Group_* group, std::size_t n) {
  */
 template<typename Group_, typename Size_>
 std::vector<Size_> tabulate_groups(const Group_* group, Size_ n) {
-    auto ngroups = total_groups(group, n);
-    std::vector<Size_> group_sizes(ngroups);
+    const auto ngroups = total_groups<typename std::vector<Size_>::size_type>(group, n);
+    auto group_sizes = sanisizer::create<std::vector<Size_> >(ngroups);
     for (Size_ r = 0; r < n; ++r) {
         ++(group_sizes[group[r]]);
     }
@@ -93,7 +104,7 @@ public:
     LocalOutputBuffer(int thread, Index_ start, Index_ length, Output_* output, Output_ fill) : 
         my_output(output + sanisizer::cast<std::size_t>(start)),
         use_local(thread > 0),
-        my_buffer(use_local ? sanisizer::cast<decltype(my_buffer.size())>(length) : static_cast<decltype(my_buffer.size())>(0), fill)
+        my_buffer(use_local ? sanisizer::cast<I<decltype(my_buffer.size())> >(length) : static_cast<I<decltype(my_buffer.size())> >(0), fill)
     {
         if (!use_local) {
             // Setting to zero to match the initial behavior of 'my_buffer' when 'use_local = true'.
@@ -178,20 +189,20 @@ public:
      */
     template<typename Number_, typename Index_>
     LocalOutputBuffers(int thread, Number_ number, Index_ start, Index_ length, GetOutput_ outfun, Output_ fill) : 
-        my_number(sanisizer::cast<decltype(my_number)>(number)),
-        my_start(sanisizer::cast<decltype(my_start)>(start)),
+        my_number(sanisizer::cast<I<decltype(my_number)> >(number)),
+        my_start(sanisizer::cast<I<decltype(my_start)> >(start)),
         my_use_local(thread > 0),
         my_getter(std::move(outfun))
     {
         if (thread == 0) {
-            for (decltype(my_number) i = 0; i < my_number; ++i) {
+            for (I<decltype(my_number)> i = 0; i < my_number; ++i) {
                 // Setting to the fill to match the initial behavior of 'my_buffer' when 'thread > 0'.
                 std::fill_n(my_getter(i) + my_start, length, fill);
             }
         } else {
             my_buffers.reserve(my_number);
-            for (decltype(my_number) i = 0; i < my_number; ++i) {
-                my_buffers.emplace_back(tatami::can_cast_Index_to_container_size<typename decltype(my_buffers)::value_type>(length), fill);
+            for (I<decltype(my_number)> i = 0; i < my_number; ++i) {
+                my_buffers.emplace_back(tatami::can_cast_Index_to_container_size<typename I<decltype(my_buffers)>::value_type>(length), fill);
             }
         }
     }
@@ -251,7 +262,7 @@ public:
      */
     void transfer() {
         if (my_use_local) {
-            for (decltype(my_number) i = 0; i < my_number; ++i) {
+            for (I<decltype(my_number)> i = 0; i < my_number; ++i) {
                 const auto& current = my_buffers[i];
                 std::copy(current.begin(), current.end(), my_getter(i) + my_start);
             }

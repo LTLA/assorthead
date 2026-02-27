@@ -246,72 +246,94 @@ void update_hdf5_stats(const Value_* extracted, Index_ n, WriteSparseHdf5Statist
 }
 
 template<typename Value_, typename Index_>
-WriteSparseHdf5Statistics<Value_, Index_> write_sparse_hdf5_statistics(const tatami::Matrix<Value_, Index_>* mat, bool infer_value, bool infer_index, int nthreads) {
-    auto NR = mat->nrow(), NC = mat->ncol();
-    std::vector<WriteSparseHdf5Statistics<Value_, Index_> > collected(nthreads);
+WriteSparseHdf5Statistics<Value_, Index_> write_sparse_hdf5_statistics(const tatami::Matrix<Value_, Index_>& mat, bool infer_value, bool infer_index, int nthreads) {
+    const auto NR = mat.nrow(), NC = mat.ncol();
 
-    if (mat->sparse()) {
+    WriteSparseHdf5Statistics<Value_, Index_> output;
+    auto collected = sanisizer::create<std::vector<WriteSparseHdf5Statistics<Value_, Index_> > >(nthreads - 1); // nthreads had better be >= 1.
+    int num_used;
+
+    if (mat.sparse()) {
         tatami::Options opt;
         opt.sparse_extract_index = infer_index;
         opt.sparse_extract_value = infer_value;
 
-        if (mat->prefer_rows()) {
-            tatami::parallelize([&](int t, Index_ start, Index_ len) -> void {
+        if (mat.prefer_rows()) {
+            num_used = tatami::parallelize([&](int t, Index_ start, Index_ len) -> void {
+                WriteSparseHdf5Statistics<Value_, Index_> current_output;
+
                 auto wrk = tatami::consecutive_extractor<true>(mat, true, start, len, opt);
                 std::vector<Value_> xbuffer(NC);
                 std::vector<Index_> ibuffer(NC);
                 for (Index_ r = start, end = start + len; r < end; ++r) {
                     auto extracted = wrk->fetch(r, xbuffer.data(), ibuffer.data());
-                    update_hdf5_stats(extracted, collected[t], infer_value, infer_index);
+                    update_hdf5_stats(extracted, current_output, infer_value, infer_index);
                 }
+
+                // Only move to the result buffer at the end, to avoid false sharing between threads.
+                (t ? collected[t - 1] : output) = std::move(current_output);
             }, NR, nthreads);
 
         } else {
-            tatami::parallelize([&](int t, Index_ start, Index_ len) -> void {
+            num_used = tatami::parallelize([&](int t, Index_ start, Index_ len) -> void {
+                WriteSparseHdf5Statistics<Value_, Index_> current_output;
+
                 auto wrk = tatami::consecutive_extractor<true>(mat, false, start, len, opt);
                 std::vector<Value_> xbuffer(NR);
                 std::vector<Index_> ibuffer(NR);
                 for (Index_ c = start, end = start + len; c < end; ++c) {
                     auto extracted = wrk->fetch(c, xbuffer.data(), ibuffer.data());
-                    update_hdf5_stats(extracted, collected[t], infer_value, infer_index);
+                    update_hdf5_stats(extracted, current_output, infer_value, infer_index);
                 }
+
+                // Only move to the result buffer at the end, to avoid false sharing between threads.
+                (t ? collected[t - 1] : output) = std::move(current_output);
             }, NC, nthreads);
         }
 
     } else {
-        if (mat->prefer_rows()) {
-            tatami::parallelize([&](int t, Index_ start, Index_ len) -> void {
+        if (mat.prefer_rows()) {
+            num_used = tatami::parallelize([&](int t, Index_ start, Index_ len) -> void {
+                WriteSparseHdf5Statistics<Value_, Index_> current_output;
+
                 auto wrk = tatami::consecutive_extractor<false>(mat, true, start, len);
                 std::vector<Value_> xbuffer(NC);
                 for (Index_ r = start, end = start + len; r < end; ++r) {
                     auto extracted = wrk->fetch(r, xbuffer.data());
-                    update_hdf5_stats(extracted, NC, collected[t]);
+                    update_hdf5_stats(extracted, NC, current_output);
                 }
+
+                // Only move to the result buffer at the end, to avoid false sharing between threads.
+                (t ? collected[t - 1] : output) = std::move(current_output);
             }, NR, nthreads);
 
         } else {
-            tatami::parallelize([&](int t, Index_ start, Index_ len) -> void {
+            num_used = tatami::parallelize([&](int t, Index_ start, Index_ len) -> void {
+                WriteSparseHdf5Statistics<Value_, Index_> current_output;
+
                 auto wrk = tatami::consecutive_extractor<false>(mat, false, start, len);
                 std::vector<Value_> xbuffer(NR);
                 for (Index_ c = start, end = start + len; c < end; ++c) {
                     auto extracted = wrk->fetch(c, xbuffer.data());
-                    update_hdf5_stats(extracted, NR, collected[t]);
+                    update_hdf5_stats(extracted, NR, current_output);
                 }
+
+                // Only move to the result buffer at the end, to avoid false sharing between threads.
+                (t ? collected[t - 1] : output) = std::move(current_output);
             }, NC, nthreads);
         }
     }
 
-    auto& first = collected.front();
-    for (int i = 1; i < nthreads; ++i) {
-        auto& current = collected[i];
-        first.lower_data = std::min(first.lower_data, current.lower_data);
-        first.upper_data = std::max(first.upper_data, current.upper_data);
-        first.upper_index = std::max(first.upper_index, current.upper_index);
-        first.non_zeros = sanisizer::sum<hsize_t>(first.non_zeros, current.non_zeros);
-        first.non_integer = first.non_integer || current.non_integer;
+    for (int i = 1; i < num_used; ++i) {
+        auto& current = collected[i - 1];
+        output.lower_data = std::min(output.lower_data, current.lower_data);
+        output.upper_data = std::max(output.upper_data, current.upper_data);
+        output.upper_index = std::max(output.upper_index, current.upper_index);
+        output.non_zeros = sanisizer::sum<hsize_t>(output.non_zeros, current.non_zeros);
+        output.non_integer = output.non_integer || current.non_integer;
     }
 
-    return std::move(first); // better be at least one thread.
+    return output;
 }
 /**
  * @endcond
@@ -325,13 +347,13 @@ WriteSparseHdf5Statistics<Value_, Index_> write_sparse_hdf5_statistics(const tat
  * @tparam Value_ Type of the matrix values.
  * @tparam Index_ Type of the row/column indices.
  *
- * @param mat Pointer to the (presumably sparse) matrix to be written.
- * If a dense matrix is supplied, only the non-zero elements will be saved.
+ * @param mat Matrix to be written to disk, presumably sparse.
+ * If a dense matrix is supplied, only the non-zero elements will be written.
  * @param location Handle to a HDF5 group in which to write the matrix contents.
  * @param params Parameters to use when writing the matrix.
  */
 template<typename Value_, typename Index_>
-void write_compressed_sparse_matrix(const tatami::Matrix<Value_, Index_>* mat, H5::Group& location, const WriteCompressedSparseMatrixOptions& params) {
+void write_compressed_sparse_matrix(const tatami::Matrix<Value_, Index_>& mat, H5::Group& location, const WriteCompressedSparseMatrixOptions& params) {
     auto data_type = params.data_type;
     auto index_type = params.index_type;
     auto use_auto_data_type = (data_type == WriteStorageType::AUTOMATIC);
@@ -379,7 +401,7 @@ void write_compressed_sparse_matrix(const tatami::Matrix<Value_, Index_>* mat, H
     // Choosing the layout.
     auto layout = params.columnar;
     if (layout == WriteStorageLayout::AUTOMATIC) {
-        if (mat->prefer_rows()) {
+        if (mat.prefer_rows()) {
             layout = WriteStorageLayout::ROW;
         } else {
             layout = WriteStorageLayout::COLUMN;
@@ -396,7 +418,7 @@ void write_compressed_sparse_matrix(const tatami::Matrix<Value_, Index_>* mat, H
     const auto& dstype = define_mem_type<Value_>();
     const auto& ixtype = define_mem_type<Index_>();
 
-    Index_ NR = mat->nrow(), NC = mat->ncol();
+    Index_ NR = mat.nrow(), NC = mat.ncol();
     std::vector<hsize_t> ptrs;
 
     auto fill_datasets = [&](const Value_* vptr, const Index_* iptr, hsize_t count) -> void {
@@ -409,7 +431,7 @@ void write_compressed_sparse_matrix(const tatami::Matrix<Value_, Index_>* mat, H
         }
     };
 
-    if (mat->sparse()) {
+    if (mat.sparse()) {
         if (layout == WriteStorageLayout::ROW) {
             ptrs.resize(sanisizer::sum<decltype(ptrs.size())>(NR, 1));
             auto xbuffer = tatami::create_container_of_Index_size<std::vector<Value_> >(NC);
@@ -485,22 +507,36 @@ void write_compressed_sparse_matrix(const tatami::Matrix<Value_, Index_>* mat, H
 }
 
 /**
- * Write a sparse matrix inside a HDF5 group.
- * On return, `location` will be populated with three datasets containing the matrix contents in a compressed sparse format.
- * Storage of dimensions and other metadata (e.g., related to column versus row layout) is left to the caller. 
+ * Overload of `write_compressed_sparse_matrix()` with default parameters.
  *
  * @tparam Value_ Type of the matrix values.
  * @tparam Index_ Type of the row/column indices.
  *
- * @param mat Pointer to the (presumably sparse) matrix to be written.
+ * @param mat Matrix to be written to disk, presumably sparse.
  * @param location Handle to a HDF5 group in which to write the matrix contents.
  */
 template<typename Value_, typename Index_>
-void write_compressed_sparse_matrix(const tatami::Matrix<Value_, Index_>* mat, H5::Group& location) {
+void write_compressed_sparse_matrix(const tatami::Matrix<Value_, Index_>& mat, H5::Group& location) {
     WriteCompressedSparseMatrixOptions params;
     write_compressed_sparse_matrix(mat, location, params);
     return;
 }
+
+/**
+ * @cond
+ */
+template<typename Value_, typename Index_>
+void write_compressed_sparse_matrix(const tatami::Matrix<Value_, Index_>* mat, H5::Group& location, const WriteCompressedSparseMatrixOptions& params) {
+    return write_compressed_sparse_matrix(*mat, location, params);
+}
+
+template<typename Value_, typename Index_>
+void write_compressed_sparse_matrix(const tatami::Matrix<Value_, Index_>* mat, H5::Group& location) {
+    return write_compressed_sparse_matrix(*mat, location);
+}
+/**
+ * @endcond
+ */
 
 }
 

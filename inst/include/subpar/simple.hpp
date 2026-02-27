@@ -50,7 +50,7 @@ namespace subpar {
  * This function may throw an exception if `nothrow_ = false`.
  */
 template<bool nothrow_ = false, typename Task_, class Run_>
-void parallelize_simple(Task_ num_tasks, Run_ run_task) {
+void parallelize_simple(const Task_ num_tasks, const Run_ run_task) {
 #ifdef SUBPAR_CUSTOM_PARALLELIZE_SIMPLE
     if constexpr(nothrow_) {
 #ifdef SUBPAR_CUSTOM_PARALLELIZE_SIMPLE_NOTHROW
@@ -63,20 +63,27 @@ void parallelize_simple(Task_ num_tasks, Run_ run_task) {
     }
 
 #else
-    if (num_tasks == 0) {
+    if (num_tasks <= 0) {
         return;
     } else if (num_tasks == 1) {
         run_task(0);
         return;
     }
 
-    auto errors = internal::create_error_vector<nothrow_>(num_tasks);
+    // Avoid instantiating a vector if it is known that the function can't throw.
+    auto errors = [&]{
+        if constexpr(nothrow_) {
+            return true;
+        } else {
+            return sanisizer::create<std::vector<std::exception_ptr> >(num_tasks);
+        }
+    }();
 
 #if defined(_OPENMP) && !defined(SUBPAR_NO_OPENMP_SIMPLE)
 #define SUBPAR_USES_OPENMP_SIMPLE 1
 
     // OpenMP doesn't guarantee that we'll actually start 'num_tasks' workers,
-    // so we need to do a loop here to ensure that each task simple is executed.
+    // so we need to do a loop here to ensure that each task is executed.
     #pragma omp parallel for num_threads(num_tasks)
     for (Task_ w = 0; w < num_tasks; ++w) {
         if constexpr(nothrow_) {
@@ -94,10 +101,11 @@ void parallelize_simple(Task_ num_tasks, Run_ run_task) {
 // Wiping it out, just in case.
 #undef SUBPAR_USES_OPENMP_SIMPLE
 
+    // We run the first job on the current thread, to avoid having to spin up an unnecessary worker.
     std::vector<std::thread> workers;
-    workers.reserve(num_tasks);
+    sanisizer::reserve(workers, num_tasks - 1); // make sure we don't get alloc errors during emplace_back().
 
-    for (Task_ w = 0; w < num_tasks; ++w) {
+    for (Task_ w = 1; w < num_tasks; ++w) {
         if constexpr(nothrow_) {
             workers.emplace_back(run_task, w);
         } else {
@@ -108,6 +116,18 @@ void parallelize_simple(Task_ num_tasks, Run_ run_task) {
                     errors[w] = std::current_exception();
                 }
             }, w);
+        }
+    }
+
+    {
+        if constexpr(nothrow_) {
+            run_task(0);
+        } else {
+            try {
+                run_task(0);
+            } catch (...) {
+                errors[0] = std::current_exception();
+            }
         }
     }
 

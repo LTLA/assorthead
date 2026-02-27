@@ -10,40 +10,14 @@
 #include <thread>
 #endif
 
+#include "sanisizer/sanisizer.hpp"
+
 /**
  * @file range.hpp
  * @brief Parallelize across a range of tasks.
  */
 
 namespace subpar {
-
-/**
- * @cond
- */
-namespace internal {
-
-template<typename Task_>
-bool ge(int num_workers, Task_ num_tasks) { // We already assume that both of them are non-negative at this point.
-    return static_cast<typename std::make_unsigned<int>::type>(num_workers) >= static_cast<typename std::make_unsigned<Task_>::type>(num_tasks);
-}
-
-template<bool nothrow_, typename NumWorkers_>
-auto create_error_vector(NumWorkers_ num_workers) {
-    if constexpr(nothrow_) {
-        return 0; // Avoid instantiating a vector if it is known that the function can't throw.
-    } else {
-        typedef std::vector<std::exception_ptr> Output;
-        if (static_cast<typename std::make_unsigned<NumWorkers_>::type>(num_workers) > std::numeric_limits<typename Output::size_type>::max()) {
-            throw std::runtime_error("cannot allocate the 'errors' vector");
-        }
-        return Output(num_workers);
-    }
-}
-
-}
-/**
- * @endcond
- */
 
 /**
  * @brief Adjust the number of workers to the number of tasks in `parallelize_range()`.
@@ -64,16 +38,12 @@ auto create_error_vector(NumWorkers_ num_workers) {
  * If `num_workers` is greater than `num_tasks`, the former is set to the latter.
  */
 template<typename Task_>
-int sanitize_num_workers(int num_workers, Task_ num_tasks) {
+int sanitize_num_workers(const int num_workers, const Task_ num_tasks) {
     if (num_workers <= 0) {
-        return (num_tasks > 0);
+        return num_tasks > 0;
+    } else {
+        return sanisizer::min(num_workers, num_tasks);
     }
-
-    if (internal::ge(num_workers, num_tasks)) {
-        return num_tasks;
-    }
-
-    return num_workers;
 }
 
 /**
@@ -88,7 +58,7 @@ int sanitize_num_workers(int num_workers, Task_ num_tasks) {
  * This is occasionally useful when OpenMP cannot be used in some parts of the application, e.g., with POSIX forks.
  *
  * Advanced users can substitute in their own parallelization scheme by defining `SUBPAR_CUSTOM_PARALLELIZE_RANGE` before including the **subpar** header.
- * This should be a function-like macro that accepts the same arguments as `parallelize_range()` or the name of a function that accepts the same arguments as `parallelize_range()`.
+ * This should be a function-like macro or the name of a function that accepts the same arguments as `parallelize_range()` and returns an integer.
  * If defined, the custom scheme will be used instead of the default scheme whenever `parallelize_range()` is called.
  * Macro authors should note the expectations on `run_task_range()`, as well as the one-to-zero-or-one mapping between workers and ranges.
  *
@@ -116,61 +86,80 @@ int sanitize_num_workers(int num_workers, Task_ num_tasks) {
  * @param num_tasks Number of tasks.
  * This should be a non-negative integer.
  * @param run_task_range Function to iterate over a range of tasks within a worker.
- * This may be called zero, one or multiple times in any particular worker.
+ * This will be called no more than once in each worker.
  * In each call:
- * - `w` is guaranteed to be in `[0, num_workers)`.
+ * - `w` is guaranteed to be in `[0, K)` where `K` is the return value of `parallelize_range()`.
+ *   `K` itself is guaranteed to be no greater than `num_workers`.
  * - `[start, start + length)` is guaranteed to be a non-empty range of tasks that lies in `[0, num_tasks)`.
  *   It will not overlap with any other range in any other call to `run_task_range()`.
  * .
  * This function may throw an exception if `nothrow_ = false`.
+ *
+ * @return The number of workers (`K`) that were actually used. 
+ * This is guaranteed to be no greater than `num_workers`.
+ * It can also be assumed that `run_task_range` was called once for each of `[0, 1, ..., K-1]`.
  */
 template<bool nothrow_ = false, typename Task_, class Run_>
-void parallelize_range(int num_workers, Task_ num_tasks, Run_ run_task_range) {
+int parallelize_range(int num_workers, const Task_ num_tasks, const Run_ run_task_range) {
 #ifdef SUBPAR_CUSTOM_PARALLELIZE_RANGE
     if constexpr(nothrow_) {
 #ifdef SUBPAR_CUSTOM_PARALLELIZE_RANGE_NOTHROW
-        SUBPAR_CUSTOM_PARALLELIZE_RANGE_NOTHROW(num_workers, num_tasks, run_task_range);
+        return SUBPAR_CUSTOM_PARALLELIZE_RANGE_NOTHROW(num_workers, num_tasks, run_task_range);
 #else
-        SUBPAR_CUSTOM_PARALLELIZE_RANGE(num_workers, num_tasks, run_task_range);
+        return SUBPAR_CUSTOM_PARALLELIZE_RANGE(num_workers, num_tasks, run_task_range);
 #endif
     } else {
-        SUBPAR_CUSTOM_PARALLELIZE_RANGE(num_workers, num_tasks, run_task_range);
+        return SUBPAR_CUSTOM_PARALLELIZE_RANGE(num_workers, num_tasks, run_task_range);
     }
 
 #else
-    if (num_tasks == 0) {
-        return;
+    if (num_tasks <= 0) {
+        return 0;
     }
 
     if (num_workers <= 1 || num_tasks == 1) {
         run_task_range(0, 0, num_tasks);
-        return;
+        return 1;
     }
 
     // All workers with indices below 'remainder' get an extra task to fill up the remainder.
-    Task_ tasks_per_worker;
-    int remainder;
-    if (internal::ge(num_workers, num_tasks)) {
+    Task_ tasks_per_worker = 1;
+    int remainder = 0;
+    if (sanisizer::is_greater_than_or_equal(num_workers, num_tasks)) {
         num_workers = num_tasks;
-        tasks_per_worker = 1;
-        remainder = 0;
     } else {
         tasks_per_worker = num_tasks / num_workers;
         remainder = num_tasks % num_workers;
     }
 
-    auto errors = internal::create_error_vector<nothrow_>(num_workers);
+    const auto get_start = [&tasks_per_worker,&remainder](const int w) -> Task_ {
+        // Need to shift the start by the number of previous 'w' that added a remainder.
+        return w * tasks_per_worker + (w < remainder ? w : remainder);
+    };
+
+    const auto get_length = [&tasks_per_worker,&remainder](const int w) -> Task_ {
+        return tasks_per_worker + (w < remainder); 
+    };
+
+    // Avoid instantiating a vector if it is known that the function can't throw.
+    auto errors = [&]{
+        if constexpr(nothrow_) {
+            return true;
+        } else {
+            return sanisizer::create<std::vector<std::exception_ptr> >(num_workers);
+        }
+    }();
 
 #if defined(_OPENMP) && !defined(SUBPAR_NO_OPENMP_RANGE) && !defined(SUBPAR_NO_OPENMP)
 #define SUBPAR_USES_OPENMP 1
 #define SUBPAR_USES_OPENMP_RANGE 1
 
-    // OpenMP doesn't guarantee that we'll actually start 'num_workers' workers,
+    // OpenMP doesn't guarantee that we'll actually start the specified number of workers,
     // so we need to do a loop here to ensure that each task range is executed.
     #pragma omp parallel for num_threads(num_workers)
     for (int w = 0; w < num_workers; ++w) {
-        Task_ start = w * tasks_per_worker + (w < remainder ? w : remainder); // need to shift the start by the number of previous 't' that added a remainder.
-        Task_ length = tasks_per_worker + (w < remainder);
+        const Task_ start = get_start(w);
+        const Task_ length = get_length(w);
 
         if constexpr(nothrow_) {
             run_task_range(w, start, length);
@@ -188,12 +177,13 @@ void parallelize_range(int num_workers, Task_ num_tasks, Run_ run_task_range) {
 #undef SUBPAR_USES_OPENMP
 #undef SUBPAR_USES_OPENMP_RANGE
 
-    Task_ start = 0;
+    // We run the first job on the current thread, to avoid having to spin up an unnecessary worker.
     std::vector<std::thread> workers;
-    workers.reserve(num_workers);
+    sanisizer::reserve(workers, num_workers - 1); // preallocate to ensure we don't get alloc errors during emplace_back().
 
-    for (int w = 0; w < num_workers; ++w) {
-        Task_ length = tasks_per_worker + (w < remainder); 
+    for (int w = 1; w < num_workers; ++w) {
+        const Task_ start = get_start(w);
+        const Task_ length = get_length(w);
 
         if constexpr(nothrow_) {
             workers.emplace_back(run_task_range, w, start, length);
@@ -206,8 +196,21 @@ void parallelize_range(int num_workers, Task_ num_tasks, Run_ run_task_range) {
                 }
             }, w, start, length);
         }
+    }
 
-        start += length;
+    {
+        const Task_ start = get_start(0);
+        const Task_ length = get_length(0);
+
+        if constexpr(nothrow_) {
+            run_task_range(0, start, length);
+        } else {
+            try {
+                run_task_range(0, start, length);
+            } catch (...) {
+                errors[0] = std::current_exception();
+            }
+        }
     }
 
     for (auto& wrk : workers) {
@@ -223,6 +226,8 @@ void parallelize_range(int num_workers, Task_ num_tasks, Run_ run_task_range) {
         }
     }
 #endif
+
+    return num_workers;
 }
 
 /**

@@ -38,19 +38,27 @@ void allocate_pairwise_queues(
 
 template<bool include_stat_, typename Stat_, typename Index_>
 void report_best_top_queues(
-    std::vector<PairwiseTopQueues<Stat_, Index_> >& pqueues,
+    std::vector<std::optional<PairwiseTopQueues<Stat_, Index_> > >& pqueues,
     const std::size_t ngroups,
     Markers<include_stat_, Index_, Stat_>& output
 ) {
     // We know it fits into an 'int' as this is what we got originally.
-    const int num_threads = pqueues.size();
+    const int num_available = pqueues.size();
+    if (num_available == 0) {
+        sanisizer::resize(output, ngroups);
+        for (I<decltype(ngroups)> g1 = 0; g1 < ngroups; ++g1) {
+            sanisizer::resize(output[g1], ngroups);
+        }
+        return;
+    }
 
     // Consolidating all of the thread-specific queues into a single queue.
-    auto& true_pqueue = pqueues.front(); // we better have at least one thread.
-    for (int t = 1; t < num_threads; ++t) {
+    auto& true_pqueue = *(pqueues.front());
+    for (int t = 1; t < num_available; ++t) {
+        auto& current_pqueue = *(pqueues[t]);
         for (I<decltype(ngroups)> g1 = 0; g1 < ngroups; ++g1) {
             for (I<decltype(ngroups)> g2 = 0; g2 < ngroups; ++g2) {
-                auto& current_in = pqueues[t][g1][g2];
+                auto& current_in = current_pqueue[g1][g2];
                 auto& current_out = true_pqueue[g1][g2];
                 while (!current_in.empty()) {
                     current_out.push(current_in.top());

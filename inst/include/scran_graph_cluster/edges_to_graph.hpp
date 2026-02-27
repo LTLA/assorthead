@@ -17,7 +17,7 @@ namespace scran_graph_cluster {
 
 /**
  * Create an `raiigraph:Graph` object from an array of edges.
- * This assumes that `igraph_setup()` or `raiigraph::initialize()` has already been called.
+ * This calls `raiigraph::initialize()` internally to execute the set-up for the **igraph** library. 
  *
  * @tparam Vertex_ Integer type of the vertex IDs.
  *
@@ -27,22 +27,27 @@ namespace scran_graph_cluster {
  * For directed graphs, the edge starts from the first vertex and ends at the second vertex.
  * @param num_vertices Number of vertices in the graph.
  * @param directed Whether the graph is directed.
- * This should be one of `IGRAPH_DIRECTED` or `IGRAPH_UNDIRECTED`.
  *
  * @return A graph created from `edges`.
  */
 template<typename Vertex_>
-raiigraph::Graph edges_to_graph(const std::size_t double_edges, const Vertex_* const edges, const std::size_t num_vertices, const igraph_bool_t directed) {
+raiigraph::Graph edges_to_graph(const std::size_t double_edges, const Vertex_* const edges, const std::size_t num_vertices, const bool directed) {
+    raiigraph::initialize();
+
+    // Make sure signature doesn't require any igraph-related types, as these
+    // might not be usable before the library is initialized.
+    const auto actual_directed = (directed ? IGRAPH_DIRECTED : IGRAPH_UNDIRECTED);
+
     if constexpr(std::is_same<Vertex_, igraph_int_t>::value) {
         const auto edge_view = igraph_vector_int_view(edges, sanisizer::cast<igraph_int_t>(double_edges));
-        return raiigraph::Graph(&edge_view, num_vertices, directed);
+        return raiigraph::Graph(&edge_view, num_vertices, actual_directed);
     } else {
         auto tmp = sanisizer::create<raiigraph::IntegerVector>(double_edges);
         auto& payload = *(tmp.get());
         for (std::size_t x = 0; x < double_edges; ++x) {
             VECTOR(payload)[x] = edges[x];
         }
-        return raiigraph::Graph(tmp, num_vertices, directed);
+        return raiigraph::Graph(tmp, num_vertices, actual_directed);
     }
 }
 

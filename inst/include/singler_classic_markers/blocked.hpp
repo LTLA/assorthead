@@ -63,11 +63,7 @@ Markers<include_stat_, Index_, Stat_> choose_blocked_raw(
     const std::size_t nblocks = tatami_stats::total_groups/*<std::size_t>*/(block, NC);
 
     const auto num_keep = get_num_keep<Index_>(ngroups, options.number);
-    if (num_keep == 0 || NC == 0 || matrix.nrow() == 0) {
-        return report_empty_markers<include_stat_, Index_, Stat_>(ngroups);
-    }
-
-    auto pqueues = sanisizer::create<std::vector<PairwiseTopQueues<Stat_, Index_> > >(options.num_threads);
+    auto pqueues = sanisizer::create<std::vector<std::optional<PairwiseTopQueues<Stat_, Index_> > > >(options.num_threads);
 
     // Creating the combinations between block and not.
     const auto ncombos = sanisizer::product<std::size_t>(ngroups, nblocks); // check that all producs below are safe.
@@ -77,19 +73,19 @@ Markers<include_stat_, Index_, Stat_> choose_blocked_raw(
     }
     auto combo_sizes = tatami_stats::tabulate_groups(combinations.data(), NC);
 
-    scan_matrix<Stat_>(
+    const auto num_used = scan_matrix<Stat_>(
         matrix,
         sanisizer::cast<std::size_t>(ncombos),
         combinations.data(),
         combo_sizes,
 
-        /* setup = */ [&](const int t) -> bool {
-            allocate_pairwise_queues(pqueues[t], num_keep, ngroups, options.keep_ties, /* check_nan = */ false); // we'll check it ourselves.
-            return false;
+        /* setup = */ [&]() -> PairwiseTopQueues<Stat_, Index_> {
+            PairwiseTopQueues<Stat_, Index_> output;
+            allocate_pairwise_queues(output, num_keep, ngroups, options.keep_ties, /* check_nan = */ false); // we'll check it ourselves.
+            return output;
         },
 
-        /* fun = */ [&](const int t, const Index_ r, const std::vector<Stat_>& medians, bool) -> void {
-            auto& curqueues = pqueues[t];
+        /* fun = */ [&](const Index_ r, const std::vector<Stat_>& medians, PairwiseTopQueues<Stat_, Index_>& curqueues) -> void {
             for (I<decltype(ngroups)> g1 = 1; g1 < ngroups; ++g1) {
                 for (I<decltype(ngroups)> g2 = 0; g2 < g1; ++g2) {
 
@@ -131,9 +127,14 @@ Markers<include_stat_, Index_, Stat_> choose_blocked_raw(
             }
         },
 
+        /* finalize = */ [&](const int t, PairwiseTopQueues<Stat_, Index_>& curqueues) -> void {
+            pqueues[t] = std::move(curqueues);
+        },
+
         options.num_threads
     );
 
+    pqueues.resize(num_used); 
     Markers<include_stat_, Index_, Stat_> output;
     report_best_top_queues<include_stat_>(pqueues, ngroups, output);
     return output;
