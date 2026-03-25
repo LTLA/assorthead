@@ -6,6 +6,7 @@
 #include <cstddef>
 
 #include "Writer.hpp"
+#include "utils.hpp"
 
 /**
  * @file OstreamWriter.hpp
@@ -19,7 +20,7 @@ namespace byteme {
  * @brief Read bytes from a `std::ostream`.
  *
  * @tparam Stream_ Class providing an output stream of bytes, satisfying the `std::ostream` interface.
- * This is most typically a `std::unique_ptr<std::ostream> >` but a concrete subclass may also be used to encourage compiler devirtualization.
+ * This is most typically a `std::unique_ptr<std::ostream>` but a concrete subclass may also be used to encourage compiler devirtualization.
  * Either a raw or smart pointer may be used depending on how the lifetime of the pointed-to object is managed.
  *
  * This is just a wrapper around `std::ostream::write` for compatibility.
@@ -32,15 +33,29 @@ public:
      */
     OstreamWriter(Pointer_ output) : my_output(std::move(output)) {}
 
+    /**
+     * @cond
+     */
+    ~OstreamWriter() {
+        try {
+            my_output->flush(); 
+        } catch (...) {
+            ; // don't allow exceptions to propagate out of this function, as destructors shouldn't throw.
+        }
+    }
+    /**
+     * @endcond
+     */
+
 public:
     using Writer::write;
 
     void write(const unsigned char* buffer, std::size_t n) {
         safe_write<std::streamsize, false>(
-            reinterpret_cast<const char*>(buffer),
+            buffer,
             n,
-            [&](const char* ptr0, std::streamsize n0) -> void {
-                my_output->write(ptr0, n0);
+            [&](const unsigned char* ptr0, std::streamsize n0) -> void {
+                my_output->write(reinterpret_cast<const char*>(ptr0), n0);
                 if (!(my_output->good())) {
                     throw std::runtime_error("failed to write to arbitrary output stream");
                 }

@@ -411,6 +411,8 @@ struct Options {
  *
  * @tparam Provisioner_ A class namespace defining static methods for creating new `Base` objects.
  * See `hdf5::parse()` for more details. 
+ * @tparam Reader_ Class of the source of input bytes.
+ * This should satisfy the `byteme::Reader` interface.
  * @tparam Externals_ Class describing how to resolve external references for type `EXTERNAL`.
  * See `hdf5::parse()` for more details. 
  *
@@ -423,15 +425,12 @@ struct Options {
  *
  * Any invalid representations in `reader` will cause an error to be thrown.
  */
-template<class Provisioner_, class Externals_>
-ParsedList parse(byteme::Reader& reader, Externals_ ext, const Options& options) {
-    std::unique_ptr<byteme::PerByteInterface<char> > pb;
-    if (options.parallel) {
-        pb.reset(new byteme::PerByteSerial<char, byteme::Reader*>(&reader));
-    } else {
-        pb.reset(new byteme::PerByteParallel<char, byteme::Reader*>(&reader));
-    }
-    auto contents = millijson::parse(*pb);
+template<class Provisioner_, class Reader_, class Externals_>
+ParsedList parse(Reader_& reader, Externals_ ext, const Options& options) {
+    millijson::ParseOptions popt;
+    popt.buffer_size = options.buffer_size;
+    popt.parallel = options.parallel;
+    auto contents = millijson::parse(reader, popt);
 
     Version version;
     if (contents->type() == millijson::OBJECT) {
@@ -478,12 +477,13 @@ ParsedList parse(byteme::Reader& reader, Externals_ ext, const Options& options)
  */
 template<class Provisioner_, class Externals_>
 ParsedList parse_file(const std::string& file, Externals_ ext, const Options& options) {
-    byteme::SomeFileReader reader(file.c_str(), [&]{
-        byteme::SomeFileReaderOptions sopt;
-        sopt.buffer_size = options.buffer_size;
-        return sopt;
-    }());
-    return parse<Provisioner_>(reader, std::move(ext), options);
+    std::unique_ptr<byteme::Reader> ptr;
+    if (byteme::is_gzip(file.c_str())) {
+        ptr.reset(new byteme::GzipFileReader(file.c_str(), {}));
+    } else {
+        ptr.reset(new byteme::RawFileReader(file.c_str(), {}));
+    }
+    return parse<Provisioner_>(*ptr, std::move(ext), options);
 }
 
 /**
@@ -506,12 +506,13 @@ ParsedList parse_file(const std::string& file, Externals_ ext, const Options& op
  */
 template<class Provisioner_, class Externals_>
 ParsedList parse_buffer(const unsigned char* buffer, size_t len, Externals_ ext, const Options& options) {
-    byteme::SomeBufferReader reader(buffer, len, [&]{
-        byteme::SomeBufferReaderOptions sopt;
-        sopt.buffer_size = options.buffer_size;
-        return sopt;
-    }());
-    return parse<Provisioner_>(reader, std::move(ext), options);
+    std::unique_ptr<byteme::Reader> ptr;
+    if (byteme::is_zlib_or_gzip(buffer, len)) {
+        ptr.reset(new byteme::ZlibBufferReader(buffer, len, {}));
+    } else {
+        ptr.reset(new byteme::RawBufferReader(buffer, len));
+    }
+    return parse<Provisioner_>(*ptr, std::move(ext), options);
 }
 
 /**

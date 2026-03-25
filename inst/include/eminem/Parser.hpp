@@ -11,9 +11,9 @@
 #include <mutex>
 #include <condition_variable>
 #include <limits>
+#include <iostream>
 
-#include "byteme/RawBufferReader.hpp"
-#include "byteme/PerByte.hpp"
+#include "byteme/byteme.hpp"
 #include "sanisizer/sanisizer.hpp"
 
 #include "utils.hpp"
@@ -36,22 +36,24 @@ struct ParserOptions {
     int num_threads = 1;
 
     /**
-     * Approximate size of the block (in bytes) to be processed by each thread.
-     * This is rounded up to the nearest newline before parallel processing.
-     * Only relevant when `num_threads > 1`.
+     * Size of the buffer in which to store bytes extracted from the `byteme::Reader` prior to parsing.
+     * This is also used as the approximate size of the block to be processed by each thread, rounded up to the nearest newline before parallel processing.
      */
-    std::size_t block_size = sanisizer::cap<std::size_t>(65536);
+    std::size_t buffer_size = sanisizer::cap<std::size_t>(65536);
 };
 
 /**
  * @cond
  */
+template<typename Input_>
+using I = std::remove_reference_t<std::remove_cv_t<Input_> >;
+
 template<typename Workspace_>
 class ThreadPool {
 public:
     template<typename RunJob_>
-    ThreadPool(RunJob_ run_job, int num_threads) :
-        my_helpers(sanisizer::cast<decltype(my_helpers.size())>(num_threads)) 
+    ThreadPool(RunJob_ run_job, const int num_threads) :
+        my_helpers(sanisizer::as_size_type<I<decltype(my_helpers)> >(num_threads)) 
     {
         std::mutex init_mut;
         std::condition_variable init_cv;
@@ -135,9 +137,9 @@ private:
 public:
     template<typename CreateJob_, typename MergeJob_>
     bool run(CreateJob_ create_job, MergeJob_ merge_job) {
-        auto num_threads = my_threads.size();
+        const auto num_threads = my_threads.size();
         bool finished = false;
-        decltype(num_threads) thread = 0, finished_count = 0;
+        I<decltype(num_threads)> thread = 0, finished_count = 0;
 
         // We submit jobs by cycling through all threads, then we merge their results in order of submission.
         // This is a less efficient worksharing scheme but it guarantees the same order of merges.
@@ -187,10 +189,37 @@ public:
     }
 };
 
+// Mimics parts of the BufferedReader interface,
+// but just uses an existing buffer rather than making and filling another vector.
+// This allows each thread to directly operate on its own buffer after calling BufferedReader::extract(). 
+class DirectBufferedReader {
+public:
+    DirectBufferedReader(const char* buffer, std::size_t n) : my_buffer(buffer), my_len(n) {}
+
+private:
+    const char* my_buffer;
+    std::size_t my_len;
+    std::size_t my_position = 0;
+
+public:
+    char get() const {
+        return my_buffer[my_position];
+    }
+
+    bool valid() const {
+        return my_position < my_len;
+    }
+
+    bool advance() {
+        ++my_position;
+        return valid();
+    }
+};
+
 template<class Input_>
-bool fill_to_next_newline(Input_& input, std::vector<char>& buffer, std::size_t block_size) {
-    buffer.resize(block_size);
-    auto done = input.extract(block_size, buffer.data());
+bool fill_to_next_newline(Input_& input, std::vector<char>& buffer, std::size_t buffer_size) {
+    buffer.resize(buffer_size);
+    auto done = input.extract(buffer_size, buffer.data());
     buffer.resize(done.first);
     if (!done.second || buffer.empty()) {
         return false;
@@ -228,8 +257,8 @@ typedef unsigned long long LineIndex;
 /**
  * @brief Parse a matrix from a Matrix Market file.
  *
- * @tparam Input_ Class of the source of input bytes.
- * This should be a pointer to an object satisfying the `byteme::PerByteInterface` instance.
+ * @tparam ReaderPointer_ Class of the source of input bytes.
+ * This should be a smart or raw pointer to an object satisfying the `byteme::Reader` instance.
  * @tparam Index_ Integer type of the row/column indices.
  *
  * This parses a Matrix Market file according to the specification described at https://math.nist.gov/MatrixMarket/reports/MMformat.ps.gz.
@@ -271,25 +300,26 @@ typedef unsigned long long LineIndex;
  * No validation is performed to determine whether coordinates are consistent with non-general symmetries.
  * Similarly, we do not check for the existence of multiple lines with the same row/column indices in coordinate matrices/vectors.
  */
-template<class Input_, typename Index_ = unsigned long long>
+template<class ReaderPointer_, typename Index_ = unsigned long long>
 class Parser {
 public:
     /**
-     * @param input Source of input bytes, typically a pointer to a `byteme::PerByteInterface` instance.
+     * @param input Source of input bytes, typically a pointer to a `byteme::Reader` instance.
      * @param options Further options.
      */
-    Parser(Input_ input, const ParserOptions& options) : 
-        my_input(std::move(input)),
+    Parser(ReaderPointer_ input, const ParserOptions& options) : 
+        my_input(std::move(input), options.buffer_size),
         my_nthreads(options.num_threads),
-        my_block_size(options.block_size)
+        my_buffer_size(options.buffer_size)
     {
-        sanisizer::cast<typename std::vector<char>::size_type>(my_block_size); // checking that there won't be any overflow in fill_to_next_newline().
+        sanisizer::as_size_type<std::vector<char> >(my_buffer_size); // checking that there won't be any overflow in fill_to_next_newline().
     }
 
 private:
-    Input_ my_input;
+    // Hard-coding a serial reader here, because if parallelization was available, it's better to use the extra threads for parsing.
+    byteme::SerialBufferedReader<char, ReaderPointer_> my_input;
     int my_nthreads;
-    std::size_t my_block_size;
+    std::size_t my_buffer_size;
 
     LineIndex my_current_line = 0;
     MatrixDetails my_details;
@@ -353,23 +383,23 @@ private:
     };
 
     ExpectedMatch advance_past_expected_string() {
-        if (!(my_input->advance())) { // move off the last character.
+        if (!(my_input.advance())) { // move off the last character.
             return ExpectedMatch(true, false, false);
         }
 
-        char next = my_input->get();
+        char next = my_input.get();
         if (next == ' ' || next == '\t' || next == '\r') {
-            if (!advance_and_chomp(*my_input)) { // gobble up all of the remaining horizontal space.
+            if (!advance_and_chomp(my_input)) { // gobble up all of the remaining horizontal space.
                 return ExpectedMatch(true, false, false);
             }
-            if (my_input->get() == '\n') {
-                bool remaining = my_input->advance(); // move past the newline for consistency with other functions.
+            if (my_input.get() == '\n') {
+                bool remaining = my_input.advance(); // move past the newline for consistency with other functions.
                 return ExpectedMatch(true, true, remaining); // move past the newline for consistency with other functions.
             }
             return ExpectedMatch(true, false, true);
 
         } else if (next == '\n') {
-            bool remaining = my_input->advance(); // move past the newline for consistency with other functions.
+            bool remaining = my_input.advance(); // move past the newline for consistency with other functions.
             return ExpectedMatch(true, true, remaining);
         }
 
@@ -384,10 +414,10 @@ private:
         // 'ptr[start-1]' (and thus requires an advance() call before we can
         // compare against 'ptr[start]').
         for (std::size_t i = start; i < len; ++i) {
-            if (!my_input->advance()) {
+            if (!my_input.advance()) {
                 return ExpectedMatch(false, false, false);
             }
-            if (my_input->get() != ptr[i]) {
+            if (my_input.get() != ptr[i]) {
                 return ExpectedMatch(false, false, true);
             }
         }
@@ -403,7 +433,7 @@ private:
     bool parse_banner_object() {
         ExpectedMatch res;
 
-        char x = my_input->get();
+        char x = my_input.get();
         if (x == 'm') {
             res = is_expected_string("matrix", 6);
             my_details.object = Object::MATRIX;
@@ -425,7 +455,7 @@ private:
     bool parse_banner_format() {
         ExpectedMatch res;
 
-        char x = my_input->get();
+        char x = my_input.get();
         if (x == 'c') {
             res = is_expected_string("coordinate", 10);
             my_details.format = Format::COORDINATE;
@@ -447,7 +477,7 @@ private:
     bool parse_banner_field() {
         ExpectedMatch res;
 
-        char x = my_input->get();
+        char x = my_input.get();
         if (x == 'i') { 
             res = is_expected_string("integer", 7);
             my_details.field = Field::INTEGER;
@@ -478,7 +508,7 @@ private:
     bool parse_banner_symmetry() {
         ExpectedMatch res;
 
-        char x = my_input->get();
+        char x = my_input.get();
         if (x == 'g') {
             res = is_expected_string("general", 7);
             my_details.symmetry = Symmetry::GENERAL;
@@ -486,8 +516,8 @@ private:
             res = is_expected_string("hermitian", 9);
             my_details.symmetry = Symmetry::HERMITIAN;
         } else if (x == 's') {
-            if (my_input->advance()) {
-                char x = my_input->get();
+            if (my_input.advance()) {
+                char x = my_input.get();
                 if (x == 'k') {
                     res = is_expected_string("skew-symmetric", 14, 2);
                     my_details.symmetry = Symmetry::SKEW_SYMMETRIC;
@@ -512,10 +542,10 @@ private:
         if (my_passed_banner) {
             throw std::runtime_error("banner has already been scanned");
         }
-        if (!(my_input->valid())) {
+        if (!(my_input.valid())) {
             throw std::runtime_error("failed to find banner line before end of file");
         }
-        if (my_input->get() != '%') {
+        if (my_input.get() != '%') {
             throw std::runtime_error("first line of the file should be the banner");
         }
  
@@ -560,11 +590,11 @@ private:
         // character cannot be a newline if eol = false.
         if (!eol) {
             do {
-                if (!(my_input->advance())) {
+                if (!(my_input.advance())) {
                     throw std::runtime_error("end of file reached before the end of the banner line");
                 }
-            } while (my_input->get() != '\n'); 
-            my_input->advance(); // move past the newline.
+            } while (my_input.get() != '\n'); 
+            my_input.advance(); // move past the newline.
         }
 
         ++my_current_line;
@@ -700,48 +730,48 @@ private:
     LineIndex my_nlines = 0;
 
     void scan_size() {
-        if (!(my_input->valid())) {
+        if (!(my_input.valid())) {
             throw std::runtime_error("failed to find size line before end of file");
         }
 
         // Handling stray comments, empty lines, and leading whitespace.
-        if (!skip_lines(*my_input, my_current_line)) {
+        if (!skip_lines(my_input, my_current_line)) {
             throw std::runtime_error("failed to find size line before end of file");
         }
-        if (!chomp(*my_input)) {
+        if (!chomp(my_input)) {
             throw std::runtime_error("expected at least one size field on line " + std::to_string(my_current_line + 1));
         }
 
         if (my_details.object == Object::MATRIX) {
             if (my_details.format == Format::COORDINATE) {
-                auto first_field = scan_size_field<false>(*my_input, my_current_line);
+                auto first_field = scan_size_field<false>(my_input, my_current_line);
                 my_nrows = first_field.index;
 
-                auto second_field = scan_size_field<false>(*my_input, my_current_line);
+                auto second_field = scan_size_field<false>(my_input, my_current_line);
                 my_ncols = second_field.index;
 
-                auto third_field = scan_line_count_field(*my_input, my_current_line);
+                auto third_field = scan_line_count_field(my_input, my_current_line);
                 my_nlines = third_field.index;
 
             } else { // i.e., my_details.format == Format::ARRAY
-                auto first_field = scan_size_field<false>(*my_input, my_current_line);
+                auto first_field = scan_size_field<false>(my_input, my_current_line);
                 my_nrows = first_field.index;
 
-                auto second_field = scan_size_field<true>(*my_input, my_current_line);
+                auto second_field = scan_size_field<true>(my_input, my_current_line);
                 my_ncols = second_field.index;
                 my_nlines = sanisizer::product<LineIndex>(my_nrows, my_ncols);
             }
 
         } else {
             if (my_details.format == Format::COORDINATE) {
-                auto first_field = scan_size_field<false>(*my_input, my_current_line);
+                auto first_field = scan_size_field<false>(my_input, my_current_line);
                 my_nrows = first_field.index;
 
-                auto second_field = scan_line_count_field(*my_input, my_current_line);
+                auto second_field = scan_line_count_field(my_input, my_current_line);
                 my_nlines = second_field.index;
 
             } else { // i.e., my_details.format == Format::ARRAY
-                auto first_field = scan_size_field<true>(*my_input, my_current_line);
+                auto first_field = scan_size_field<true>(my_input, my_current_line);
                 my_nlines = first_field.index;
                 my_nrows = my_nlines;
             }
@@ -817,7 +847,7 @@ private:
 
     template<typename Workspace_>
     bool configure_parallel_workspace(Workspace_& work) {
-        bool available = fill_to_next_newline(*my_input, work.buffer, my_block_size);
+        bool available = fill_to_next_newline(my_input, work.buffer, my_buffer_size);
         work.contents.clear();
         work.overall_line = my_current_line;
         my_current_line += count_newlines(work.buffer);
@@ -891,7 +921,7 @@ private:
         if (my_nthreads == 1) {
             FieldParser_ fparser;
             finished = scan_matrix_coordinate_non_pattern_base<Type_>(
-                *my_input,
+                my_input,
                 my_current_line,
                 fparser,
                 [&](Index_ r, Index_ c, Type_ value) -> bool {
@@ -911,10 +941,9 @@ private:
 
             ThreadPool<Workspace> tp(
                 [&](Workspace& work) -> bool {
-                    byteme::RawBufferReader reader(reinterpret_cast<const unsigned char*>(work.buffer.data()), work.buffer.size());
-                    byteme::PerByteSerial<char, byteme::RawBufferReader*> pb(&reader);
+                    DirectBufferedReader bufreader(work.buffer.data(), work.buffer.size());
                     return scan_matrix_coordinate_non_pattern_base<Type_>(
-                        pb,
+                        bufreader,
                         work.overall_line,
                         work.fparser,
                         [&](Index_ r, Index_ c, Type_ value) -> bool {
@@ -981,7 +1010,7 @@ private:
 
         if (my_nthreads == 1) {
             finished = scan_matrix_coordinate_pattern_base(
-                *my_input,
+                my_input,
                 my_current_line,
                 [&](Index_ r, Index_ c) -> bool {
                     check_num_lines_loop(current_data_line);
@@ -999,10 +1028,9 @@ private:
 
             ThreadPool<Workspace> tp(
                 [&](Workspace& work) -> bool {
-                    byteme::RawBufferReader reader(reinterpret_cast<const unsigned char*>(work.buffer.data()), work.buffer.size());
-                    byteme::PerByteSerial<char, byteme::RawBufferReader*> pb(&reader);
+                    DirectBufferedReader bufreader(work.buffer.data(), work.buffer.size());
                     return scan_matrix_coordinate_pattern_base(
-                        pb,
+                        bufreader,
                         work.overall_line,
                         [&](Index_ r, Index_ c) -> bool {
                             work.contents.emplace_back(r, c);
@@ -1079,7 +1107,7 @@ private:
         if (my_nthreads == 1) {
             FieldParser_ fparser;
             finished = scan_vector_coordinate_non_pattern_base<Type_>(
-                *my_input,
+                my_input,
                 my_current_line,
                 fparser,
                 [&](Index_ r, Type_ value) -> bool {
@@ -1099,10 +1127,9 @@ private:
 
             ThreadPool<Workspace> tp(
                 [&](Workspace& work) -> bool {
-                    byteme::RawBufferReader reader(reinterpret_cast<const unsigned char*>(work.buffer.data()), work.buffer.size());
-                    byteme::PerByteSerial<char, byteme::RawBufferReader*> pb(&reader);
+                    DirectBufferedReader bufreader(work.buffer.data(), work.buffer.size());
                     return scan_vector_coordinate_non_pattern_base<Type_>(
-                        pb,
+                        bufreader,
                         work.overall_line,
                         work.fparser,
                         [&](Index_ r, Type_ value) -> bool {
@@ -1168,7 +1195,7 @@ private:
 
         if (my_nthreads == 1) {
             finished = scan_vector_coordinate_pattern_base(
-                *my_input,
+                my_input,
                 my_current_line,
                 [&](Index_ r) -> bool {
                     check_num_lines_loop(current_data_line);
@@ -1186,10 +1213,9 @@ private:
 
             ThreadPool<Workspace> tp(
                 [&](Workspace& work) -> bool {
-                    byteme::RawBufferReader reader(reinterpret_cast<const unsigned char*>(work.buffer.data()), work.buffer.size());
-                    byteme::PerByteSerial<char, byteme::RawBufferReader*> pb(&reader);
+                    DirectBufferedReader bufreader(work.buffer.data(), work.buffer.size());
                     return scan_vector_coordinate_pattern_base(
-                        pb,
+                        bufreader,
                         work.overall_line,
                         [&](Index_ r) -> bool {
                             work.contents.emplace_back(r);
@@ -1263,7 +1289,7 @@ private:
         if (my_nthreads == 1) {
             FieldParser_ fparser;
             finished = scan_matrix_array_base<Type_>(
-                *my_input,
+                my_input,
                 my_current_line,
                 fparser,
                 [&](Type_ value) -> bool {
@@ -1287,10 +1313,9 @@ private:
 
             ThreadPool<Workspace> tp(
                 [&](Workspace& work) -> bool {
-                    byteme::RawBufferReader reader(reinterpret_cast<const unsigned char*>(work.buffer.data()), work.buffer.size());
-                    byteme::PerByteSerial<char, byteme::RawBufferReader*> pb(&reader);
+                    DirectBufferedReader bufreader(work.buffer.data(), work.buffer.size());
                     return scan_matrix_array_base<Type_>(
-                        pb,
+                        bufreader,
                         work.overall_line,
                         work.fparser,
                         [&](Type_ value) -> bool {
@@ -1356,7 +1381,7 @@ private:
         if (my_nthreads == 1) {
             FieldParser_ fparser;
             finished = scan_vector_array_base<Type_>(
-                *my_input,
+                my_input,
                 my_current_line,
                 fparser,
                 [&](Type_ value) -> bool {
@@ -1376,10 +1401,9 @@ private:
 
             ThreadPool<Workspace> tp(
                 [&](Workspace& work) -> bool {
-                    byteme::RawBufferReader reader(reinterpret_cast<const unsigned char*>(work.buffer.data()), work.buffer.size());
-                    byteme::PerByteSerial<char, byteme::RawBufferReader*> pb(&reader);
+                    DirectBufferedReader bufreader(work.buffer.data(), work.buffer.size());
                     return scan_vector_array_base<Type_>(
-                        pb,
+                        bufreader,
                         work.overall_line,
                         work.fparser,
                         [&](Type_ value) -> bool {

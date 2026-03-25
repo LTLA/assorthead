@@ -5,11 +5,7 @@
 #include <cstddef>
 
 #include "Parser.hpp"
-#include "byteme/PerByte.hpp"
-#include "byteme/GzipFileReader.hpp"
-#include "byteme/ZlibBufferReader.hpp"
-#include "byteme/SomeFileReader.hpp"
-#include "byteme/SomeBufferReader.hpp"
+#include "byteme/byteme.hpp"
 
 /**
  * @file from_gzip.hpp
@@ -19,25 +15,17 @@
 namespace eminem {
 
 /**
- * @brief Options for `parse_gzip_file()`.
+ * @cond
  */
-struct ParseGzipFileOptions {
-    /**
-     * Buffer size to use for reading and decompression.
-     */
-    std::size_t buffer_size = 65536;
-
-    /**
-     * Number of threads to use to parallelize the parsing.
-     */
-    int num_threads = 1;
-
-    /**
-     * Block size (in bytes) to define the work for each thread.
-     * Only relevant when `num_threads > 1`.
-     */
-    std::size_t block_size = 65536;
-};
+// For back-compatibility.
+// If people want to parametrize the Reader construction, they should just directly create the Parser themselves.
+typedef ParserOptions ParseGzipFileOptions;
+typedef ParserOptions ParseZlibBufferOptions;
+typedef ParserOptions ParseSomeFileOptions;
+typedef ParserOptions ParseSomeBufferOptions;
+/**
+ * @endcond
+ */
 
 /**
  * Parse a Gzip-compressed Matrix Market file.
@@ -46,46 +34,15 @@ struct ParseGzipFileOptions {
  *
  * @param path Pointer to a string containing a path to a Gzip-compressed Matrix Market file.
  * @param options Further options.
+ *
+ * @return A `Parser` instance that reads from `path`.
+ * This uses `Index_` as the integer type of its row/column indices.
  */
 template<typename Index_ = unsigned long long>
-Parser<std::unique_ptr<byteme::PerByteSerial<char> >, Index_> parse_gzip_file(const char* path, const ParseGzipFileOptions& options) {
-    ParserOptions popt;
-    popt.num_threads = options.num_threads;
-    popt.block_size = options.block_size;
-
-    byteme::GzipFileReaderOptions gopt;
-    gopt.buffer_size = options.buffer_size;
-    auto reader = std::make_unique<byteme::GzipFileReader>(path, gopt);
-    auto pb = std::make_unique<byteme::PerByteSerial<char> >(std::move(reader));
-    return Parser<std::unique_ptr<byteme::PerByteSerial<char> >, Index_>(std::move(pb), popt);
+auto parse_gzip_file(const char* path, const ParserOptions& options) {
+    auto reader = std::make_unique<byteme::GzipFileReader>(path, byteme::GzipFileReaderOptions());
+    return Parser<decltype(reader), Index_>(std::move(reader), options);
 }
-
-/**
- * @brief Options for `parse_zlib_buffer()`.
- */
-struct ParseZlibBufferOptions {
-    /**
-     * Buffer size to use for reading.
-     */
-    std::size_t buffer_size = 65536;
-
-    /**
-     * Number of threads to use to parallelize the parsing.
-     */
-    int num_threads = 1;
-
-    /**
-     * Block size (in bytes) to define the work for each thread.
-     * Only relevant when `num_threads > 1`.
-     */
-    std::size_t block_size = 65536;
-
-    /**
-     * Compression of the stream, i.e., DEFLATE, zlib or gzip.
-     * This is set to 3 to perform auto-detection, see the `byteme::ZlibBufferReader` constructor.
-     */
-    int mode = 3;
-};
 
 /**
  * Parse a Zlib-compressed Matrix Market buffer.
@@ -95,41 +52,15 @@ struct ParseZlibBufferOptions {
  * @param buffer Pointer to an array containing the contents of a Zlib-compressed Matrix Market file.
  * @param len Length of the array referenced by `buffer`.
  * @param options Further options.
+ *
+ * @return A `Parser` instance that reads from `buffer`.
+ * This uses `Index_` as the integer type of its row/column indices.
  */
 template<typename Index_ = unsigned long long>
-Parser<std::unique_ptr<byteme::PerByteSerial<char> >, Index_> parse_zlib_buffer(const unsigned char* buffer, std::size_t len, const ParseZlibBufferOptions& options) {
-    ParserOptions popt;
-    popt.num_threads = options.num_threads;
-    popt.block_size = options.block_size;
-
-    byteme::ZlibBufferReaderOptions zopt;
-    zopt.buffer_size = options.buffer_size;
-    zopt.mode = options.mode;
-    auto reader = std::make_unique<byteme::ZlibBufferReader>(buffer, len, zopt);
-    auto pb = std::make_unique<byteme::PerByteSerial<char> >(std::move(reader));
-    return Parser<std::unique_ptr<byteme::PerByteSerial<char> >, Index_>(std::move(pb), popt);
+auto parse_zlib_buffer(const unsigned char* buffer, std::size_t len, const ParserOptions& options) {
+    auto reader = std::make_unique<byteme::ZlibBufferReader>(buffer, len, byteme::ZlibBufferReaderOptions());
+    return Parser<decltype(reader), Index_>(std::move(reader), options);
 }
-
-/**
- * @brief Options for `parse_some_file()`.
- */
-struct ParseSomeFileOptions {
-    /**
-     * Buffer size to use for reading and decompression.
-     */
-    std::size_t buffer_size = 65536;
-
-    /**
-     * Number of threads to use to parallelize the parsing.
-     */
-    int num_threads = 1;
-
-    /**
-     * Block size (in bytes) to define the work for each thread.
-     * Only relevant when `num_threads > 1`.
-     */
-    std::size_t block_size = 65536;
-};
 
 /**
  * Parse a possibly Gzip-compressed or uncompressed Matrix Market file.
@@ -138,41 +69,20 @@ struct ParseSomeFileOptions {
  *
  * @param path Pointer to a string containing a path to a possibly-compressed Matrix Market file.
  * @param options Further options.
+ *
+ * @return A `Parser` instance that reads from `buffer`.
+ * This uses `Index_` as the integer type of its row/column indices.
  */
 template<typename Index_ = unsigned long long>
-Parser<std::unique_ptr<byteme::PerByteSerial<char> >, Index_> parse_some_file(const char* path, const ParseSomeFileOptions& options) {
-    ParserOptions popt;
-    popt.num_threads = options.num_threads;
-    popt.block_size = options.block_size;
-
-    byteme::SomeFileReaderOptions sopt;
-    sopt.buffer_size = options.buffer_size;
-    auto reader = std::make_unique<byteme::SomeFileReader>(path, sopt);
-    auto pb = std::make_unique<byteme::PerByteSerial<char> >(std::move(reader));
-
-    return Parser<std::unique_ptr<byteme::PerByteSerial<char> >, Index_>(std::move(pb), popt);
+auto parse_some_file(const char* path, const ParserOptions& options) {
+    std::unique_ptr<byteme::Reader> ptr;
+    if (byteme::is_gzip(path)) {
+        ptr.reset(new byteme::GzipFileReader(path, {}));
+    } else {
+        ptr.reset(new byteme::RawFileReader(path, {}));
+    }
+    return Parser<std::unique_ptr<byteme::Reader>, Index_>(std::move(ptr), options);
 }
-
-/**
- * @brief Options for `parse_some_buffer()`.
- */
-struct ParseSomeBufferOptions {
-    /**
-     * Buffer size to use for reading and decompression.
-     */
-    std::size_t buffer_size = 65536;
-
-    /**
-     * Number of threads to use to parallelize the parsing.
-     */
-    int num_threads = 1;
-
-    /**
-     * Block size (in bytes) to define the work for each thread.
-     * Only relevant when `num_threads > 1`.
-     */
-    std::size_t block_size = 65536;
-};
 
 /**
  * Parse a possibly Zlib-compressed or uncompressed Matrix Market buffer.
@@ -182,18 +92,19 @@ struct ParseSomeBufferOptions {
  * @param buffer Pointer to an array containing the contents of a possibly-compressed Matrix Market file.
  * @param len Length of the array referenced by `buffer`.
  * @param options Further options.
+ *
+ * @return A `Parser` instance that reads from `buffer`.
+ * This uses `Index_` as the integer type of its row/column indices.
  */
 template<typename Index_ = unsigned long long>
-Parser<std::unique_ptr<byteme::PerByteSerial<char> >, Index_> parse_some_buffer(const unsigned char* buffer, std::size_t len, const ParseSomeBufferOptions& options) {
-    ParserOptions popt;
-    popt.num_threads = options.num_threads;
-    popt.block_size = options.block_size;
-
-    byteme::SomeBufferReaderOptions sopt;
-    sopt.buffer_size = options.buffer_size;
-    auto reader = std::make_unique<byteme::SomeBufferReader>(buffer, len, sopt);
-    auto pb = std::make_unique<byteme::PerByteSerial<char> >(std::move(reader));
-    return Parser<std::unique_ptr<byteme::PerByteSerial<char> >, Index_>(std::move(pb), popt);
+auto parse_some_buffer(const unsigned char* buffer, std::size_t len, const ParserOptions& options) {
+    std::unique_ptr<byteme::Reader> ptr;
+    if (byteme::is_zlib_or_gzip(buffer, len)) {
+        ptr.reset(new byteme::ZlibBufferReader(buffer, len, {}));
+    } else {
+        ptr.reset(new byteme::RawBufferReader(buffer, len));
+    }
+    return Parser<std::unique_ptr<byteme::Reader>, Index_>(std::move(ptr), options);
 }
 
 }

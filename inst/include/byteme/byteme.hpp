@@ -5,21 +5,20 @@
 #include "RawBufferReader.hpp"
 #include "RawFileReader.hpp"
 #include "IstreamReader.hpp"
-#include "ChunkedBufferReader.hpp"
 
 #include "Writer.hpp"
 #include "RawBufferWriter.hpp"
 #include "RawFileWriter.hpp"
 #include "OstreamWriter.hpp"
 
-#include "PerByte.hpp"
+#include "BufferedReader.hpp"
+#include "BufferedWriter.hpp"
+
+#include "magic_numbers.hpp"
 
 #if __has_include("zlib.h")
 #include "GzipFileReader.hpp"
 #include "ZlibBufferReader.hpp"
-
-#include "SomeBufferReader.hpp"
-#include "SomeFileReader.hpp"
 
 #include "GzipFileWriter.hpp"
 #include "ZlibBufferWriter.hpp"

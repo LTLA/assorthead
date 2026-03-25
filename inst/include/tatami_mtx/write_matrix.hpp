@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <cassert>
+#include <memory>
 
 #include "utils.hpp"
 
@@ -25,11 +26,11 @@ namespace tatami_mtx {
  * @cond
  */
 template<typename Value_>
-std::size_t convert(Value_ val, std::vector<unsigned char>& buffer, const std::optional<std::chars_format>& format, const std::optional<int>& precision) {
+std::size_t convert(Value_ val, std::vector<char>& buffer, const std::optional<std::chars_format>& format, const std::optional<int>& precision) {
     std::size_t store;
 
     while (1) {
-        const auto bufptr = reinterpret_cast<char*>(buffer.data());
+        const auto bufptr = buffer.data();
         const auto bufsize = buffer.size();
 
         const auto out = [&]() {
@@ -104,6 +105,12 @@ struct WriteMatrixOptions {
     std::optional<int> precision;
 
     /**
+     * Size of the buffer in which to cache written values before flushing them to the `byteme::Writer` instance.
+     * Larger values improve efficiency at the cost of increasing memory usage.
+     */
+    std::size_t buffer_size = sanisizer::cap<std::size_t>(65536);
+
+    /**
      * Number of threads for counting the number of structural non-zeros in a coordinate matrix.
      * This should be positive.
      * Note that this does not affect the writing itself, which is still done in serial.
@@ -125,34 +132,40 @@ struct WriteMatrixOptions {
  */
 template<typename Value_, typename Index_>
 void write_matrix(const tatami::Matrix<Value_, Index_>& matrix, byteme::Writer& writer, const WriteMatrixOptions& options) {
-    const bool coordinate = (options.coordinate.has_value() ? *(options.coordinate) : matrix.is_sparse());
+    std::unique_ptr<byteme::BufferedWriter<char> > bufwriter;
+    if (options.num_threads > 1) {
+        bufwriter.reset(new byteme::ParallelBufferedWriter<char, byteme::Writer*>(&writer, options.buffer_size));
+    } else {
+        bufwriter.reset(new byteme::SerialBufferedWriter<char, byteme::Writer*>(&writer, options.buffer_size));
+    }
 
+    const bool coordinate = (options.coordinate.has_value() ? *(options.coordinate) : matrix.is_sparse());
     if (options.banner) {
-        writer.write("%%MatrixMarket matrix");
+        bufwriter->write("%%MatrixMarket matrix");
         if (coordinate) {
-            writer.write(" coordinate");
+            bufwriter->write(" coordinate");
         } else {
-            writer.write(" array");
+            bufwriter->write(" array");
         }
         if constexpr(std::is_integral<Value_>::value) {
-            writer.write(" integer");
+            bufwriter->write(" integer");
         } else {
-            writer.write(" real");
+            bufwriter->write(" real");
         }
-        writer.write(" general\n");
+        bufwriter->write(" general\n");
     }
 
     const auto NR = matrix.nrow();
     const auto NC = matrix.ncol();
-    std::vector<unsigned char> conversion_buffer(100);
+    std::vector<char> conversion_buffer(100);
 
     if (!coordinate){ 
         const auto NR_size = convert(NR, conversion_buffer, options.format, options.precision);
-        writer.write(conversion_buffer.data(), NR_size);
-        writer.write('\t');
+        bufwriter->write(conversion_buffer.data(), NR_size);
+        bufwriter->write('\t');
         const auto NC_size = convert(NC, conversion_buffer, options.format, options.precision);
-        writer.write(conversion_buffer.data(), NC_size);
-        writer.write('\n');
+        bufwriter->write(conversion_buffer.data(), NC_size);
+        bufwriter->write('\n');
 
         auto ext = tatami::consecutive_extractor<false>(matrix, false, static_cast<Index_>(0), NC);
         auto vbuffer = sanisizer::create<std::vector<Value_> >(NR);
@@ -161,8 +174,8 @@ void write_matrix(const tatami::Matrix<Value_, Index_>& matrix, byteme::Writer& 
             auto ptr = ext->fetch(vbuffer.data());
             for (I<decltype(NR)> r = 0; r < NR; ++r) {
                 const auto used = convert(ptr[r], conversion_buffer, options.format, options.precision); 
-                writer.write(conversion_buffer.data(), used);
-                writer.write('\n');
+                bufwriter->write(conversion_buffer.data(), used);
+                bufwriter->write('\n');
             }
         }
         return;
@@ -171,7 +184,7 @@ void write_matrix(const tatami::Matrix<Value_, Index_>& matrix, byteme::Writer& 
     // Building a look-up table so we don't have to do repeated string conversions.
     const auto nums = std::max(NR, NC);
     std::vector<std::size_t> lookup(sanisizer::sum<typename std::vector<std::size_t>::size_type>(nums, 1));
-    std::vector<unsigned char> dictionary;
+    std::vector<char> dictionary;
     for (Index_ i = 0; i < nums; ++i) {
         const auto used = convert(i + 1, conversion_buffer, options.format, options.precision);
         dictionary.insert(dictionary.end(), conversion_buffer.data(), conversion_buffer.data() + used);
@@ -179,21 +192,21 @@ void write_matrix(const tatami::Matrix<Value_, Index_>& matrix, byteme::Writer& 
     }
 
     if (NR >= 1) {
-        writer.write(dictionary.data() + lookup[NR - 1], lookup[NR] - lookup[NR - 1]);
+        bufwriter->write(dictionary.data() + lookup[NR - 1], lookup[NR] - lookup[NR - 1]);
     } else {
-        writer.write('0');
+        bufwriter->write('0');
     }
-    writer.write('\t');
+    bufwriter->write('\t');
 
     if (NC >= 1) {
-        writer.write(dictionary.data() + lookup[NC - 1], lookup[NC] - lookup[NC - 1]);
+        bufwriter->write(dictionary.data() + lookup[NC - 1], lookup[NC] - lookup[NC - 1]);
     } else {
-        writer.write('0');
+        bufwriter->write('0');
     }
-    writer.write('\t');
+    bufwriter->write('\t');
 
     if (NR == 0 || NC == 0) {
-        writer.write("0\n");
+        bufwriter->write("0\n");
         return;
     }
 
@@ -240,8 +253,8 @@ void write_matrix(const tatami::Matrix<Value_, Index_>& matrix, byteme::Writer& 
             total_size = sanisizer::sum<I<decltype(total_size)> >(total_size, t);
         }
         const auto used = convert(total_size, conversion_buffer, options.format, options.precision);
-        writer.write(conversion_buffer.data(), used);
-        writer.write('\n');
+        bufwriter->write(conversion_buffer.data(), used);
+        bufwriter->write('\n');
 
         if (by_row) {
             auto ext = tatami::consecutive_extractor<true>(matrix, true, static_cast<Index_>(0), NR);
@@ -250,14 +263,14 @@ void write_matrix(const tatami::Matrix<Value_, Index_>& matrix, byteme::Writer& 
             for (I<decltype(NR)> r = 0; r < NR; ++r) {
                 auto range = ext->fetch(vbuffer.data(), ibuffer.data());
                 for (I<decltype(range.number)> i = 0; i < range.number; ++i) {
-                    writer.write(dictionary.data() + lookup[r], lookup[r + 1] - lookup[r]);
-                    writer.write('\t');
+                    bufwriter->write(dictionary.data() + lookup[r], lookup[r + 1] - lookup[r]);
+                    bufwriter->write('\t');
                     const auto index = range.index[i];
-                    writer.write(dictionary.data() + lookup[index], lookup[index + 1] - lookup[index]);
-                    writer.write('\t');
+                    bufwriter->write(dictionary.data() + lookup[index], lookup[index + 1] - lookup[index]);
+                    bufwriter->write('\t');
                     auto used = convert(range.value[i], conversion_buffer, options.format, options.precision); 
-                    writer.write(conversion_buffer.data(), used);
-                    writer.write('\n');
+                    bufwriter->write(conversion_buffer.data(), used);
+                    bufwriter->write('\n');
                 }
             }
 
@@ -269,13 +282,13 @@ void write_matrix(const tatami::Matrix<Value_, Index_>& matrix, byteme::Writer& 
                 auto range = ext->fetch(vbuffer.data(), ibuffer.data());
                 for (I<decltype(range.number)> i = 0; i < range.number; ++i) {
                     const auto index = range.index[i];
-                    writer.write(dictionary.data() + lookup[index], lookup[index + 1] - lookup[index]);
-                    writer.write('\t');
-                    writer.write(dictionary.data() + lookup[c], lookup[c + 1] - lookup[c]);
-                    writer.write('\t');
+                    bufwriter->write(dictionary.data() + lookup[index], lookup[index + 1] - lookup[index]);
+                    bufwriter->write('\t');
+                    bufwriter->write(dictionary.data() + lookup[c], lookup[c + 1] - lookup[c]);
+                    bufwriter->write('\t');
                     auto used = convert(range.value[i], conversion_buffer, options.format, options.precision); 
-                    writer.write(conversion_buffer.data(), used);
-                    writer.write('\n');
+                    bufwriter->write(conversion_buffer.data(), used);
+                    bufwriter->write('\n');
                 }
             }
         }
@@ -283,8 +296,8 @@ void write_matrix(const tatami::Matrix<Value_, Index_>& matrix, byteme::Writer& 
     } else {
         const auto total_size = sanisizer::product<unsigned long long>(NR, NC);
         const auto total_used = convert(total_size, conversion_buffer, options.format, options.precision);
-        writer.write(conversion_buffer.data(), total_used);
-        writer.write('\n');
+        bufwriter->write(conversion_buffer.data(), total_used);
+        bufwriter->write('\n');
 
         if (by_row) {
             auto ext = tatami::consecutive_extractor<false>(matrix, true, static_cast<Index_>(0), NR);
@@ -292,13 +305,13 @@ void write_matrix(const tatami::Matrix<Value_, Index_>& matrix, byteme::Writer& 
             for (I<decltype(NR)> r = 0; r < NR; ++r) {
                 auto ptr = ext->fetch(vbuffer.data());
                 for (I<decltype(NC)> c = 0; c < NC; ++c) {
-                    writer.write(dictionary.data() + lookup[r], lookup[r + 1] - lookup[r]);
-                    writer.write('\t');
-                    writer.write(dictionary.data() + lookup[c], lookup[c + 1] - lookup[c]);
-                    writer.write('\t');
+                    bufwriter->write(dictionary.data() + lookup[r], lookup[r + 1] - lookup[r]);
+                    bufwriter->write('\t');
+                    bufwriter->write(dictionary.data() + lookup[c], lookup[c + 1] - lookup[c]);
+                    bufwriter->write('\t');
                     const auto used = convert(ptr[c], conversion_buffer, options.format, options.precision); 
-                    writer.write(conversion_buffer.data(), used);
-                    writer.write('\n');
+                    bufwriter->write(conversion_buffer.data(), used);
+                    bufwriter->write('\n');
                 }
             }
 
@@ -308,13 +321,13 @@ void write_matrix(const tatami::Matrix<Value_, Index_>& matrix, byteme::Writer& 
             for (I<decltype(NC)> c = 0; c < NC; ++c) {
                 auto ptr = ext->fetch(vbuffer.data());
                 for (I<decltype(NR)> r = 0; r < NR; ++r) {
-                    writer.write(dictionary.data() + lookup[r], lookup[r + 1] - lookup[r]);
-                    writer.write('\t');
-                    writer.write(dictionary.data() + lookup[c], lookup[c + 1] - lookup[c]);
-                    writer.write('\t');
+                    bufwriter->write(dictionary.data() + lookup[r], lookup[r + 1] - lookup[r]);
+                    bufwriter->write('\t');
+                    bufwriter->write(dictionary.data() + lookup[c], lookup[c + 1] - lookup[c]);
+                    bufwriter->write('\t');
                     const auto used = convert(ptr[r], conversion_buffer, options.format, options.precision); 
-                    writer.write(conversion_buffer.data(), used);
-                    writer.write('\n');
+                    bufwriter->write(conversion_buffer.data(), used);
+                    bufwriter->write('\n');
                 }
             }
         }
@@ -388,13 +401,13 @@ std::vector<unsigned char> write_matrix_to_text_buffer(const tatami::Matrix<Valu
  *
  * @param matrix Input matrix.
  * @param mode Compression mode for the Zlib library.
- * This should be one of DEFLATE (0), Zlib (1) or Gzip (2).
+ * This should be one of `DEFLATE`, `ZLIB` or `GZIP`.
  * @param options Options for writing the matrix.
  *
  * @return Vector with the buffer contents.
  */
 template<typename Value_, typename Index_>
-std::vector<unsigned char> write_matrix_to_zlib_buffer(const tatami::Matrix<Value_, Index_>& matrix, const int mode, const WriteMatrixOptions& options) {
+std::vector<unsigned char> write_matrix_to_zlib_buffer(const tatami::Matrix<Value_, Index_>& matrix, const byteme::ZlibCompressionMode mode, const WriteMatrixOptions& options) {
     byteme::ZlibBufferWriter writer([&]{
         byteme::ZlibBufferWriterOptions opt;
         opt.mode = mode;

@@ -6,9 +6,11 @@
 #include <cstddef>
 
 #include "zlib.h"
+#include "sanisizer/sanisizer.hpp"
 
 #include "Writer.hpp"
-#include "check_buffer_size.hpp"
+#include "magic_numbers.hpp"
+#include "utils.hpp"
 
 /**
  * @file ZlibBufferWriter.hpp
@@ -23,9 +25,9 @@ namespace byteme {
  */
 struct ZlibBufferWriterOptions {
     /**
-     * Compression of the stream - DEFLATE (0), Zlib (1) or Gzip (2).
+     * Compression mode of the stream.
      */
-    int mode = 2;
+    ZlibCompressionMode mode = ZlibCompressionMode::GZIP;
 
     /**
      * Compression level, from 1 to 9.
@@ -37,7 +39,7 @@ struct ZlibBufferWriterOptions {
      * Size of the buffer to use when reading from disk.
      * Larger values usually reduce computational time at the cost of increased memory usage.
      */
-    std::size_t buffer_size = cap<std::size_t>(65536);
+    std::size_t buffer_size = sanisizer::cap<std::size_t>(65536);
 };
 
 /**
@@ -51,7 +53,7 @@ private:
      * @cond
      */
     struct ZStream {
-        ZStream(int mode, int level) {
+        ZStream(ZlibCompressionMode mode, int level) {
             strm.zalloc = Z_NULL;
             strm.zfree = Z_NULL;
             strm.opaque = Z_NULL;
@@ -60,14 +62,18 @@ private:
 
             // Check out https://zlib.net/manual.html for the constants.
             int windowBits;
-            if (mode == 0) { // deflate
-                windowBits = -15;
-            } else if (mode == 1) { // Zlib
-                windowBits = 15;
-            } else if (mode == 2) { // Gzip
-                windowBits = 16 + 15;
-            } else {
-                throw std::runtime_error("unknown Zlib compression mode supplied");
+            switch (mode) {
+                case ZlibCompressionMode::DEFLATE:
+                    windowBits = -15;
+                    break;
+                case ZlibCompressionMode::ZLIB:
+                    windowBits = 15;
+                    break;
+                case ZlibCompressionMode::GZIP:
+                    windowBits = 16 + 15;
+                    break;
+                default:
+                    throw std::runtime_error("unknown Zlib compression mode");
             } 
 
             int ret = deflateInit2(&strm, level, Z_DEFLATED, windowBits, 8, Z_DEFAULT_STRATEGY);
@@ -95,24 +101,28 @@ private:
      * @endcond
      */
 
+    typedef I<decltype(I<decltype(ZStream::strm)>::avail_out)> ZoutSize;
+
 public:
     /**
      * @param options Further options.
      */
     ZlibBufferWriter(const ZlibBufferWriterOptions& options) : 
         my_zstr(options.mode, options.compression_level),
-        my_holding(
-            check_buffer_size<decltype(decltype(ZStream::strm)::avail_out)>( // constrained for the z_stream interface.
-                check_buffer_size(options.buffer_size)
-            )
-        )
+        // Cap it for both allocation safety and to avoid overflow of the avail_out member.
+        my_holding(sanisizer::cap<I<decltype(my_holding.size())> >(sanisizer::cap<ZoutSize>(options.buffer_size))) 
     {}
+
+    // One might think that we need to call finish() in the destructor, but in fact we don't.
+    // This is because the only observable effect of finish() is to flush all remaining content to the output buffer;
+    // but if we're destroying the object, the contents of the output buffer don't matter, as it'll be destroyed as well.
+    // So in fact, it's totally acceptable to just not do anything on destruction.
 
 public:
     using Writer::write;
 
     void write(const unsigned char* buffer, std::size_t n) {
-        typedef decltype(decltype(ZStream::strm)::avail_in) Size; // constrained for the z_stream interface.
+        typedef I<decltype(I<decltype(ZStream::strm)>::avail_in)> Size; // constrained for the z_stream interface.
         safe_write<Size, false>(
             buffer,
             n,
@@ -136,7 +146,7 @@ private:
 
     void dump(int flag) {
         do {
-            my_zstr.strm.avail_out = my_holding.size();
+            my_zstr.strm.avail_out = my_holding.size(); // no need to worry about overflow, we capped the size in the constructor.
             my_zstr.strm.next_out = my_holding.data();
             deflate(&(my_zstr.strm), flag); // no need to check, see https://zlib.net/zlib_how.html.
             std::size_t compressed = my_holding.size() - my_zstr.strm.avail_out;
