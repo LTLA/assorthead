@@ -3,6 +3,9 @@
 
 #include <vector>
 #include <string>
+#include <cstddef>
+
+#include "utils.hpp"
 
 /**
  * @file BarcodePool.hpp
@@ -13,64 +16,74 @@
 namespace kaori {
 
 /**
- * @brief Pool of barcode sequences for a variable region.
+ * @brief Pool of barcode sequences. 
  *
- * The `BarcodePool` class defines the pool of possible barcode sequences for a given variable region in the template sequence.
+ * The `BarcodePool` class defines the pool of possible barcode sequences for one of the variable regions in the template sequence.
  * All sequences in this set are assumed to have the same length.
  */
-struct BarcodePool {
+class BarcodePool {
+public:
     /**
      * Default constructor.
      */
-    BarcodePool() {}
+    BarcodePool() = default;
     
     /**
-     * @param barcode_pool Vector of pointers to sequences of length `l`, containing the pool of possible barcode sequences.
-     * @param barcode_length Length of each sequence.
+     * @param barcode_pool Vector of pointers to arrays of length `barcode_length`.
+     * Each array corresponds to one possible barcode sequence.
+     * @param barcode_length Length of each barcode sequence.
      */
-    BarcodePool(std::vector<const char*> barcode_pool, size_t barcode_length) : pool(std::move(barcode_pool)), length(barcode_length) {}
+    BarcodePool(std::vector<const char*> barcode_pool, std::size_t barcode_length) : my_pool(std::move(barcode_pool)), my_length(barcode_length) {}
 
     /**
      * @param barcode_pool Vector of sequences of the same length, containing the pool of possible barcode sequences.
-     *
      * It is assumed that the lifetime of `barcode_pool` (and its strings) exceeds that of the constructed `BarcodePool`. 
      */
     BarcodePool(const std::vector<std::string>& barcode_pool) {
         if (barcode_pool.size()) {
-            length = barcode_pool.front().size();
-            pool.reserve(barcode_pool.size());
+            my_length = barcode_pool.front().size();
+            my_pool.reserve(barcode_pool.size());
             for (const auto& x : barcode_pool) {
-                if (x.size() != length) {
+                if (x.size() != my_length) {
                     throw std::runtime_error("sequences for a given variable region should be of a constant length");
                 }
-                pool.push_back(x.c_str());
+                my_pool.push_back(x.c_str());
             }
         }
     }
 
-    /**
-     * Vector containing pointers to sequences of length `len`.
-     */
-    std::vector<const char*> pool;
+private:
+    std::vector<const char*> my_pool;
+    std::size_t my_length = 0;
 
+public:
     /**
-     * Length of each sequence in `pool`.
+     * @return Vector containing pointers to sequences of length equal to `length()`.
      */
-    size_t length = 0;
-
-    /**
-     * @return Number of sequences in the pool.
-     */
-    size_t size() const {
-        return pool.size();
+    const std::vector<const char*>& pool() const {
+        return my_pool;
     }
 
     /**
-     * @param i Index of the barcode  sequence of interest.
+     * @return Length of each sequence in `pool()`.
+     */
+    SeqLength length() const {
+        return my_length;
+    }
+
+    /**
+     * @return Number of sequences in `pool()`.
+     */
+    BarcodeIndex size() const {
+        return my_pool.size();
+    }
+
+    /**
+     * @param i Index of a barcode sequence. 
      * @return Pointer to the `i`-th sequence in the pool.
      */
-    const char* operator[](size_t i) const {
-        return pool[i];
+    const char* operator[](BarcodeIndex i) const {
+        return my_pool[i];
     }
 };
 

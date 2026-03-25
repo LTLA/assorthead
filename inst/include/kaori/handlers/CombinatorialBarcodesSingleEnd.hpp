@@ -7,6 +7,7 @@
 
 #include <array>
 #include <vector>
+#include <unordered_map>
 
 /**
  * @file CombinatorialBarcodesSingleEnd.hpp
@@ -19,15 +20,15 @@ namespace kaori {
 /**
  * @brief Handler for single-end combinatorial barcodes.
  *
- * In this design, the barcoding element is created from a template with multiple variable regions.
+ * In this design, the vector sequence is created from a template with multiple variable regions.
  * Each region contains a barcode from a different pool of options, where combinations are assembled randomly by library construction.
  * The idea is to use the large number of combinations to provide many unique identifiers, e.g., for cell-tracing applications.
  * This handler will capture the frequencies of each barcode combination. 
  *
- * @tparam max_size Maximum length of the template sequences on both reads.
- * @tparam num_variable Number of variable regions in the construct.
+ * @tparam max_size_ Maximum length of the template sequences on both reads.
+ * @tparam num_variable_ Number of variable regions in the construct.
  */
-template<size_t max_size, size_t num_variable>
+template<SeqLength max_size_, int num_variable_>
 class CombinatorialBarcodesSingleEnd {
 public:
     /**
@@ -35,7 +36,7 @@ public:
      */
     struct Options {
         /**
-         * Maximum number of mismatches allowed across the barcoding element.
+         * Maximum number of mismatches allowed across the vector sequence.
          */
         int max_mismatches = 0;
 
@@ -45,7 +46,7 @@ public:
         bool use_first = true;
 
         /**
-         * Strand(s) of the read sequence to search for the barcoding element.
+         * Strand(s) of the read sequence to search for the vector sequence.
          */
         SearchStrand strand = SearchStrand::FORWARD;
 
@@ -57,35 +58,35 @@ public:
 
 public:
     /**
-     * @param[in] template_seq Template sequence for the first barcode.
-     * This should contain exactly `num_variable` variable regions.
-     * @param template_length Length of the template.
-     * This should be less than or equal to `max_size`.
-     * @param barcode_pools Array containing the known barcode sequences for each of the variable regions, in the order of their appearance in the template sequence.
+     * @param[in] template_seq Pointer to a character array containing the template sequence. 
+     * This should contain exactly `num_variable_` variable regions.
+     * @param template_length Length of the array pointed to by `template_seq`.
+     * This should be less than or equal to `max_size_`.
+     * @param barcode_pools Array containing the barcode pools for each of the variable regions, in the order of their appearance in the template sequence.
      * @param options Optional parameters.
      *
      * @tparam BarcodePoolContainer Some iterable container of `BarcodePool` instances,
      * usually either a `std::vector` or a `std::array`.
      */
     template<class BarcodePoolContainer>
-    CombinatorialBarcodesSingleEnd(const char* template_seq, size_t template_length, const BarcodePoolContainer& barcode_pools, const Options& options) :
-        forward(search_forward(options.strand)),
-        reverse(search_reverse(options.strand)),
-        max_mm(options.max_mismatches),
-        use_first(options.use_first),
-        constant_matcher(template_seq, template_length, options.strand)
+    CombinatorialBarcodesSingleEnd(const char* template_seq, SeqLength template_length, const BarcodePoolContainer& barcode_pools, const Options& options) :
+        my_forward(search_forward(options.strand)),
+        my_reverse(search_reverse(options.strand)),
+        my_max_mm(options.max_mismatches),
+        my_use_first(options.use_first),
+        my_constant_matcher(template_seq, template_length, options.strand)
     {
-        const auto& regions = constant_matcher.variable_regions();
-        if (regions.size() != num_variable) { 
-            throw std::runtime_error("expected " + std::to_string(num_variable) + " variable regions in the constant template");
+        const auto& regions = my_constant_matcher.forward_variable_regions();
+        if (regions.size() != num_variable_) { 
+            throw std::runtime_error("expected " + std::to_string(num_variable_) + " variable regions in the constant template");
         }
-        if (barcode_pools.size() != num_variable) { 
+        if (barcode_pools.size() != num_variable_) { 
             throw std::runtime_error("length of 'barcode_pools' should be equal to the number of variable regions");
         }
 
-        for (size_t i = 0; i < num_variable; ++i) {
-            size_t rlen = regions[i].second - regions[i].first;
-            size_t vlen = barcode_pools[i].length;
+        for (int i = 0; i < num_variable_; ++i) {
+            SeqLength rlen = regions[i].second - regions[i].first;
+            SeqLength vlen = barcode_pools[i].length();
             if (vlen != rlen) {
                 throw std::runtime_error("length of variable region " + std::to_string(i + 1) + " (" + std::to_string(rlen) + 
                     ") should be the same as its sequences (" + std::to_string(vlen) + ")");
@@ -93,25 +94,25 @@ public:
         }
 
         // We'll be using this later.
-        for (size_t i = 0; i < num_variable; ++i) {
-            num_options[i] = barcode_pools[i].pool.size();
+        for (int i = 0; i < num_variable_; ++i) {
+            my_pool_size[i] = barcode_pools[i].pool().size();
         }
 
         SimpleBarcodeSearch::Options bopt;
         bopt.max_mismatches = options.max_mismatches;
         bopt.duplicates = options.duplicates;
 
-        if (forward) {
+        if (my_forward) {
             bopt.reverse = false;
-            for (size_t i = 0; i < num_variable; ++i) {
-                forward_lib[i] = SimpleBarcodeSearch(barcode_pools[i], bopt);
+            for (int i = 0; i < num_variable_; ++i) {
+                my_forward_lib[i] = SimpleBarcodeSearch(barcode_pools[i], bopt);
             }
         }
 
-        if (reverse) {
+        if (my_reverse) {
             bopt.reverse = true;
-            for (size_t i = 0; i < num_variable; ++i) {
-                reverse_lib[i] = SimpleBarcodeSearch(barcode_pools[num_variable - i - 1], bopt);
+            for (int i = 0; i < num_variable_; ++i) {
+                my_reverse_lib[i] = SimpleBarcodeSearch(barcode_pools[num_variable_ - i - 1], bopt);
             }
         }
     }
@@ -123,60 +124,73 @@ public:
      * @return A reference to this `CombinatorialBarcodesSingleEnd` instance.
      */
     CombinatorialBarcodesSingleEnd& set_first(bool t = true) {
-        use_first = t;
+        my_use_first = t;
         return *this;
     }
+
+private:
+    bool my_forward;
+    bool my_reverse;
+    int my_max_mm;
+    bool my_use_first;
+
+    ScanTemplate<max_size_> my_constant_matcher;
+    std::array<SimpleBarcodeSearch, num_variable_> my_forward_lib, my_reverse_lib;
+    std::array<BarcodeIndex, num_variable_> my_pool_size;
+
+    std::unordered_map<std::array<BarcodeIndex, num_variable_>, Count, CombinationHash<num_variable_> > my_combinations;
+    Count my_total = 0;
 
 public:
     /**
      * @cond
      */
     struct State {
-        std::vector<std::array<int, num_variable> >collected;
-        int total = 0;
+        std::unordered_map<std::array<BarcodeIndex, num_variable_>, Count, CombinationHash<num_variable_> > collected;
+        Count total = 0;
 
-        std::array<int, num_variable> temp;
+        std::array<BarcodeIndex, num_variable_> temp;
         std::string buffer;
 
         // Default constructors should be called in this case, so it should be fine.
-        std::array<typename SimpleBarcodeSearch::State, num_variable> forward_details, reverse_details;
+        std::array<typename SimpleBarcodeSearch::State, num_variable_> forward_details, reverse_details;
     };
     /**
      * @endcond
      */
 
 private:
-    template<bool reverse>
     std::pair<bool, int> find_match(
+        bool reverse,
         const char* seq, 
-        size_t position, 
+        SeqLength position, 
         int obs_mismatches, 
-        const std::array<SimpleBarcodeSearch, num_variable>& libs, 
-        std::array<typename SimpleBarcodeSearch::State, num_variable>& states, 
-        std::array<int, num_variable>& temp,
+        const std::array<SimpleBarcodeSearch, num_variable_>& libs, 
+        std::array<typename SimpleBarcodeSearch::State, num_variable_>& states, 
+        std::array<BarcodeIndex, num_variable_>& temp,
         std::string& buffer
     ) const {
-        const auto& regions = constant_matcher.template variable_regions<reverse>();
+        const auto& regions = my_constant_matcher.variable_regions(reverse); 
 
-        for (size_t r = 0; r < num_variable; ++r) {
-            auto range = regions[r];
+        for (int r = 0; r < num_variable_; ++r) {
+            const auto& range = regions[r];
             auto start = seq + position;
             buffer.clear(); // clear and insert preserves buffer's existing heap allocation.
             buffer.insert(buffer.end(), start + range.first, start + range.second);
 
             auto& curstate = states[r];
-            libs[r].search(buffer, curstate, max_mm - obs_mismatches);
-            if (curstate.index < 0) {
-                return std::make_pair(false, 0);
-            }
-            
-            obs_mismatches += curstate.mismatches;
-            if (obs_mismatches > max_mm) {
+            libs[r].search(buffer, curstate, my_max_mm - obs_mismatches);
+            if (!is_barcode_index_ok(curstate.index)) {
                 return std::make_pair(false, 0);
             }
 
-            if constexpr(reverse) {
-                temp[num_variable - r - 1] = curstate.index;
+            obs_mismatches += curstate.mismatches;
+            if (obs_mismatches > my_max_mm) {
+                return std::make_pair(false, 0);
+            }
+
+            if (reverse) {
+                temp[num_variable_ - r - 1] = curstate.index;
             } else {
                 temp[r] = curstate.index;
             }
@@ -185,31 +199,31 @@ private:
         return std::make_pair(true, obs_mismatches);
     }
 
-    std::pair<bool, int> forward_match(const char* seq, const typename ScanTemplate<max_size>::State& deets, State& state) const {
-        return find_match<false>(seq, deets.position, deets.forward_mismatches, forward_lib, state.forward_details, state.temp, state.buffer);
+    std::pair<bool, int> forward_match(const char* seq, const typename ScanTemplate<max_size_>::State& deets, State& state) const {
+        return find_match(false, seq, deets.position, deets.forward_mismatches, my_forward_lib, state.forward_details, state.temp, state.buffer);
     }
 
-    std::pair<bool, int> reverse_match(const char* seq, const typename ScanTemplate<max_size>::State& deets, State& state) const {
-        return find_match<true>(seq, deets.position, deets.reverse_mismatches, reverse_lib, state.reverse_details, state.temp, state.buffer);
+    std::pair<bool, int> reverse_match(const char* seq, const typename ScanTemplate<max_size_>::State& deets, State& state) const {
+        return find_match(true, seq, deets.position, deets.reverse_mismatches, my_reverse_lib, state.reverse_details, state.temp, state.buffer);
     }
 
 private:
     void process_first(State& state, const std::pair<const char*, const char*>& x) const {
-        auto deets = constant_matcher.initialize(x.first, x.second - x.first);
+        auto deets = my_constant_matcher.initialize(x.first, x.second - x.first);
 
         while (!deets.finished) {
-            constant_matcher.next(deets);
+            my_constant_matcher.next(deets);
 
-            if (forward && deets.forward_mismatches <= max_mm) {
+            if (my_forward && deets.forward_mismatches <= my_max_mm) {
                 if (forward_match(x.first, deets, state).first) {
-                    state.collected.push_back(state.temp);
+                    ++state.collected[state.temp];
                     return;
                 }
             }
 
-            if (reverse && deets.reverse_mismatches <= max_mm) {
+            if (my_reverse && deets.reverse_mismatches <= my_max_mm) {
                 if (reverse_match(x.first, deets, state).first) {
-                    state.collected.push_back(state.temp);
+                    ++state.collected[state.temp];
                     return;
                 }
             }
@@ -217,10 +231,10 @@ private:
     }
 
     void process_best(State& state, const std::pair<const char*, const char*>& x) const {
-        auto deets = constant_matcher.initialize(x.first, x.second - x.first);
+        auto deets = my_constant_matcher.initialize(x.first, x.second - x.first);
         bool found = false;
-        int best_mismatches = max_mm + 1;
-        std::array<int, num_variable> best_id;
+        int best_mismatches = my_max_mm + 1;
+        std::array<BarcodeIndex, num_variable_> best_id;
 
         auto update = [&](std::pair<bool, int> match) -> void {
             if (match.first && match.second <= best_mismatches) {
@@ -241,19 +255,19 @@ private:
         };
 
         while (!deets.finished) {
-            constant_matcher.next(deets);
+            my_constant_matcher.next(deets);
 
-            if (forward && deets.forward_mismatches <= max_mm) {
+            if (my_forward && deets.forward_mismatches <= my_max_mm) {
                 update(forward_match(x.first, deets, state));
             }
 
-            if (reverse && deets.reverse_mismatches <= max_mm) {
+            if (my_reverse && deets.reverse_mismatches <= my_max_mm) {
                 update(reverse_match(x.first, deets, state));
             }
         }
 
         if (found) {
-            state.collected.push_back(best_id);
+            ++state.collected[best_id];
         }
     }
 
@@ -266,24 +280,26 @@ public:
     }
 
     void reduce(State& s) {
-        if (forward) {
-            for (size_t r = 0; r < num_variable; ++r) {
-                forward_lib[r].reduce(s.forward_details[r]);
+        if (my_forward) {
+            for (int r = 0; r < num_variable_; ++r) {
+                my_forward_lib[r].reduce(s.forward_details[r]);
             }
         }
-        if (reverse) {
-            for (size_t r = 0; r < num_variable; ++r) {
-                reverse_lib[r].reduce(s.reverse_details[r]);
+        if (my_reverse) {
+            for (int r = 0; r < num_variable_; ++r) {
+                my_reverse_lib[r].reduce(s.reverse_details[r]);
             }
         }
 
-        combinations.insert(combinations.end(), s.collected.begin(), s.collected.end());
-        total += s.total;
+        for (const auto& col : s.collected) {
+            my_combinations[col.first] += col.second;
+        }
+        my_total += s.total;
         return;
     }
 
     void process(State& state, const std::pair<const char*, const char*>& x) const {
-        if (use_first) {
+        if (my_use_first) {
             process_first(state, x);
         } else {
             process_best(state, x);
@@ -298,38 +314,18 @@ public:
 
 public:
     /**
-     * Sort the combinations for easier frequency counting.
+     * @return All combinations encountered by the handler, along with their frequencies.
      */
-    void sort() {
-        sort_combinations(combinations, num_options);
-    }
-
-    /**
-     * @return All combinations encountered by the handler.
-     */
-    const std::vector<std::array<int, num_variable> >& get_combinations() const {
-        return combinations;
+    const std::unordered_map<std::array<BarcodeIndex, num_variable_>, Count, CombinationHash<num_variable_> >& get_combinations() const {
+        return my_combinations;
     }
 
     /**
      * @return Total number of reads processed by the handler.
      */
-    int get_total() const {
-        return total;
+    Count get_total() const {
+        return my_total;
     }
-private:
-    bool forward;
-    bool reverse;
-    int max_mm;
-    bool use_first;
-    size_t nregions;
-
-    ScanTemplate<max_size> constant_matcher;
-    std::array<SimpleBarcodeSearch, num_variable> forward_lib, reverse_lib;
-    std::array<size_t, num_variable> num_options;
-
-    std::vector<std::array<int, num_variable> > combinations;
-    int total = 0;
 };
 
 }

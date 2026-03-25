@@ -4,6 +4,9 @@
 #include <bitset>
 #include <vector>
 #include <array>
+#include <cstddef>
+#include <limits>
+#include <functional>
 
 /**
  * @file utils.hpp
@@ -26,6 +29,42 @@ enum class DuplicateAction : char { FIRST, LAST, NONE, ERROR };
  * Strands of the read sequence to search.
  */
 enum class SearchStrand : char { FORWARD, REVERSE, BOTH };
+
+/**
+ * Integer type for the sequence lengths.
+ * This is used for barcodes, templates and reads.
+ */
+typedef std::size_t SeqLength;
+
+/**
+ * Integer type for barcode indices in a pool of known barcodes (specifically, inside a `BarcodePool`).
+ * This can have the special values `STATUS_UNMATCHED` and `STATUS_AMBIGUOUS`, see `is_barcode_index_ok()` to check for these error codes.
+ */
+typedef typename std::vector<const char*>::size_type BarcodeIndex; // we use the size_type from the BarcodePool's internal vector of barcodes.
+
+/**
+ * No match to a known barcode.
+ */
+inline constexpr BarcodeIndex STATUS_UNMATCHED = static_cast<BarcodeIndex>(-1);
+
+/**
+ * Ambiguous match to two or more known barcodes. 
+ */
+inline constexpr BarcodeIndex STATUS_AMBIGUOUS = static_cast<BarcodeIndex>(-2);
+
+/**
+ * @param index A barcode index.
+ * @return Whether `index` corresponds to an actual barcode.
+ * If false, `index` represents one of the error codes, i.e., `STATUS_MISSING` or `STATUS_AMBIGUOUS`.
+ */
+inline bool is_barcode_index_ok(BarcodeIndex index) {
+    return index < STATUS_AMBIGUOUS;
+}
+
+/**
+ * Integer type to count the frequency of each barcode.
+ */
+typedef unsigned long long Count;
 
 /**
  * @cond
@@ -170,35 +209,45 @@ void add_other_to_hash(std::bitset<N>& x) {
     return;
 }
 
-template<size_t V>
-void sort_combinations(std::vector<std::array<int, V> >& combinations, const std::array<size_t, V>& num_options) {
-    // Going back to front as the last iteration gives the slowest changing index.
-    // This ensures that we get the same results as std::sort() on the arrays.
-    for (size_t i_ = 0; i_ < V; ++i_) {
-        auto i = V - i_ - 1;
+inline constexpr int NUM_BASES = 4;
 
-        std::vector<size_t> counts(num_options[i] + 1);
-        for (const auto& x : combinations) {
-            ++(counts[x[i] + 1]);
-        }
-
-        for (size_t j = 1; j < counts.size(); ++j) {
-            counts[j] += counts[j-1];
-        }
-
-        std::vector<std::array<int, V> > copy(combinations.size());
-        for (const auto& x : combinations) {
-            auto& pos = counts[x[i]];
-            copy[pos] = x;
-            ++pos;
-        }
-
-        combinations.swap(copy);
-    }
-}
 /**
- * @endcond
+ * @brief Hash a combination of barcode indices.
+ *
+ * Create a hash from an array representing a combination of barcode indices, usually for use in a `std::unordered_map`.
+ * This involves hashing each individual index and then iteratively applying the Boost `hash_combine` function. 
+ * 
+ * @tparam num_variable_ Number of variable regions, each with their own barcode indices.
  */
+template<int num_variable_>
+class CombinationHash {
+public:
+    /**
+     * @param key Array of barcode indices.
+     * @return The hash value of `key`.
+     */
+    std::size_t operator()(const std::array<BarcodeIndex, num_variable_>& key) const {
+        unsigned long long seed = 0; 
+
+        for (int v = 0; v < num_variable_; ++v) {
+            seed = [&](){
+                // Adapted from https://stackoverflow.com/questions/2590677/how-do-i-combine-hash-values-in-c0x/78509978#78509978, which was in turn derived from Boost.ContainerHash:
+                // https://github.com/boostorg/container_hash/blob/ee5285bfa64843a11e29700298c83a37e3132fcd/include/boost/container_hash/detail/hash_mix.hpp#L67
+                // We hard-code it to use the 64-bit implementation for simplicity, given that a ULL is guaranteed to have at least 64 bits.
+                unsigned long long x = seed + 0x9e3779b9 + key[v];
+                constexpr unsigned long long m = 0xe9846af9b1a615d;
+                x ^= x >> 32;
+                x *= m;
+                x ^= x >> 32;
+                x *= m;
+                x ^= x >> 28;
+                return x;
+            }();
+        }
+
+        return seed;
+    }
+};
 
 }
 

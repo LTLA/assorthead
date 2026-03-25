@@ -15,13 +15,13 @@ namespace kaori {
 /**
  * @brief Handler for single-end single barcodes.
  *
- * In this design, the barcoding element is constructed from a template with a single variable region drawn from a pool of barcode sequences.
- * The construct containing the barcoding element is then subjected to single-end sequencing.
- * This handler will search the read for the barcoding element and count the frequency of each barcode.
+ * In this design, the vector sequence is constructed from a template with a single variable region drawn from a pool of barcode sequences.
+ * The construct containing the vector sequence is then subjected to single-end sequencing.
+ * This handler will search the read for the vector sequence and count the frequency of each barcode.
  *
- * @tparam max_size Maximum length of the template sequences on both reads.
+ * @tparam max_size_ Maximum length of the template sequence.
  */
-template<size_t max_size>
+template<SeqLength max_size_>
 class SingleBarcodeSingleEnd {
 public:
     /**
@@ -29,7 +29,7 @@ public:
      */
     struct Options {
         /** 
-         * Maximum number of mismatches allowed across the barcoding element.
+         * Maximum number of mismatches allowed across the vector sequence.
          */
         int max_mismatches = 0;
 
@@ -52,28 +52,28 @@ public:
 
 public:
     /**
-     * @param[in] template_seq Template sequence of the barcoding element.
+     * @param[in] template_seq Pointer to a character array containing the template sequence.
      * This should contain exactly one variable region.
-     * @param template_length Length of the template.
-     * This should be less than or equal to `max_size`.
+     * @param template_length Length of the array pointed to by `template_seq`.
+     * This should be less than or equal to `max_size_`.
      * @param barcode_pool Known barcode sequences for the variable region.
      * @param options Optional parameters.
      */
-    SingleBarcodeSingleEnd(const char* template_seq, size_t template_length, const BarcodePool& barcode_pool, const Options& options) :
-        matcher(
+    SingleBarcodeSingleEnd(const char* template_seq, SeqLength template_length, const BarcodePool& barcode_pool, const Options& options) :
+        my_matcher(
             template_seq, 
             template_length,
             barcode_pool, 
             [&]{
-                typename SimpleSingleMatch<max_size>::Options ssopt;
+                typename SimpleSingleMatch<max_size_>::Options ssopt;
                 ssopt.strand = options.strand;
                 ssopt.max_mismatches = options.max_mismatches;
                 ssopt.duplicates = options.duplicates;
                 return ssopt;
             }()
         ),
-        counts(barcode_pool.size()),
-        use_first(options.use_first) 
+        my_counts(barcode_pool.size()),
+        my_use_first(options.use_first) 
     {}
 
 public:
@@ -81,21 +81,20 @@ public:
      * @cond
      */
     struct State {
-        State() {}
+        State() = default;
+        State(typename SimpleSingleMatch<max_size_>::State s, typename std::vector<Count>::size_type nvar) : search(std::move(s)), counts(nvar) {}
 
-        State(typename SimpleSingleMatch<max_size>::State s, size_t nvar) : search(std::move(s)), counts(nvar) {}
-
-        typename SimpleSingleMatch<max_size>::State search;
-        std::vector<int> counts;
-        int total = 0;
+        typename SimpleSingleMatch<max_size_>::State search;
+        std::vector<Count> counts;
+        Count total = 0;
     };
 
     void process(State& state, const std::pair<const char*, const char*>& x) const {
         bool found = false;
-        if (use_first) {
-            found = matcher.search_first(x.first, x.second - x.first, state.search);
+        if (my_use_first) {
+            found = my_matcher.search_first(x.first, x.second - x.first, state.search);
         } else {
-            found = matcher.search_best(x.first, x.second - x.first, state.search);
+            found = my_matcher.search_best(x.first, x.second - x.first, state.search);
         }
         if (found) {
             ++(state.counts[state.search.index]);
@@ -113,40 +112,40 @@ public:
      * @cond
      */
     State initialize() const {
-        return State(matcher.initialize(), counts.size());
+        return State(my_matcher.initialize(), my_counts.size());
     }
 
     void reduce(State& s) {
-        matcher.reduce(s.search);
-        for (size_t i = 0; i < counts.size(); ++i) {
-            counts[i] += s.counts[i];
+        my_matcher.reduce(s.search);
+        for (decltype(my_counts.size()) i = 0, end = my_counts.size(); i < end; ++i) {
+            my_counts[i] += s.counts[i];
         }
-        total += s.total;
+        my_total += s.total;
     }
     /**
      * @endcond
      */
 
 private:
-    SimpleSingleMatch<max_size> matcher;
-    std::vector<int> counts;
-    int total = 0;
-    bool use_first;
+    SimpleSingleMatch<max_size_> my_matcher;
+    std::vector<Count> my_counts;
+    Count my_total = 0;
+    bool my_use_first;
 
 public:
     /**
      * @return Vector containing the frequency of each barcode.
      * This has length equal to the number of valid barcodes (i.e., the length of `barcode_pool` in the constructor).
      */
-    const std::vector<int>& get_counts() const {
-        return counts;        
+    const std::vector<Count>& get_counts() const {
+        return my_counts;        
     }
 
     /**
      * @return Total number of reads processed by the handler.
      */
-    int get_total() const {
-        return total;
+    Count get_total() const {
+        return my_total;
     }
 };
 
