@@ -5,6 +5,7 @@
 #include <vector>
 #include <cstddef>
 #include <type_traits>
+#include <cassert>
 
 #include "tatami/tatami.hpp"
 #include "tatami_stats/tatami_stats.hpp"
@@ -24,7 +25,7 @@ namespace scran_aggregate {
  */
 struct AggregateAcrossCellsOptions {
     /**
-     * Whether to compute the sum within each group.
+     * Whether to compute the sum of expression within each group.
      * This option only affects the `aggregate_across_cells()` overload where an `AggregateAcrossCellsResults` object is returned.
      */
     bool compute_sums = true;
@@ -36,6 +37,12 @@ struct AggregateAcrossCellsOptions {
     bool compute_detected = true;
 
     /**
+     * Whether to compute the median expression withine ach group.
+     * This option only affects the `aggregate_across_cells()` overload where an `AggregateAcrossCellsResults` object is returned.
+     */
+    bool compute_medians = false; // false by default as we usually don't need this.
+
+    /**
      * Number of threads to use. 
      * The parallelization scheme is determined by `tatami::parallelize()`.
      */
@@ -44,10 +51,13 @@ struct AggregateAcrossCellsOptions {
 
 /**
  * @brief Buffers for `aggregate_across_cells()`.
- * @tparam Sum_ Type of the sum, should be numeric.
- * @tparam Detected_ Type for the number of detected cells, usually integer.
+ * @tparam Sum_ Numeric type of the sum, typically floating-point.
+ * If integer, this should be large enough to avoid integer overflow.
+ * @tparam Detected_ Type of the number of detected cells, usually integer.
+ * This should be large enough to avoid integer overflow.
+ * @tparam Float_ Floating-point type to be used for other statistics, e.g., median.
  */
-template <typename Sum_, typename Detected_>
+template <typename Sum_, typename Detected_, typename Float_>
 struct AggregateAcrossCellsBuffers {
     /**
      * Vector of length equal to the number of groups.
@@ -67,14 +77,25 @@ struct AggregateAcrossCellsBuffers {
      */
     std::vector<Detected_*> detected;
 
+    /**
+     * Vector of length equal to the number of groups.
+     * Each element is a pointer to an array of length equal to the number of genes,
+     * to be filled with the median expression across all cells in the corresponding group for each gene.
+     * 
+     * If this is empty, the median for each group is not computed.
+     */
+    std::vector<Float_*> medians;
 };
 
 /**
  * @brief Results of `aggregate_across_cells()`.
- * @tparam Sum_ Type of the sum, should be numeric.
- * @tparam Detected_ Type for the number of detected cells, usually integer.
+ * @tparam Sum_ Numeric type of the sum, typically floating-point.
+ * If integer, this should be large enough to avoid integer overflow.
+ * @tparam Detected_ Type of the number of detected cells, usually integer.
+ * This should be large enough to avoid integer overflow.
+ * @tparam Float_ Floating-point type to be used for other statistics, e.g., median.
  */
-template <typename Sum_, typename Detected_>
+template <typename Sum_, typename Detected_, typename Float_>
 struct AggregateAcrossCellsResults {
     /**
      * Vector of length equal to the number of groups.
@@ -93,27 +114,59 @@ struct AggregateAcrossCellsResults {
      * If `AggregateAcrossCellsOptions::compute_detected = false`, this vector is empty.
      */
     std::vector<std::vector<Detected_> > detected;
+
+    /**
+     * Vector of length equal to the number of groups.
+     * Each inner vector is of length equal to the number of genes.
+     * Each entry contains the median expression across all cells in the corresponding group for each gene.
+     *
+     * If `AggregateAcrossCellsOptions::compute_median = false`, this vector is empty.
+     */
+    std::vector<std::vector<Float_> > medians;
 };
 
 /**
  * @cond
  */
-template<bool sparse_, typename Data_, typename Index_, typename Group_, typename Sum_, typename Detected_>
+template<bool sparse_, typename Data_, typename Index_, typename Group_, typename Sum_, typename Detected_, typename Float_>
 void aggregate_across_cells_by_row(
     const tatami::Matrix<Data_, Index_>& p,
     const Group_* const group,
-    const AggregateAcrossCellsBuffers<Sum_, Detected_>& buffers,
-    const AggregateAcrossCellsOptions& options)
-{
+    const AggregateAcrossCellsBuffers<Sum_, Detected_, Float_>& buffers,
+    const AggregateAcrossCellsOptions& options
+) {
     tatami::Options opt;
     opt.sparse_ordered_index = false;
 
+    std::optional<std::vector<Index_> > group_sizes;
+    const auto NC = p.ncol();
+    if (!buffers.medians.empty()) {
+        group_sizes = tatami_stats::tabulate_groups(group, NC);
+    }
+
     tatami::parallelize([&](const int, const Index_ s, const Index_ l) -> void {
         auto ext = tatami::consecutive_extractor<sparse_>(p, true, s, l, opt);
+
+        std::vector<Sum_> tmp_sums;
         const auto nsums = buffers.sums.size();
-        auto tmp_sums = sanisizer::create<std::vector<Sum_> >(nsums);
+        if (nsums) {
+            sanisizer::resize(tmp_sums, nsums);
+        }
+
+        std::vector<Detected_> tmp_detected;
         const auto ndetected = buffers.detected.size();
-        auto tmp_detected = sanisizer::create<std::vector<Detected_> >(ndetected);
+        if (ndetected) {
+            sanisizer::resize(tmp_detected, ndetected);
+        }
+
+        std::vector<std::vector<Float_> > tmp_medians;
+        const auto nmedians = buffers.medians.size();
+        if (nmedians) {
+            sanisizer::resize(tmp_medians, nmedians);
+            for (I<decltype(nmedians)> l = 0; l < nmedians; ++l) {
+                sanisizer::reserve(tmp_medians[l], (*group_sizes)[l]);
+            }
+        }
 
         const auto NC = p.ncol();
         auto vbuffer = tatami::create_container_of_Index_size<std::vector<Data_> >(NC);
@@ -170,19 +223,43 @@ void aggregate_across_cells_by_row(
                     buffers.detected[l][x] = tmp_detected[l];
                 }
             }
+
+            if (nmedians) {
+                if constexpr(sparse_) {
+                    for (Index_ j = 0; j < row.number; ++j) {
+                        tmp_medians[group[row.index[j]]].push_back(row.value[j]);
+                    }
+                    for (I<decltype(ndetected)> l = 0; l < nmedians; ++l) {
+                        auto& current = tmp_medians[l];
+                        buffers.medians[l][x] = tatami_stats::medians::direct<Float_>(current.data(), static_cast<Index_>(current.size()), (*group_sizes)[l], false);
+                        current.clear();
+                    }
+
+                } else {
+                    for (Index_ j = 0; j < NC; ++j) {
+                        tmp_medians[group[j]].push_back(row[j]);
+                    }
+                    for (I<decltype(ndetected)> l = 0; l < nmedians; ++l) {
+                        auto& current = tmp_medians[l];
+                        buffers.medians[l][x] = tatami_stats::medians::direct(current.data(), current.size(), false);
+                        current.clear();
+                    }
+                }
+            }
         }
     }, p.nrow(), options.num_threads);
 }
 
-template<bool sparse_, typename Data_, typename Index_, typename Group_, typename Sum_, typename Detected_>
+template<bool sparse_, typename Data_, typename Index_, typename Group_, typename Sum_, typename Detected_, typename Float_>
 void aggregate_across_cells_by_column(
     const tatami::Matrix<Data_, Index_>& p,
     const Group_* const group,
-    const AggregateAcrossCellsBuffers<Sum_, Detected_>& buffers,
-    const AggregateAcrossCellsOptions& options)
-{
+    const AggregateAcrossCellsBuffers<Sum_, Detected_, Float_>& buffers,
+    const AggregateAcrossCellsOptions& options
+) {
     tatami::Options opt;
     opt.sparse_ordered_index = false;
+    assert(buffers.medians.empty());
 
     tatami::parallelize([&](const int t, const Index_ start, const Index_ length) -> void {
         const auto NC = p.ncol();
@@ -249,30 +326,34 @@ void aggregate_across_cells_by_column(
 
 /**
  * Aggregate expression values across groups of cells for each gene.
- * We report the sum of expression values and the number of cells with detected (i.e., positive) expression values in each group.
+ * We report the sum of expression values, the number of cells with detected (i.e., positive) expression values, and the median of expression values in each group.
  * This is typically used to create pseudo-bulk expression profiles for cluster/sample combinations.
  * Expression values are generally expected to be counts so that the sums can be used as if they were counts from bulk data, e.g., for differential analyses with **edgeR**.
  *
- * @tparam Data_ Type of data in the input matrix, should be numeric.
+ * @tparam Data_ Numeric type of data in the input matrix.
  * @tparam Index_ Integer type of index in the input matrix.
  * @tparam Group_ Integer type of the group assignments.
- * @tparam Sum_ Numeric type of the sum, often the same as `Data_`.
+ * @tparam Sum_ Numeric type of the sum, typically floating-point.
+ * If integer, it should be large enough to avoid overflow.
  * @tparam Detected_ Numeric type (usually integer) of the number of detected cells. 
+ * This should be large enough to avoid integer overflow, so setting it to be the same as `Index_` is a safe choice.
+ * @tparam Float_ Floating-point type to be used for other statistics, e.g., median.
  *
  * @param input The input matrix, usually containing non-negative counts.
  * Rows are features and columns are cells.
  * @param[in] group Pointer to an array of length equal to the number of columns of `input`, containing the assigned group for each cell.
  * All entries should be integers in \f$[0, N)\f$ where \f$N\f$ is the number of unique groups.
+ * @param[out] buffers Pre-allocated buffers in which to store the computed statistics. 
  * @param options Further options.
  */
-template<typename Data_, typename Index_, typename Group_, typename Sum_, typename Detected_>
+template<typename Data_, typename Index_, typename Group_, typename Sum_, typename Detected_, typename Float_>
 void aggregate_across_cells(
     const tatami::Matrix<Data_, Index_>& input,
     const Group_* const group,
-    const AggregateAcrossCellsBuffers<Sum_, Detected_>& buffers,
-    const AggregateAcrossCellsOptions& options)
-{
-    if (input.prefer_rows()) {
+    const AggregateAcrossCellsBuffers<Sum_, Detected_, Float_>& buffers,
+    const AggregateAcrossCellsOptions& options
+) {
+    if (input.prefer_rows() || !buffers.medians.empty()) {
         if (input.sparse()) {
             aggregate_across_cells_by_row<true>(input, group, buffers, options);
         } else {
@@ -290,8 +371,11 @@ void aggregate_across_cells(
 /**
  * Overload of `aggregate_across_cells()` that allocates memory for the results.
  *
- * @tparam Sum_ Numerict ype of the sum.
+ * @tparam Sum_ Numeric type of the sum, typically floating-point.
+ * If integer, it should be large enough to avoid overflow.
  * @tparam Detected_ Numeric type (usually integer) of the number of detected cells. 
+ * This should be large enough to avoid integer overflow, so setting it to be the same as `Index_` is a safe choice.
+ * @tparam Float_ Floating-point type to be used for other statistics, e.g., median.
  * @tparam Data_ Type of data in the input matrix, should be numeric.
  * @tparam Index_ Integer type of index in the input matrix.
  * @tparam Group_ Integer type of the group assignments.
@@ -304,12 +388,12 @@ void aggregate_across_cells(
  *
  * @return Results of the aggregation, where the available statistics depend on `AggregateAcrossCellsOptions`.
  */
-template<typename Sum_ = double, typename Detected_ = int, typename Data_, typename Index_, typename Group_>
-AggregateAcrossCellsResults<Sum_, Detected_> aggregate_across_cells(
+template<typename Sum_ = double, typename Detected_ = int, typename Float_ = double, typename Data_, typename Index_, typename Group_>
+AggregateAcrossCellsResults<Sum_, Detected_, Float_> aggregate_across_cells(
     const tatami::Matrix<Data_, Index_>& input,
     const Group_* const group,
-    const AggregateAcrossCellsOptions& options)
-{
+    const AggregateAcrossCellsOptions& options
+) {
     const Index_ NR = input.nrow();
     const Index_ NC = input.ncol();
     const std::size_t ngroups = [&]{
@@ -320,8 +404,8 @@ AggregateAcrossCellsResults<Sum_, Detected_> aggregate_across_cells(
         }
     }();
 
-    AggregateAcrossCellsResults<Sum_, Detected_> output;
-    AggregateAcrossCellsBuffers<Sum_, Detected_> buffers;
+    AggregateAcrossCellsResults<Sum_, Detected_, Float_> output;
+    AggregateAcrossCellsBuffers<Sum_, Detected_, Float_> buffers;
 
     if (options.compute_sums) {
         sanisizer::resize(output.sums, ngroups);
@@ -350,6 +434,21 @@ AggregateAcrossCellsResults<Sum_, Detected_> aggregate_across_cells(
             buffers.detected[l] = curdet.data();
         }
     }
+
+    if (options.compute_medians) {
+        sanisizer::resize(output.medians, ngroups);
+        sanisizer::resize(buffers.medians, ngroups);
+        for (I<decltype(ngroups)> l = 0; l < ngroups; ++l) {
+            auto& curdet = output.medians[l];
+            tatami::resize_container_to_Index_size<I<decltype(curdet)>>(curdet, NR
+#ifdef SCRAN_AGGREGATE_TEST_INIT
+                , SCRAN_AGGREGATE_TEST_INIT
+#endif
+            );
+            buffers.medians[l] = curdet.data();
+        }
+    }
+
 
     aggregate_across_cells(input, group, buffers, options);
     return output;

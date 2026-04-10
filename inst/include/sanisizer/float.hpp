@@ -5,6 +5,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <type_traits>
+#include <cassert>
 
 #include "utils.hpp"
 #include "attest.hpp"
@@ -17,30 +18,40 @@
 namespace sanisizer {
 
 /**
- * @cond
+ * @tparam Float_ Floating-point type.
+ *
+ * @param x A non-negative integer.
+ * Specifically, a non-negative floating-point value where `x == std::trunc(x)`.
+ *
+ * @return Number of bits required to represent `x` as a (two's complement) integer.
+ *
+ * The return value can be compared to `std::numeric_limits<Integer_>::digits` to determine if `Integer_` is large enough to store `x`.
  */
-template<typename Integer_, typename Float_>
-bool float_to_int_overflows(Float_ floored_x) {
-    constexpr auto output_precision = std::numeric_limits<Integer_>::digits;
+template<typename Float_>
+int required_bits_for_float(Float_ x) {
+    static_assert(std::is_floating_point<Float_>::value);
+    assert(x >= 0);
+    assert(std::trunc(x) == x);
+
 #ifndef SANISIZER_FLOAT_FORCE_FREXP
     if constexpr(std::numeric_limits<Float_>::radix == 2) {
-        // ilogb returns an 'exp' such that 2^exp <= floored_x < 2^(exp + 1).
-        return floored_x != 0 && std::ilogb(floored_x) >= output_precision;
+        if (x == 0) {
+            return 0;
+        } else {
+            // ilogb returns an 'exp' such that 2^exp <= x < 2^(exp + 1).
+            return std::ilogb(x) + 1;
+        }
     } else {
-        // Ensure we're covered for weird float types where the radix is not 2.
-        // This is pretty unusual so we need to use a macro to force test coverage.
 #endif
+        // Ensure we're covered for weird float types where the radix is not 2.
         int exp;
-        std::frexp(floored_x, &exp); 
-        // frexp guarantees that 2^(exp - 1) <= floored_x < 2^exp.
-        return exp > output_precision;
+        std::frexp(x, &exp); 
+        // frexp guarantees that 2^(exp - 1) <= x < 2^exp.
+        return exp;
 #ifndef SANISIZER_FLOAT_FORCE_FREXP
     }
 #endif
 }
-/**
- * @endcond
- */
 
 /**
  * Safely convert a non-negative floating-point number to an integer with truncation.
@@ -65,11 +76,13 @@ Integer_ from_float(Float_ x) {
     if (x < 0) {
         throw std::out_of_range("negative input value in sanisizer::from_float");
     }
-
     x = std::trunc(x);
-    if (float_to_int_overflows<Integer_>(x)) {
+
+    constexpr auto output_precision = std::numeric_limits<Integer_>::digits;
+    if (required_bits_for_float(x) > output_precision) {
         throw std::overflow_error("overflow detected in sanisizer::from_float");
     }
+
     return x;
 }
 

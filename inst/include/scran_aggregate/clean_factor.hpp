@@ -5,11 +5,17 @@
 
 namespace scran_aggregate {
 
+/**
+ * @cond
+ */
 // Preserving it here for back-compatibility.
 template<typename Factor_, typename Output_>
 std::vector<Factor_> clean_factor(const std::size_t n, const Factor_* const factor, Output_* const cleaned) {
     return factorize::create_factor(n, factor, cleaned);
 }
+/**
+ * @endcond
+ */
 
 }
 
