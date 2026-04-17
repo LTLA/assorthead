@@ -27,7 +27,10 @@ namespace scran_pca {
 
 /**
  * @brief Options for `blocked_pca()`.
+ *
+ * @tparam EigenVector_ A floating-point `Eigen::Vector` class.
  */
+template<typename EigenVector_ = Eigen::VectorXd>
 struct BlockedPcaOptions {
     /**
      * @cond
@@ -100,7 +103,7 @@ struct BlockedPcaOptions {
     /**
      * Further options to pass to `irlba::compute()`.
      */
-    irlba::Options<Eigen::VectorXd> irlba_options;
+    irlba::Options<EigenVector_> irlba_options;
 };
 
 /**
@@ -510,13 +513,13 @@ const EigenMatrix_& scale_rotation_matrix(const EigenMatrix_& rotation, bool sca
     }
 }
 
-template<class IrlbaSparseMatrix_, class EigenMatrix_>
+template<class EigenVector_, class IrlbaSparseMatrix_, class EigenMatrix_>
 inline void project_matrix_realized_sparse(
     const IrlbaSparseMatrix_& emat, // cell in rows, genes in the columns, CSC.
     EigenMatrix_& components, // dims in rows, cells in columns
     const EigenMatrix_& scaled_rotation, // genes in rows, dims in columns
-    int nthreads) 
-{
+    int nthreads
+) {
     const auto rank = scaled_rotation.cols();
     const auto ncells = emat.rows();
     const auto ngenes = emat.cols();
@@ -530,10 +533,10 @@ inline void project_matrix_realized_sparse(
 
     const auto& values = emat.get_values();
     const auto& indices = emat.get_indices();
+    const auto& pointers = emat.get_pointers();
 
     if (nthreads == 1) {
-        const auto& pointers = emat.get_pointers();
-        auto multipliers = sanisizer::create<Eigen::VectorXd>(rank);
+        auto multipliers = sanisizer::create<EigenVector_>(rank);
         for (I<decltype(ngenes)> g = 0; g < ngenes; ++g) {
             multipliers.noalias() = scaled_rotation.row(g);
             const auto start = pointers[g], end = pointers[g + 1]; // increment is safe as 'g + 1 <= ngenes'.
@@ -543,20 +546,40 @@ inline void project_matrix_realized_sparse(
         }
 
     } else {
-        const auto& row_nonzero_bounds = emat.get_secondary_nonzero_boundaries();
-        irlba::parallelize(nthreads, [&](const int t) -> void { 
-            const auto& starts = row_nonzero_bounds[t];
-            const auto& ends = row_nonzero_bounds[t + 1]; // increment is safe as 't + 1 <= nthreads'.
-            auto multipliers = sanisizer::create<Eigen::VectorXd>(rank);
+        // Here, the general strategy is to split the matrix by chunks into genes,
+        // perform the matrix multiplication for each chunk,
+        // and then sum the per-chunk products to obtain the final product.
+        // The exact result of the reduction depends on the number of threads,
+        // but this is an acceptable annoyance for greater speed.
+        const auto& primary_bounds = emat.get_primary_boundaries();
+        auto working = sanisizer::create<std::vector<EigenMatrix_> >(nthreads - 1);
 
-            for (I<decltype(ngenes)> g = 0; g < ngenes; ++g) {
+        irlba::parallelize(nthreads, [&](const int t) -> void { 
+            EigenMatrix_* ptr;
+            if (t == 0) {
+                ptr = &components;
+            } else {
+                auto& mat = working[t - 1];
+                mat.resize(components.rows(), components.cols());
+                mat.setZero();
+                ptr = &mat;
+            }
+
+            const auto gstart = primary_bounds[t];
+            const auto gend = primary_bounds[t + 1]; // increment is safe as 't + 1 <= nthreads'.
+            auto multipliers = sanisizer::create<EigenVector_>(rank);
+            for (I<decltype(ngenes)> g = gstart; g < gend; ++g) {
                 multipliers.noalias() = scaled_rotation.row(g);
-                const auto start = starts[g], end = ends[g];
+                const auto start = pointers[g], end = pointers[g + 1]; // increment is safe as 'g + 1 <= ngenes'
                 for (auto i = start; i < end; ++i) {
-                    components.col(indices[i]).noalias() += values[i] * multipliers;
+                    ptr->col(indices[i]).noalias() += values[i] * multipliers;
                 }
             }
         });
+
+        for (auto& w : working) {
+            components += w;
+        }
     }
 }
 
@@ -870,9 +893,9 @@ struct BlockedPcaResults {
     EigenVector_ scale;
 
     /**
-     * Whether the algorithm converged.
+     * Metrics for IRLBA, including whether the algorithm converged and the number of iterations/multiplications required.
      */
-    bool converged = false;
+    irlba::Metrics metrics;
 };
 
 /**
@@ -882,7 +905,7 @@ template<typename Value_, typename Index_, typename Block_, typename EigenMatrix
 void blocked_pca_internal(
     const tatami::Matrix<Value_, Index_>& mat,
     const Block_* block,
-    const BlockedPcaOptions& options,
+    const BlockedPcaOptions<EigenVector_>& options,
     BlockedPcaResults<EigenMatrix_, EigenVector_>& output,
     SubsetFunction_ subset_fun
 ) {
@@ -945,7 +968,7 @@ void blocked_pca_internal(
 
         // Make sure to copy sparse_ptr because it doesn't exist outside of this scope.
         projector = [&,sparse_ptr](const EigenMatrix_& scaled_rotation) -> void {
-            project_matrix_realized_sparse(*sparse_ptr, output.components, scaled_rotation, options.num_threads);
+            project_matrix_realized_sparse<EigenVector_>(*sparse_ptr, output.components, scaled_rotation, options.num_threads);
         };
 
     } else {
@@ -1028,8 +1051,7 @@ void blocked_pca_internal(
         );
         ptr.swap(alt);
 
-        auto out = irlba::compute(*ptr, options.number, output.components, output.rotation, output.variance_explained, options.irlba_options);
-        output.converged = out.first;
+        output.metrics = irlba::compute(*ptr, options.number, output.components, output.rotation, output.variance_explained, options.irlba_options);
 
         subset_fun(block_details, output.components, output.variance_explained);
 
@@ -1051,8 +1073,7 @@ void blocked_pca_internal(
         }
 
     } else {
-        const auto out = irlba::compute(*ptr, options.number, output.components, output.rotation, output.variance_explained, options.irlba_options);
-        output.converged = out.first;
+        output.metrics = irlba::compute(*ptr, options.number, output.components, output.rotation, output.variance_explained, options.irlba_options);
 
         subset_fun(block_details, output.components, output.variance_explained);
 
@@ -1135,7 +1156,7 @@ template<typename Value_, typename Index_, typename Block_, typename EigenMatrix
 void blocked_pca(
     const tatami::Matrix<Value_, Index_>& mat,
     const Block_* block,
-    const BlockedPcaOptions& options,
+    const BlockedPcaOptions<EigenVector_>& options,
     BlockedPcaResults<EigenMatrix_, EigenVector_>& output
 ) {
     blocked_pca_internal<Value_, Index_, Block_, EigenMatrix_, EigenVector_>(
@@ -1167,7 +1188,7 @@ void blocked_pca(
  * @return Results of the PCA on the residuals. 
  */
 template<typename EigenMatrix_ = Eigen::MatrixXd, class EigenVector_ = Eigen::VectorXd, typename Value_, typename Index_, typename Block_>
-BlockedPcaResults<EigenMatrix_, EigenVector_> blocked_pca(const tatami::Matrix<Value_, Index_>& mat, const Block_* block, const BlockedPcaOptions& options) {
+BlockedPcaResults<EigenMatrix_, EigenVector_> blocked_pca(const tatami::Matrix<Value_, Index_>& mat, const Block_* block, const BlockedPcaOptions<EigenVector_>& options) {
     BlockedPcaResults<EigenMatrix_, EigenVector_> output;
     blocked_pca(mat, block, options, output);
     return output;

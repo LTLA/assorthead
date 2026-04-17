@@ -9,6 +9,7 @@
 
 #include "utils.hpp"
 #include "lanczos.hpp"
+#include "Options.hpp"
 #include "Matrix/simple.hpp"
 
 #include "sanisizer/sanisizer.hpp"
@@ -24,12 +25,9 @@ namespace irlba {
 /**
  * @cond
  */
-template<typename EigenMatrix_>
-using JacobiSVD = Eigen::JacobiSVD<EigenMatrix_, Eigen::ComputeThinU | Eigen::ComputeThinV>;
-
 template<class Matrix_, class EigenMatrix_, class EigenVector_>
 void exact(const Matrix_& matrix, const Eigen::Index requested_number, EigenMatrix_& outU, EigenMatrix_& outV, EigenVector_& outD) {
-    JacobiSVD<EigenMatrix_> svd(matrix.rows(), matrix.cols());
+    Eigen::BDCSVD<EigenMatrix_, Eigen::ComputeThinU | Eigen::ComputeThinV> svd(matrix.rows(), matrix.cols());
 
     auto realizer = matrix.new_known_realize_workspace();
     EigenMatrix_ buffer;
@@ -45,7 +43,16 @@ void exact(const Matrix_& matrix, const Eigen::Index requested_number, EigenMatr
     outV = svd.matrixV().leftCols(requested_number);
 }
 
-// Basically (requested * 2 >= smaller), but avoiding overflow from the product.
+// The R package's default is 7 but larger values can improve performance for large 'requested_number'. 
+inline Eigen::Index choose_extra_work(const Eigen::Index requested, const std::optional<Eigen::Index>& extra_work) {
+    if (extra_work.has_value()) {
+        return *extra_work;
+    } else {
+        return std::max(requested, static_cast<Eigen::Index>(7));
+    }
+}
+
+// Basically (requested >= smaller / 2), but avoiding a cast to double.
 inline bool requested_greater_than_or_equal_to_half_smaller(const Eigen::Index requested, const Eigen::Index smaller) {
     const Eigen::Index half_smaller = smaller / 2;
     if (requested == half_smaller) {
@@ -56,7 +63,7 @@ inline bool requested_greater_than_or_equal_to_half_smaller(const Eigen::Index r
 }
 
 // Basically min(requested_number + extra_work, smaller), but avoiding overflow from the sum.
-inline Eigen::Index choose_requested_plus_extra_work_or_smaller(const Eigen::Index requested_number, const int extra_work, const Eigen::Index smaller) {
+inline Eigen::Index choose_requested_plus_extra_work_or_smaller(const Eigen::Index requested_number, const Eigen::Index extra_work, const Eigen::Index smaller) {
     if (requested_number >= smaller) {
         return smaller;
     } else {
@@ -114,6 +121,26 @@ inline Eigen::Index update_k(Eigen::Index k, const Eigen::Index requested_number
  */
 
 /**
+ * @brief Metrics for IRLBA progress from `compute()`.
+ */
+struct Metrics {
+    /**
+     * The number of restart iterations performed.
+     */
+    int iterations = 0;
+
+    /**
+     * The number of matrix multiplications performed.
+     */
+    int multiplications = 0;
+
+    /**
+     * Whether the algorithm converged.
+     */
+    bool converged = false;
+};
+
+/**
  * Implements the Implicitly Restarted Lanczos Bidiagonalization Algorithm (IRLBA) for fast truncated singular value decomposition.
  * This is heavily derived from the C code in the [**irlba** package](https://github.com/bwlewis/irlba),
  * with refactoring into C++ to use Eigen instead of LAPACK for much of the matrix algebra.
@@ -135,11 +162,11 @@ inline Eigen::Index update_k(Eigen::Index k, const Eigen::Index requested_number
  * This has length equal to `number` (or lower, depending on `Options::cap_number`).
  * @param options Further options.
  *
- * @return A pair where the first entry indicates whether the algorithm converged,
- * and the second entry indicates the number of restart iterations performed.
+ * @return Metrics for the progress of the algorithm.
+ * This includes the convergence status, the number of restart iterations, and the number of matrix multiplications.
  */
 template<class Matrix_, class EigenMatrix_, class EigenVector_>
-std::pair<bool, int> compute(
+Metrics compute(
     const Matrix_& matrix,
     const Eigen::Index number,
     EigenMatrix_& outU,
@@ -165,7 +192,9 @@ std::pair<bool, int> compute(
         outD.resize(requested_number);
         outU.resize(matrix.rows(), requested_number);
         outV.resize(matrix.cols(), requested_number);
-        return std::make_pair(true, 0);
+        Metrics met;
+        met.converged = true;
+        return met;
     }
 
     // Falling back to an exact SVD for small matrices or if the requested number is too large 
@@ -175,12 +204,16 @@ std::pair<bool, int> compute(
         (options.exact_for_large_number && requested_greater_than_or_equal_to_half_smaller(requested_number, smaller))
     ) {
         exact(matrix, requested_number, outU, outV, outD);
-        return std::make_pair(true, 0);
+        Metrics met;
+        met.converged = true;
+        return met;
     }
+
+    const Eigen::Index extra_work = choose_extra_work(requested_number, options.extra_work);
 
     // We know work must be positive at this point, as we would have returned early if requested_number = 0.
     // Similar, if smaller = 0, we would have either thrown earlier or set requested_number = 0.
-    const Eigen::Index work = choose_requested_plus_extra_work_or_smaller(requested_number, options.extra_work, smaller);
+    const Eigen::Index work = choose_requested_plus_extra_work_or_smaller(requested_number, extra_work, smaller);
 
     // Don't worry about sanitizing dimensions for Eigen constructors,
     // as the former are stored as Eigen::Index and the latter accepts Eigen::Index inputs.
@@ -198,9 +231,11 @@ std::pair<bool, int> compute(
     V.col(0) /= V.col(0).norm();
 
     bool converged = false;
-    int iter = 0;
+    int iter = 0, mult = 0;
     Eigen::Index k = 0;
-    JacobiSVD<EigenMatrix_> svd(work, work);
+
+    // No need for QR preconditioning when we're dealing with a square matrix.
+    Eigen::BDCSVD<EigenMatrix_, Eigen::NoQRPreconditioner | Eigen::ComputeFullU | Eigen::ComputeFullV> svd(work, work);
 
     LanczosWorkspace<EigenVector_, Matrix_> lpwork(matrix);
 
@@ -214,15 +249,15 @@ std::pair<bool, int> compute(
     EigenVector_ F(matrix.cols());
 
     EigenVector_ prevS(work);
-    typename EigenMatrix_::Scalar svtol = options.singular_value_ratio_tolerance;
-    typename EigenMatrix_::Scalar tol = options.convergence_tolerance;
-    typename EigenMatrix_::Scalar svtol_actual = (svtol >= 0 ? svtol : tol);
+    const typename EigenMatrix_::Scalar tol = options.convergence_tolerance;
+    const typename EigenMatrix_::Scalar svtol_actual = choose_singular_value_tolerance(options);
+    const auto inv_eps = choose_invariant_tolerance<typename EigenMatrix_::Scalar>(options);
 
     for (; iter < options.max_iterations; ++iter) {
         // Technically, this is only a 'true' Lanczos bidiagonalization
         // when k = 0. All other times, we're just recycling the machinery,
         // see the text below Equation 3.11 in Baglama and Reichel.
-        run_lanczos_bidiagonalization(lpwork, W, V, B, eng, k, options);
+        mult += run_lanczos_bidiagonalization(lpwork, W, V, B, eng, k, inv_eps);
 
 //            if (iter < 2) {
 //                std::cout << "B is currently:\n" << B << std::endl;
@@ -236,7 +271,7 @@ std::pair<bool, int> compute(
         const auto& BV = svd.matrixV();
 
         // Checking for convergence.
-        if (B(work - 1, work - 1) == 0) { // a.k.a. the final value of 'S' from the Lanczos iterations.
+        if (B.coeff(work - 1, work - 1) == 0) { // a.k.a. the final value of 'S' from the Lanczos iterations.
             converged = true;
             break;
         }
@@ -273,8 +308,8 @@ std::pair<bool, int> compute(
         prevS = BS;
 
         k = update_k(k, requested_number, n_converged, work);
-        Vtmp.leftCols(k).noalias() = V * BV.leftCols(k);
-        V.leftCols(k) = Vtmp.leftCols(k);
+        Vtmp.leftCols(k).noalias() = V * BV.leftCols(k); // don't write directly into V, to avoid aliasing problems.
+        V.swap(Vtmp);
 
         // See Equation 3.2 of Baglama and Reichel, where our 'V' is their
         // 'P', and our 'F / R_F' is their 'p_{m+1}' (Equation 2.2).  'F'
@@ -284,12 +319,12 @@ std::pair<bool, int> compute(
         // V is ok to use in the next run_lanczos_bidiagonalization().
         V.col(k) = F / R_F; 
 
-        Wtmp.leftCols(k).noalias() = W * BU.leftCols(k);
-        W.leftCols(k) = Wtmp.leftCols(k);
+        Wtmp.leftCols(k).noalias() = W * BU.leftCols(k); // don't write directly into W, to avoid aliasing problems.
+        W.swap(Wtmp);
 
         B.setZero(work, work);
         for (I<decltype(k)> l = 0; l < k; ++l) {
-            B(l, l) = BS[l];
+            B.coeffRef(l, l) = BS[l];
 
             // This assignment looks weird but is deliberate, see Equation
             // 3.6 of Baglama and Reichel. Happily, this is the same value
@@ -297,7 +332,7 @@ std::pair<bool, int> compute(
             // (See the equation just above Equation 3.5; I think they 
             // misplaced a tilde on the final 'u', given no other 'u' has
             // a B_m superscript as well as a tilde.)
-            B(l, k) = res[l]; 
+            B.coeffRef(l, k) = res[l]; 
         }
     }
 
@@ -312,7 +347,11 @@ std::pair<bool, int> compute(
     outV.resize(matrix.cols(), requested_number);
     outV.noalias() = V * svd.matrixV().leftCols(requested_number);
 
-    return std::make_pair(converged, (converged ? iter + 1 : iter));
+    Metrics met;
+    met.converged = converged;
+    met.multiplications = mult;
+    met.iterations = (converged ? iter + 1 : iter);
+    return met;
 }
 
 /**
@@ -339,7 +378,7 @@ std::pair<bool, int> compute(
  * and the second entry indicates the number of restart iterations performed.
  */
 template<class InputEigenMatrix_, class OutputEigenMatrix_, class EigenVector_>
-std::pair<bool, int> compute_simple(
+Metrics compute_simple(
     const InputEigenMatrix_& matrix,
     Eigen::Index number,
     OutputEigenMatrix_& outU,
@@ -385,14 +424,9 @@ struct Results {
     EigenVector_ D;
 
     /**
-     * The number of restart iterations performed.
+     * Metrics for the progress of the algorithm.
      */
-    int iterations;
-
-    /**
-     * Whether the algorithm converged.
-     */
-    bool converged;
+    Metrics metrics;
 };
 
 /** 
@@ -411,9 +445,7 @@ struct Results {
 template<class EigenMatrix_ = Eigen::MatrixXd, class EigenVector_ = Eigen::VectorXd, class Matrix_>
 Results<EigenMatrix_, EigenVector_> compute(const Matrix_& matrix, Eigen::Index number, const Options<EigenVector_>& options) {
     Results<EigenMatrix_, EigenVector_> output;
-    const auto stats = compute(matrix, number, output.U, output.V, output.D, options);
-    output.converged = stats.first;
-    output.iterations = stats.second;
+    output.metrics = compute(matrix, number, output.U, output.V, output.D, options);
     return output;
 }
 
@@ -434,9 +466,7 @@ Results<EigenMatrix_, EigenVector_> compute(const Matrix_& matrix, Eigen::Index 
 template<class OutputEigenMatrix_ = Eigen::MatrixXd, class EigenVector_ = Eigen::VectorXd, class InputEigenMatrix_>
 Results<OutputEigenMatrix_, EigenVector_> compute_simple(const InputEigenMatrix_& matrix, Eigen::Index number, const Options<EigenVector_>& options) {
     Results<OutputEigenMatrix_, EigenVector_> output;
-    const auto stats = compute_simple(matrix, number, output.U, output.V, output.D, options);
-    output.converged = stats.first;
-    output.iterations = stats.second;
+    output.metrics = compute_simple(matrix, number, output.U, output.V, output.D, options);
     return output;
 }
 
