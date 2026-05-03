@@ -35,7 +35,15 @@ enum class BlockAveragePolicy : unsigned char { MEAN, QUANTILE, NONE };
  */
 struct ModelGeneVariancesOptions {
     /**
+     * Whether to fit a mean-variance trend.
+     * It can be occasionally desirable to disable the trend fitting if the trend is to be obtained from some other source,
+     * e.g., using a separate set of spike-in transcripts to estimate the technical component of each gene's variance.
+     */
+    bool trend = true;
+
+    /**
      * Options for fitting the mean-variance trend.
+     * Ignored if `ModelGeneVariancesOptions::trend = false`.
      */
     FitVarianceTrendOptions fit_variance_trend_options;
 
@@ -110,11 +118,15 @@ struct ModelGeneVariancesBuffers {
 
     /**
      * Pointer to an array of length equal to the number of genes, containing the fitted value of the mean-variance trend for each gene.
+     *
+     * If this or `ModelGeneVariancesBuffers::residuals` is `NULL`, no trend is fitted.
      */
     Stat_* fitted;
 
     /**
      * Vector of length equal to the number of genes, containing the residuals of the mean-variance trend for each gene.
+     *
+     * If this or `ModelGeneVariancesBuffers::fitted` is `NULL`, no trend is fitted.
      */
     Stat_* residuals;
 };
@@ -130,7 +142,7 @@ struct ModelGeneVariancesResults {
      */
     ModelGeneVariancesResults() = default;
 
-    ModelGeneVariancesResults(const std::size_t ngenes) :
+    ModelGeneVariancesResults(const std::size_t ngenes, const bool trend) :
         means(sanisizer::cast<I<decltype(means.size())> >(ngenes)
 #ifdef SCRAN_VARIANCES_TEST_INIT
             , SCRAN_VARIANCES_TEST_INIT
@@ -141,12 +153,12 @@ struct ModelGeneVariancesResults {
             , SCRAN_VARIANCES_TEST_INIT
 #endif
         ),
-        fitted(sanisizer::cast<I<decltype(fitted.size())> >(ngenes)
+        fitted(sanisizer::cast<I<decltype(fitted.size())> >(trend ? ngenes : 0)
 #ifdef SCRAN_VARIANCES_TEST_INIT
             , SCRAN_VARIANCES_TEST_INIT
 #endif
         ),
-        residuals(sanisizer::cast<I<decltype(residuals.size())> >(ngenes)
+        residuals(sanisizer::cast<I<decltype(residuals.size())> >(trend ? ngenes : 0)
 #ifdef SCRAN_VARIANCES_TEST_INIT
             , SCRAN_VARIANCES_TEST_INIT
 #endif
@@ -168,11 +180,15 @@ struct ModelGeneVariancesResults {
 
     /**
      * Vector of length equal to the number of genes, containing the fitted value of the mean-variance trend for each gene.
+     *
+     * This will be empty if `ModelGeneVariancesOptions::trend = false`.
      */
     std::vector<Stat_> fitted;
 
     /**
      * Vector of length equal to the number of genes, containing the residuals of the mean-variance trend for each gene.
+     *
+     * This will be empty if `ModelGeneVariancesOptions::trend = false`.
      */
     std::vector<Stat_> residuals;
 };
@@ -191,7 +207,12 @@ struct ModelGeneVariancesBlockedBuffers {
 
     /**
      * Buffers to store the average across blocks for all statistics in `per_block`.
-     * Any of the pointers may be `NULL`, in which case the corresponding average is not computed.
+     *
+     * Any of the pointers in this object may be `NULL`, in which case the corresponding average is not computed.
+     *
+     * If `average.fitted` or `average.residuals` is not `NULL`, all entries of `per_block` should have non-`NULL` pointers for their own `fitted` and `residuals`.
+     * (That is, a mean-variance trend should have been fitted in each block.) 
+     * Otherwise, an error will be thrown.
      */
     ModelGeneVariancesBuffers<Stat_> average;
 };
@@ -207,12 +228,12 @@ struct ModelGeneVariancesBlockedResults {
      */
     ModelGeneVariancesBlockedResults() = default;
 
-    ModelGeneVariancesBlockedResults(const std::size_t ngenes, const std::size_t nblocks, const bool do_average) :
-        average(do_average ? ngenes : 0)
+    ModelGeneVariancesBlockedResults(const std::size_t ngenes, const std::size_t nblocks, const bool do_average, const bool do_trend) :
+        average(do_average ? ngenes : 0, do_trend)
     {
         per_block.reserve(nblocks);
         for (I<decltype(nblocks)> b = 0; b < nblocks; ++b) {
-            per_block.emplace_back(ngenes);
+            per_block.emplace_back(ngenes, do_trend);
         }
     }
     /**
@@ -533,8 +554,8 @@ void model_gene_variances_blocked(
     const tatami::Matrix<Value_, Index_>& mat, 
     const Block_* const block, 
     const ModelGeneVariancesBlockedBuffers<Stat_>& buffers,
-    const ModelGeneVariancesOptions& options)
-{
+    const ModelGeneVariancesOptions& options
+) {
     const Index_ NR = mat.nrow(), NC = mat.ncol();
     std::vector<Index_> block_size;
 
@@ -550,8 +571,14 @@ void model_gene_variances_blocked(
     FitVarianceTrendWorkspace<Stat_> work;
     auto fopt = options.fit_variance_trend_options;
     fopt.num_threads = options.num_threads;
+    bool all_trends_fitted = true;
+
     for (I<decltype(nblocks)> b = 0; b < nblocks; ++b) {
         const auto& current = buffers.per_block[b];
+        if (current.fitted == NULL || current.residuals == NULL) {
+            all_trends_fitted = false;
+            continue;
+        }
         if (block_size[b] >= 2) {
             fit_variance_trend(NR, current.means, current.variances, current.fitted, current.residuals, work, fopt);
         } else {
@@ -564,6 +591,10 @@ void model_gene_variances_blocked(
     const auto ave_variances = buffers.average.variances;
     const auto ave_fitted = buffers.average.fitted;
     const auto ave_residuals = buffers.average.residuals;
+
+    if ((ave_fitted || ave_residuals) && !all_trends_fitted) {
+        throw std::runtime_error("cannot compute average fitted values/residuals without per-block trend fits");
+    }
 
     std::vector<Stat_*> tmp_pointers;
     tmp_pointers.reserve(nblocks);
@@ -671,13 +702,19 @@ void model_gene_variances(
  */
 template<typename Stat_ = double, typename Value_, typename Index_>
 ModelGeneVariancesResults<Stat_> model_gene_variances(const tatami::Matrix<Value_, Index_>& mat, const ModelGeneVariancesOptions& options) {
-    ModelGeneVariancesResults<Stat_> output(mat.nrow()); // cast is safe, as any tatami Index_ can always fit into a size_t.
+    ModelGeneVariancesResults<Stat_> output(mat.nrow(), options.trend); // cast is safe, as any tatami Index_ can always fit into a size_t.
 
     ModelGeneVariancesBuffers<Stat_> buffers;
     buffers.means = output.means.data();
     buffers.variances = output.variances.data();
-    buffers.fitted = output.fitted.data();
-    buffers.residuals = output.residuals.data();
+
+    if (options.trend) {
+        buffers.fitted = output.fitted.data();
+        buffers.residuals = output.residuals.data();
+    } else {
+        buffers.fitted = NULL;
+        buffers.residuals = NULL;
+    }
 
     model_gene_variances(mat, std::move(buffers), options);
     return output;
@@ -705,7 +742,12 @@ ModelGeneVariancesBlockedResults<Stat_> model_gene_variances_blocked(const tatam
     const auto nblocks = (block ? tatami_stats::total_groups(block, mat.ncol()) : 1);
 
     const bool do_average = options.compute_average /* for back-compatibility */ && options.block_average_policy != BlockAveragePolicy::NONE;
-    ModelGeneVariancesBlockedResults<Stat_> output(mat.nrow(), nblocks, do_average); // cast is safe, any tatami Index_ can always fit into a size_t.
+    ModelGeneVariancesBlockedResults<Stat_> output(
+        mat.nrow(), // cast is safe, any tatami Index_ can always fit into a size_t.
+        nblocks,
+        do_average,
+        options.trend
+    );
 
     ModelGeneVariancesBlockedBuffers<Stat_> buffers;
     sanisizer::resize(buffers.per_block, nblocks);
@@ -713,8 +755,14 @@ ModelGeneVariancesBlockedResults<Stat_> model_gene_variances_blocked(const tatam
         auto& current = buffers.per_block[b];
         current.means = output.per_block[b].means.data();
         current.variances = output.per_block[b].variances.data();
-        current.fitted = output.per_block[b].fitted.data();
-        current.residuals = output.per_block[b].residuals.data();
+
+        if (options.trend) {
+            current.fitted = output.per_block[b].fitted.data();
+            current.residuals = output.per_block[b].residuals.data();
+        } else {
+            current.fitted = NULL;
+            current.residuals = NULL;
+        }
     }
 
     if (!do_average) {
@@ -725,8 +773,14 @@ ModelGeneVariancesBlockedResults<Stat_> model_gene_variances_blocked(const tatam
     } else {
         buffers.average.means = output.average.means.data();
         buffers.average.variances = output.average.variances.data();
-        buffers.average.fitted = output.average.fitted.data();
-        buffers.average.residuals = output.average.residuals.data();
+
+        if (options.trend) {
+            buffers.average.fitted = output.average.fitted.data();
+            buffers.average.residuals = output.average.residuals.data();
+        } else {
+            buffers.average.fitted = NULL;
+            buffers.average.residuals = NULL;
+        }
     }
 
     model_gene_variances_blocked(mat, block, buffers, options);

@@ -111,7 +111,7 @@ struct FitVarianceTrendWorkspace {
  * This makes the trend more "linear" to improve the performance of the LOWESS smoother;
  * it also reduces the chance of obtaining negative fitted values.
  * 3. Apply the LOWESS smoother to the quarter-root variances.
- * This is done using the implementation in the [**WeightedLowess**](https://github.com/LTLA/CppWeightedLowess) library.
+ * This is done using the implementation in the [**WeightedLowess**](https://github.com/libscran/WeightedLowess) library.
  * 4. Reverse the quarter-root transformation to obtain the fitted values for all non-low-abundance genes.
  * 5. Extrapolate linearly from the left-most fitted value to the origin to obtain fitted values for the previously filtered genes.
  * This is empirically justified by the observation that mean-variance trends of log-expression data are linear at very low abundances.

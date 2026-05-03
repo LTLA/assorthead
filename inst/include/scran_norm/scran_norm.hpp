@@ -2,6 +2,7 @@
 #define SCRAN_NORM_HPP
 
 #include "center_size_factors.hpp"
+#include "center_spike_in_factors.hpp"
 #include "choose_pseudo_count.hpp"
 #include "normalize_counts.hpp"
 

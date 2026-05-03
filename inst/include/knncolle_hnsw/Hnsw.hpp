@@ -296,7 +296,7 @@ public:
 
         // Dear God, make saveIndex() const.
         auto index_ptr = const_cast<hnswlib::HierarchicalNSW<HnswData_>*>(&my_index);
-        index_ptr->saveIndex(dir / "INDEX");
+        index_ptr->saveIndex((dir / "INDEX").string());
     }
 
     HnswPrebuilt(const std::filesystem::path& dir) : 
