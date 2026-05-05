@@ -339,7 +339,7 @@ public:
             return norm;
         }()),
 
-        my_index(my_space.get(), dir / "INDEX")
+        my_index(my_space.get(), (dir / "INDEX").string())
 
     {
         if (my_normalize_method == DistanceNormalizeMethod::CUSTOM) {

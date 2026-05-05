@@ -19,7 +19,7 @@ kmeans,https://github.com/libscran/kmeans,v4.0.6,"C++ port of `stats::kmeans` wi
 kmeans_tatami,https://github.com/libscran/kmeans_tatami,v0.1.1,"tatami wrappers for k-means clustering"
 knncolle,https://github.com/knncolle/knncolle,v3.1.0,"C++ API for nearest-neighbor searches"
 knncolle_annoy,https://github.com/knncolle/knncolle_annoy,v0.3.0,"**knncolle** extension for Annoy"
-knncolle_hnsw,https://github.com/knncolle/knncolle_hnsw,v0.3.1,"**knncolle** extension for HNSW"
+knncolle_hnsw,https://github.com/knncolle/knncolle_hnsw,v0.3.2,"**knncolle** extension for HNSW"
 knncolle_kmknn,https://github.com/knncolle/knncolle_kmknn,v0.2.0,"**knncolle** extension for HNSW"
 knncolle_tatami,https://github.com/knncolle/knncolle_tatami,v0.1.0,"**knncolle** extension for HNSW"
 kaori,https://github.com/crisprverse/kaori,v1.2.0,"Sequence alignment and counting for CRISPR guides"
