@@ -36,8 +36,10 @@ struct CenterSpikeInFactorsOptions {
 };
 
 /**
- * Center size factors for both endogenous genes and spike-in transcripts.
- * This ensures that the average normalized abundances of genes and spike-ins are comparable in downstream analyses.
+ * Center size factors for both endogenous genes and spike-in transcripts, as described in `center_size_factors()`.
+ * In addition to preserving the original scale of the counts, we ensure that the average normalized abundances of genes and spike-ins are comparable in downstream analyses.
+ * Typically, we would use spike-in transcripts to infer some properties of endogenous genes of similar molarity,
+ * e.g., estimating technical noise as a function of the abundance.
  *
  * In practice, this function is no different to calling `center_size_factors()` separately for `endogenous` and each of `spike_ins`.
  * This function is provided for convenience and for consistency with `center_spike_in_factors_blocked()`.
@@ -104,7 +106,7 @@ struct CenterSpikeInFactorsBlockedOptions {
 };
 
 /**
- * Center size factors for both endogenous genes and spike-in transcripts while accounting for the block structure.
+ * Center size factors for both endogenous genes and spike-in transcripts as described in `center_spike_in_factors()`, accounting for the experiment's block structure.
  * Specifically, the size factors of each block are scaled so that the mean size factor for each spike-in set is the same as the mean for the endogenous genes.
  * This ensures that the average normalized abundances of genes and spike-ins are comparable within each block.
  *

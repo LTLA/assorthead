@@ -44,7 +44,7 @@ struct Options {
      * This uses the parallelization scheme defined by `knncolle::parallelize()`.
      * Only relevant for the `compute()` overloads that perform a neighbor search.
      */
-    int num_threads = 10;
+    int num_threads = 1;
 };
 
 /**

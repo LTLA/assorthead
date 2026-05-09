@@ -3,6 +3,8 @@
 
 #include <vector>
 
+#include "irlba/irlba.hpp"
+
 /**
  * @file Results.hpp
  * @brief Classes for storing the results.
@@ -47,6 +49,11 @@ struct Results {
      * Weights are guaranteed to be non-negative, where larger values indicate a greater contribution to the low-rank approximation.
      */
     std::vector<Float_> weights;
+
+    /**
+     * Metrics for IRLBA, including whether the algorithm converged and the number of iterations/multiplications required. 
+     */
+    irlba::Metrics metrics;
 };
 
 }

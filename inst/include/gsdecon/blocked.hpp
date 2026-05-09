@@ -44,11 +44,15 @@ namespace gsdecon {
  * (i.e., for \f$N\f$ blocks, block identities should run from 0 to \f$N-1\f$ with at least one entry for each block.)
  * @param options Further options. 
  * @param[out] output Collection of buffers in which to store the scores and weights.
+ *
+ * @return Metrics for IRLBA, including whether the algorithm converged and the number of iterations/multiplications required. 
  */
 template<typename Value_, typename Index_, typename Block_, typename Float_>
-void compute_blocked(const tatami::Matrix<Value_, Index_>& matrix, const Block_* const block, const Options& options, const Buffers<Float_>& output) {
+irlba::Metrics compute_blocked(const tatami::Matrix<Value_, Index_>& matrix, const Block_* const block, const Options& options, const Buffers<Float_>& output) {
     if (check_edge_cases(matrix, options.rank, output)) {
-        return;
+        irlba::Metrics metrics;
+        metrics.converged = true;
+        return metrics;
     }
 
     scran_pca::BlockedPcaOptions bopt;
@@ -81,6 +85,8 @@ void compute_blocked(const tatami::Matrix<Value_, Index_>& matrix, const Block_*
         output.scores[c] = block_means[block[c]];
     }
     process_output(res.rotation, res.components, options.scale, res.scale, output);
+
+    return res.metrics;
 }
 
 /**
@@ -118,7 +124,7 @@ Results<Float_> compute_blocked(const tatami::Matrix<Value_, Index_>& matrix, co
     buffers.weights = output.weights.data();
     buffers.scores = output.scores.data();
 
-    compute_blocked(matrix, block, options, buffers);
+    output.metrics = compute_blocked(matrix, block, options, buffers);
     return output;
 }
 

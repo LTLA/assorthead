@@ -40,11 +40,15 @@ namespace gsdecon {
  * Entries are typically log-expression values. 
  * @param options Further options. 
  * @param[out] output Collection of buffers in which to store the scores and weights.
+ *
+ * @return Metrics for IRLBA, including whether the algorithm converged and the number of iterations/multiplications required. 
  */
 template<typename Value_, typename Index_, typename Float_>
-void compute(const tatami::Matrix<Value_, Index_>& matrix, const Options& options, const Buffers<Float_>& output) {
+irlba::Metrics compute(const tatami::Matrix<Value_, Index_>& matrix, const Options& options, const Buffers<Float_>& output) {
     if (check_edge_cases(matrix, options.rank, output)) {
-        return;
+        irlba::Metrics metrics;
+        metrics.converged = true;
+        return metrics;
     }
 
     scran_pca::SimplePcaOptions sopt;
@@ -58,6 +62,8 @@ void compute(const tatami::Matrix<Value_, Index_>& matrix, const Options& option
     const Float_ shift = std::accumulate(res.center.begin(), res.center.end(), static_cast<Float_>(0)) / matrix.nrow();
     std::fill_n(output.scores, matrix.ncol(), shift);
     process_output(res.rotation, res.components, options.scale, res.scale, output);
+
+    return res.metrics;
 }
 
 /**
@@ -91,7 +97,7 @@ Results<Float_> compute(const tatami::Matrix<Value_, Index_>& matrix, const Opti
     buffers.weights = output.weights.data();
     buffers.scores = output.scores.data();
 
-    compute(matrix, options, buffers);
+    output.metrics = compute(matrix, options, buffers);
     return output;
 }
 

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <stdexcept>
 #include <cstddef>
+#include <optional>
 
 #include "utils.hpp"
 
@@ -131,11 +132,11 @@ SizeFactorDiagnostics check_size_factor_sanity(const std::size_t num, const Size
 }
 
 /**
- * How invalid size factors should be handled:
+ * How invalid size factors of each type should be handled:
  *
  * - `IGNORE`: ignore invalid size factors with no error or change.
- * - `ERROR`: throw an error.
- * - `SANITIZE`: fix each invalid size factor.
+ * - `ERROR`: throw an error upon encountering an invalid size factor.
+ * - `SANITIZE`: replace invalid size factors with an appropriate (finite, positive) value.
  */
 enum class SanitizeAction : char { IGNORE, ERROR, SANITIZE };
 
@@ -153,7 +154,7 @@ struct SanitizeSizeFactorsOptions {
      * By replacing the size factor with a finite value, we ensure that any all-zero cells are represented by all-zero columns in the normalized matrix,
      * which is a reasonable outcome if those cells cannot be filtered out during upstream quality control.
      */
-    SanitizeAction handle_zero = SanitizeAction::ERROR;
+    SanitizeAction handle_zero = SanitizeAction::SANITIZE;
 
     /**
      * How should we handle negative size factors?
@@ -161,14 +162,14 @@ struct SanitizeSizeFactorsOptions {
      * If set to `SANITIZE`, they will be automatically set to the smallest valid size factor (or 1, if all size factors are invalid),
      * following the same logic as `SanitizeSizeFactorsOptions::handle_zero`.
      */
-    SanitizeAction handle_negative = SanitizeAction::ERROR;
+    SanitizeAction handle_negative = SanitizeAction::SANITIZE;
 
     /**
      * How should we handle NaN size factors?
      *
      * If set to `SANITIZE, NaN size factors will be automatically set to 1, meaning that scaling is a no-op.
      */
-    SanitizeAction handle_nan = SanitizeAction::ERROR;
+    SanitizeAction handle_nan = SanitizeAction::SANITIZE;
 
     /**
      * How should we handle infinite size factors?
@@ -176,7 +177,7 @@ struct SanitizeSizeFactorsOptions {
      * If set to `SANITIZE`, infinite size factors will be automatically set to the largest valid size factor (or 1, if all size factors are invalid).
      * This ensures that any normalized values will be, at least, finite; the choice of a relatively large replacement value reflects the extremity of the scaling.
      */
-    SanitizeAction handle_infinite = SanitizeAction::ERROR;
+    SanitizeAction handle_infinite = SanitizeAction::SANITIZE;
 };
 
 /**
@@ -199,7 +200,7 @@ struct SanitizeSizeFactorsOptions {
  */
 template<typename SizeFactor_>
 void sanitize_size_factors(const std::size_t num, SizeFactor_* const size_factors, const SizeFactorDiagnostics& status, const SanitizeSizeFactorsOptions& options) {
-    SizeFactor_ smallest = -1;
+    std::optional<SizeFactor_> smallest;
 
     if (status.has_negative) {
         if (options.handle_negative == SanitizeAction::ERROR) {
@@ -209,7 +210,7 @@ void sanitize_size_factors(const std::size_t num, SizeFactor_* const size_factor
             for (I<decltype(num)> i = 0; i < num; ++i) {
                 auto& s = size_factors[i];
                 if (s < 0) {
-                    s = smallest;
+                    s = *smallest;
                 }
             }
         }
@@ -219,13 +220,13 @@ void sanitize_size_factors(const std::size_t num, SizeFactor_* const size_factor
         if (options.handle_zero == SanitizeAction::ERROR) {
             throw std::runtime_error("detected size factor of zero");
         } else if (options.handle_zero == SanitizeAction::SANITIZE) {
-            if (smallest < 0) {
+            if (!smallest.has_value()) {
                 smallest = internal::find_smallest_valid_factor(num, size_factors);
             }
             for (I<decltype(num)> i = 0; i < num; ++i) {
                 auto& s = size_factors[i];
                 if (s == 0) {
-                    s = smallest;
+                    s = *smallest;
                 }
             }
         }
