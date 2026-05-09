@@ -63,6 +63,7 @@ irlba::Metrics compute_blocked(const tatami::Matrix<Value_, Index_>& matrix, con
     bopt.realize_matrix = options.realize_matrix;
     bopt.num_threads = options.num_threads;
     bopt.irlba_options = options.irlba_options;
+    bopt.center_scores_by_block = true; // we'll add them back in afterwards.
     const auto res = scran_pca::blocked_pca(matrix, block, bopt);
 
     // Here, we restore the block-specific centers.
