@@ -58,8 +58,8 @@ struct ModelGeneVariancesOptions {
      * Policy for weighting the contribution from each block when computing the mean for each statistic.
      * Only relevant to `model_gene_variances_blocked()` when `ModelGeneVariancesOptions::average_policy = BlockAveragePolicy::MEAN`. 
      *
-     * The default of `scran_blocks::WeightPolicy::VARIABLE` is to define equal weights for blocks once they reach a certain size (see `ModelGeneVariancesOptions::variable_block_weight_parameters`).
-     * For smaller blocks, the weight is linearly proportional to its size to avoid outsized contributions from very small blocks.
+     * By default, we define equal weights for blocks beyond a certain size (see `ModelGeneVariancesOptions::variable_block_weight_parameters`).
+     * For smaller blocks, the weight is linearly proportional to its size to avoid putting too much confidence in estimates from very small blocks.
      *
      * Other options include `scran_blocks::WeightPolicy::EQUAL`, where all blocks are equally weighted regardless of size;
      * and `scran_blocks::WeightPolicy::NONE`, where the contribution of each block is proportional to its size.
@@ -68,7 +68,7 @@ struct ModelGeneVariancesOptions {
 
     /**
      * Parameters for the variable block weights, including the threshold at which blocks are considered to be large enough to have equal weight.
-     * Only relevant to `model_gene_variances_blocked()` when `ModelGeneVariancesOptions::average_policy = BlockAveragePolicy::MEAN`.
+     * Only relevant to `model_gene_variances_blocked()` when `ModelGeneVariancesOptions::average_policy = BlockAveragePolicy::MEAN`
      * and `ModelGeneVariancesOptions::block_weight_policy = scran_blocks::WeightPolicy::VARIABLE`.
      */
     scran_blocks::VariableWeightParameters variable_block_weight_parameters; 

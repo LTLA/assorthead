@@ -23,19 +23,24 @@ namespace scran_variances {
  */
 struct FitVarianceTrendOptions {
     /**
+     * Should any filtering be performed on the mean log-expression of each gene?
+     * The filter threshold is defined by `FitVarianceTrend::minimum_mean`.
+     *
+     * The default of `true` assumes that there is a bulk of low-abundance genes that are uninteresting and should be removed to avoid skewing the windows of the LOWESS smoother.
+     * The fitted values for the removed genes are defined by extrapolating the left edge of the fitted trend to the origin.
+     *
+     * Filtering is not strictly necessary when `FitVarianceTrendOptions::use_minimum_width = true`, as the window is no longer defined from a proportion of the points. 
+     * However, it is still enabled by default to reduce the risk of obtaining negative fitted values near means of zero.
+     */
+    bool mean_filter = true;
+
+    /**
      * Minimum mean log-expression for trend fitting.
-     * Genes with lower means do not participate in the LOWESS fit, to ensure that windows are not skewed towards the majority of low-abundance genes.
-     * Instead, the fitted values for these genes are defined by extrapolating the left edge of the fitted trend is extrapolated to the origin.
+     * Genes with lower means do not participate in the LOWESS fit.
      * The default value is chosen based on the typical distribution of means of log-expression values across genes.
      * Only used if `FitVarianceTrendOptions::mean_filter = true`.
      */
     double minimum_mean = 0.1;
-
-    /**
-     * Should any filtering be performed on the mean log-expression of each gene (see `FitVarianceTrend::minimum_mean`)?
-     * The default of `true` assumes that there is a bulk of low-abundance genes that are uninteresting and should be removed to avoid skewing the windows of the LOWESS smoother.
-     */
-    bool mean_filter = true;
 
     /**
      * Should any quarter-root transformation of the variances be performed prior to LOWESS smoothing?
@@ -45,35 +50,44 @@ struct FitVarianceTrendOptions {
     bool transform = true;
 
     /**
-     * Span for the LOWESS smoother, as a proportion of the total number of points.
-     * Larger values improve stability at the cost of sensitivity to changes in low-density regions.
-     * This is only used if `FitVarianceTrendOptions::use_minimum_width = false`.
-     */
-    double span = 0.3;
-
-    /**
      * Should a minimum width constraint be applied to the LOWESS smoother?
-     * This replaces the proportion-based span for defining each window.
-     * Instead, the window for each point must be of a minimum width (see `FitVarianceTrendOptions::minimum_width`) 
+     *
+     * In regular LOWESS, each window is defined as containing some proportion of the dataset (see `FitVarianceTrendOptions::span`).
+     * When `use_minimum_width = true`, the window for each point must be of a minimum width (see `FitVarianceTrendOptions::minimum_width`) 
      * and is extended until it contains a minimum number of points (see `FitVarianceTrendOptions::minimum_window_count`).
-     * Setting this to `true` ensures that sensitivity is maintained in the trend fit at low-density regions for the distribution of means, e.g., at high abundances.
-     * It also avoids overfitting from very small windows in high-density intervals. 
+     *
+     * Setting this to `true` ensures that sensitivity is maintained in the trend fit at low-density regions for the distribution of means.
+     * This often yields improved fits for typical single-cell RNA-seq datasets where there are very few genes at high abundances.
+     * The minimum width also avoids overfitting from very small windows in high-density intervals. 
+     *
+     * Note that the minimum width constraint relies on sensible values for `FitVarianceTrendOptions::minimum_width` and `FitVarianceTrendOptions::minimum_window_count`.
+     * For general use, regular LOWESS is more robust and can be enabled by setting `use_minimum_width = false`.
      */
-    bool use_minimum_width = false;
+    bool use_minimum_width = true;
 
     /**
      * Minimum width of the window to use when `FitVarianceTrendOptions::use_minimum_width = true`.
      * This should be appropriate for the range of means used in `fit_variance_trend()`.
-     * The default value is chosen based on the typical range in single-cell RNA-seq data.
+     * The default value is chosen based on the typical range of means of log-expression values in single-cell RNA-seq data.
      */
     double minimum_width = 1;
 
     /**
      * Minimum number of observations in each window when `FitVarianceTrendOptions::use_minimum_width = true`.
-     * This ensures that each window contains at least a given number of observations for a stable fit.
+     * This ensures that each window contains at least a given number of observations for a stable linear regression.
      * If the minimum width window contains fewer observations, it is extended using the standard LOWESS logic until the minimum number is achieved.
+     *
+     * The default value is chosen to be large enough for stable regression within each window, yet much smaller than the typical number of genes in a single-cell RNA-seq dataset.
+     * This ensures that the minimum width specified in `FitVarianceTrendOptions::minimum_width` will be the main factor in determining the window size.
      */
     int minimum_window_count = 200;
+
+    /**
+     * Span for the LOWESS smoother, as a proportion of the total number of points.
+     * Larger values improve stability at the cost of sensitivity to changes in low-density regions.
+     * This is only used if `FitVarianceTrendOptions::use_minimum_width = false`.
+     */
+    double span = 0.3;
 
     /**
      * Number of threads to use in the LOWESS fit.
@@ -104,17 +118,21 @@ struct FitVarianceTrendWorkspace {
 
 /**
  * Fit a trend to the per-feature variances against the means, both of which are typically computed from log-normalized expression data.
- * We use a LOWESS smoother in several steps:
+ * This involves several steps:
  *
  * 1. Filter out low-abundance genes, to ensure the span of the smoother is not skewed by many low-abundance genes.
+ *    This step is omitted if `FitVarianceTrendOptions::mean_filter = false`.
  * 2. Take the quarter-root of the variances, to squeeze the trend towards 1.
- * This makes the trend more "linear" to improve the performance of the LOWESS smoother;
- * it also reduces the chance of obtaining negative fitted values.
+ *    This makes the trend more "linear" to improve the performance of the LOWESS smoother;
+ *    it also reduces the chance of obtaining negative fitted values.
+ *    This step is omitted if `FitVarianceTrendOptions::transform = false`.
  * 3. Apply the LOWESS smoother to the quarter-root variances.
- * This is done using the implementation in the [**WeightedLowess**](https://github.com/libscran/WeightedLowess) library.
+ *    This is done using the implementation in the [**WeightedLowess**](https://github.com/libscran/WeightedLowess) library.
  * 4. Reverse the quarter-root transformation to obtain the fitted values for all non-low-abundance genes.
+ *    This step is omitted if `FitVarianceTrendOptions::transform = false`.
  * 5. Extrapolate linearly from the left-most fitted value to the origin to obtain fitted values for the previously filtered genes.
- * This is empirically justified by the observation that mean-variance trends of log-expression data are linear at very low abundances.
+ *    This is empirically justified by the observation that mean-variance trends of log-expression data are linear at very low abundances.
+ *    This step is omitted if `FitVarianceTrendOptions::mean_filter = false`.
  *
  * @tparam Float_ Floating-point type of the statistics.
  *
@@ -135,8 +153,8 @@ void fit_variance_trend(
     Float_* const fitted,
     Float_* const residuals,
     FitVarianceTrendWorkspace<Float_>& workspace,
-    const FitVarianceTrendOptions& options)
-{
+    const FitVarianceTrendOptions& options
+) {
     auto& xbuffer = workspace.xbuffer;
     sanisizer::resize(xbuffer, n);
     auto& ybuffer = workspace.ybuffer;

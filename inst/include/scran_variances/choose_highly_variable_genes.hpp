@@ -36,18 +36,18 @@ struct ChooseHighlyVariableGenesOptions {
     bool larger = true;
 
     /**
-     * Whether to consider an absolute bound on the statistic when choosing HVGs.
+     * Whether to ignore genes whose statistics fall below an absolute bound.
      * The value of the bound is determined by `ChooseHighlyVariableGenesOptions::bound`.
      */
     bool use_bound = true;
 
     /**
      * A lower bound for the statistic, at or below which a gene will not be considered as highly variable even if it is among the top `top` genes.
-     * Only used if `ChooseHighlyVariableGenesOptions::use_bound = true`.
-     * If `ChooseHighlyVariableGenesOptions::larger = false`, this is an upper bound instead.
-     *
      * The default of zero assumes that the input statistics are residuals from a mean-variance trend (see `fit_variance_trend()`),
      * in which case all chosen HVGs should have positive residuals.
+     *
+     * This option is only used if `ChooseHighlyVariableGenesOptions::use_bound = true`.
+     * If `ChooseHighlyVariableGenesOptions::larger = false`, this will be treated as an upper bound instead.
      */
     double bound = 0;
 
