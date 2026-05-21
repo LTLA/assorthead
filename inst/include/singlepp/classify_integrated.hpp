@@ -130,9 +130,6 @@ void classify_integrated(
     ClassifyIntegratedBuffers<RefLabel_, Float_>& buffers,
     const ClassifyIntegratedOptions<Float_>& options)
 {
-    if (!sanisizer::is_equal(trained.test_nrow(), test.nrow())) {
-        throw std::runtime_error("number of rows in 'test' is not the same as that used to build 'trained'");
-    }
     annotate_cells_integrated(
         test,
         trained,
@@ -157,9 +154,12 @@ struct ClassifyIntegratedResults {
     /**
      * @cond
      */
-    ClassifyIntegratedResults(std::size_t ncells, std::size_t nrefs) : best(ncells), delta(ncells) {
+    ClassifyIntegratedResults(const std::size_t ncells, const std::size_t nrefs) : 
+        best(sanisizer::cast<I<decltype(best.size())> >(ncells)),
+        delta(sanisizer::cast<I<decltype(delta.size())> >(ncells))
+    {
         scores.reserve(nrefs);
-        for (decltype(nrefs) r = 0; r < nrefs; ++r) {
+        for (I<decltype(nrefs)> r = 0; r < nrefs; ++r) {
             scores.emplace_back(ncells);
         }
     }

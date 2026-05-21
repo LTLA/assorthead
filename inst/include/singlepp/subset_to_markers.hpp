@@ -3,60 +3,46 @@
 
 #include "Markers.hpp"
 #include "Intersection.hpp"
+#include "utils.hpp"
 
 #include <vector>
 #include <algorithm>
-#include <cstdint>
 #include <numeric>
-#include <unordered_set>
-#include <unordered_map>
 #include <type_traits>
+#include <optional>
+#include <cstddef>
 
 namespace singlepp {
 
-namespace internal {
-
-template<typename Size_>
-Size_ cap_at_top(Size_ size, int top) {
-    if (top >= 0 && size > static_cast<typename std::make_unsigned<decltype(top)>::type>(top)) {
-        return top;
-    } else {
-        return size;
-    }
-}
-
 // Use this method when the feature spaces are already identical.
 template<typename Index_>
-std::vector<Index_> subset_to_markers(Markers<Index_>& markers, int top) {
-    std::unordered_set<Index_> available;
-
-    auto ngroups = markers.size();
-    for (decltype(ngroups) i = 0; i < ngroups; ++i) {
-        auto& inner_markers = markers[i];
-        auto inner_ngroups = inner_markers.size();
-
-        for (decltype(inner_ngroups) j = 0; j < inner_ngroups; ++j) {
-            auto& current = inner_markers[j];
-            current.resize(cap_at_top(current.size(), top));
-            available.insert(current.begin(), current.end());
+std::vector<Index_> subset_to_markers(const Index_ ref_nrow, PairwiseMarkers<Index_>& markers) {
+    // Using ref_nrow as a missing-value placeholder, as all indices should be less than it.
+    auto available = sanisizer::create<std::vector<Index_> >(ref_nrow, ref_nrow);
+    std::vector<Index_> subset;
+    for (const auto& mrk : markers) {
+        for (const auto& mm : mrk) {
+            for (const auto y : mm) {
+                auto& av = available[y];
+                if (av == ref_nrow) {
+                    av = 0; // any value != ref_nrow will do here, and ref_nrow > 0 at this point (otherwise we'd segfault).
+                    subset.emplace_back(y);
+                }
+            }
         }
     }
 
-    std::vector<Index_> subset(available.begin(), available.end());
+    // Output is sorted by the row indices, which are the same in both test and reference matrices.
     std::sort(subset.begin(), subset.end());
-
-    std::unordered_map<Index_, Index_> mapping;
-    mapping.reserve(subset.size());
-    for (Index_ i = 0, end = subset.size(); i < end; ++i) {
-        mapping[subset[i]] = i;
+    const auto nsubset = subset.size();
+    for (I<decltype(nsubset)> s = 0; s < nsubset; ++s) {
+        available[subset[s]] = s;
     }
 
-    for (decltype(ngroups) i = 0; i < ngroups; ++i) {
-        auto& inner_markers = markers[i];
-        auto inner_ngroups = inner_markers.size();
-        for (decltype(inner_ngroups) j = 0; j < inner_ngroups; ++j) {
-            for (auto& k : inner_markers[j]) {
-                k = mapping.find(k)->second;
+    for (auto& mrk : markers) {
+        for (auto& mm : mrk) {
+            for (auto& y : mm) {
+                y = available[y];
             }
         }
     }
@@ -65,70 +51,63 @@ std::vector<Index_> subset_to_markers(Markers<Index_>& markers, int top) {
 }
 
 template<typename Index_>
-std::pair<std::vector<Index_>, std::vector<Index_> > subset_to_markers(const Intersection<Index_>& intersection, Markers<Index_>& markers, int top) {
-    std::unordered_set<Index_> available;
-    available.reserve(intersection.size());
+std::pair<std::vector<Index_>, std::vector<Index_> > subset_to_markers(
+    const Index_ test_nrow,
+    const Intersection<Index_>& intersection,
+    const Index_ ref_nrow,
+    PairwiseMarkers<Index_>& markers
+) {
+    // Again, using ref_nrow and test_nrow as the respective missing-value placeholders.
+    auto in_inter = sanisizer::create<std::vector<Index_> >(ref_nrow, test_nrow);
     for (const auto& in : intersection) {
-        available.insert(in.second);
+        in_inter[in.second] = in.first;
     }
 
-    // Figuring out the top markers to retain, that are _also_ in the intersection.
-    std::unordered_set<Index_> all_markers;
-    auto ngroups = markers.size();
-    for (decltype(ngroups) i = 0; i < ngroups; ++i) {
-        auto& inner_markers = markers[i];
-        auto inner_ngroups = inner_markers.size(); // should be the same as ngroups, but we'll just do this to be safe.
-
-        for (decltype(inner_ngroups) j = 0; j < inner_ngroups; ++j) {
-            auto& current = inner_markers[j];
-            std::vector<Index_> replacement;
-            auto output_size = cap_at_top(current.size(), top);
-
-            if (output_size) {
-                replacement.reserve(output_size);
-                for (auto marker : current) {
-                    if (available.find(marker) != available.end()) {
-                        all_markers.insert(marker);
-                        replacement.push_back(marker);
-                        if (replacement.size() == output_size) {
-                            break;
-                        }
+    auto available = sanisizer::create<std::vector<Index_> >(ref_nrow, ref_nrow);
+    std::vector<std::pair<Index_, Index_> > subset;
+    for (auto& mrk : markers) {
+        for (auto& mm : mrk) {
+            const auto num_markers = mm.size();
+            I<decltype(num_markers)> used = 0;
+            for (I<decltype(num_markers)> m = 0; m < num_markers; ++m) {
+                const auto y = mm[m];
+                const auto t = in_inter[y];
+                if (t != test_nrow) {
+                    auto& av = available[y];
+                    if (av == ref_nrow) {
+                        av = 0; // any value != ref_nrow will do here.
+                        subset.emplace_back(t, y);
                     }
+                    mm[used] = y;
+                    ++used;
                 }
             }
-
-            current.swap(replacement);
+            mm.resize(used);
         }
     }
 
-    // Subsetting the intersection down to the chosen set of markers.
-    std::unordered_map<Index_, Index_> mapping;
-    mapping.reserve(all_markers.size());
+    // Output is sorted by the test indices, to favor more efficient extraction
+    // from the test matrix after the training is complete.
+    std::sort(subset.begin(), subset.end());
     std::pair<std::vector<Index_>, std::vector<Index_> > output;
-    Index_ counter = 0;
-    for (const auto& in : intersection) {
-        if (all_markers.find(in.second) != all_markers.end()) {
-            mapping[in.second] = counter;
-            output.first.push_back(in.first);
-            output.second.push_back(in.second);
-            ++counter;
-        }
+    const auto nsubset = subset.size();
+    sanisizer::reserve(output.first, nsubset);
+    sanisizer::reserve(output.second, nsubset);
+    for (I<decltype(nsubset)> s = 0; s < nsubset; ++s) {
+        output.first.push_back(subset[s].first);
+        output.second.push_back(subset[s].second);
+        available[subset[s].second] = s;
     }
 
-    // Reindexing the markers.
-    for (decltype(ngroups) i = 0; i < ngroups; ++i) {
-        auto& inner_markers = markers[i];
-        auto inner_ngroups = inner_markers.size();
-        for (decltype(inner_ngroups) j = 0; j < inner_ngroups; ++j) {
-            for (auto& k : inner_markers[j]) {
-                k = mapping.find(k)->second;
+    for (auto& mrk : markers) {
+        for (auto& mm : mrk) {
+            for (auto& y : mm) {
+                y = available[y];
             }
         }
     }
 
     return output;
-}
-
 }
 
 }

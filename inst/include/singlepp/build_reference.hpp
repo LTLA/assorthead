@@ -25,6 +25,7 @@ namespace singlepp {
 template<typename Index_, typename Float_>
 struct DensePerLabel {
     std::vector<Float_> data;
+    std::vector<char> has_nonzero;
 
     // Structures for the KMKNN search.
     std::vector<Float_> distances;
@@ -35,8 +36,11 @@ struct DensePerLabel {
 };
 
 template<typename Index_, typename Float_>
-const Float_* retrieve_vector(const Index_ num_markers, const DensePerLabel<Index_, Float_>& ref, const Index_ col) {
-    return ref.data.data() + sanisizer::product_unsafe<std::size_t>(num_markers, col);
+std::pair<const Float_*, bool> retrieve_vector(const Index_ num_markers, const DensePerLabel<Index_, Float_>& ref, const Index_ col) {
+    return std::make_pair(
+        ref.data.data() + sanisizer::product_unsafe<std::size_t>(num_markers, col),
+        ref.has_nonzero[col]
+    );
 }
 
 /*** Sparse matrix constructs ***/
@@ -175,7 +179,7 @@ std::vector<Index_> select_seeds(
                     if constexpr(ref_sparse_) {
                         return sparse_l2(num_markers, densified_seed.data(), seed_has_nonzero, sam_info);
                     } else {
-                        return dense_l2(num_markers, seed_info, sam_info);
+                        return dense_l2(num_markers, seed_info.first, sam_info.first);
                     }
                 }();
 
@@ -293,10 +297,10 @@ struct FindClosestNeighborsWorkspace {
     std::vector<std::pair<Float_, Index_> > closest_neighbors;
 };
 
-template<bool ref_sparse_, typename Index_, typename Float_>
+template<bool query_sparse_, bool ref_sparse_, typename Index_, typename Float_>
 void find_closest_neighbors(
     const Index_ num_markers,
-    const std::vector<Float_>& query,
+    const typename std::conditional<query_sparse_ && !ref_sparse_, SparseScaled<Index_, Float_>, std::vector<Float_> >::type& query,
     const bool query_has_nonzero,
     const Index_ k,
     const typename std::conditional<ref_sparse_, SparsePerLabel<Index_, Float_>, DensePerLabel<Index_, Float_> >::type& ref,
@@ -305,12 +309,14 @@ void find_closest_neighbors(
     const auto num_seeds = ref.seed_ranges.size();
     const auto num_neighbors = sanisizer::cast<I<decltype(work.closest_neighbors.size())> >(k);
 
-    auto compute_distance = [&](Index_ se) -> Float_ {
+    const auto compute_distance = [&](const Index_ se) -> Float_ {
         const auto refinfo = retrieve_vector(num_markers, ref, se);
         if constexpr(ref_sparse_) {
             return sparse_l2(num_markers, query.data(), query_has_nonzero, refinfo);
+        } else if constexpr(query_sparse_) {
+            return sparse_l2(num_markers, refinfo.first, refinfo.second, query);
         } else {
-            return dense_l2(num_markers, query.data(), refinfo);
+            return dense_l2(num_markers, query.data(), refinfo.first);
         }
     };
 
@@ -497,6 +503,7 @@ BuiltReference<Index_, Float_> build_reference_raw(
             const auto labcount = label_count[l];
             auto& curlab = nnrefs[l];
             curlab.data.resize(sanisizer::product<I<decltype(curlab.data.size())> >(labcount, num_markers));
+            sanisizer::resize(curlab.has_nonzero, labcount);
             sanisizer::resize(tmp_ref_ranked[l], labcount);
         }
     }
@@ -555,7 +562,8 @@ BuiltReference<Index_, Float_> build_reference_raw(
             } else {
                 simplify_ranks(query_ranked, tmp_ref_ranked[curlab][curoff]);
                 const auto scaled = nnrefs[curlab].data.data() + sanisizer::product_unsafe<std::size_t>(curoff, num_markers);
-                scaled_ranks_dense(num_markers, query_ranked, scaled); 
+                const auto has_nonzero = scaled_ranks_dense(num_markers, query_ranked, scaled);
+                nnrefs[curlab].has_nonzero[curoff] = has_nonzero; 
             }
         }
     }, num_samples, num_threads);

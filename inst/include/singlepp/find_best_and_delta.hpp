@@ -5,6 +5,8 @@
 #include <limits>
 #include <vector>
 
+#include "utils.hpp"
+
 namespace singlepp {
 
 template<typename Label_, typename Float_>
@@ -13,10 +15,10 @@ std::pair<Label_, Float_> find_best_and_delta(const std::vector<Float_>& scores)
         return std::pair<Label_, Float_>(0, std::numeric_limits<Float_>::quiet_NaN());
     }
 
-    auto top = std::max_element(scores.begin(), scores.end());
-    decltype(scores.size()) best_idx = top - scores.begin();
+    const auto top = std::max_element(scores.begin(), scores.end());
+    I<decltype(scores.size())> best_idx = top - scores.begin();
 
-    Float_ topscore = scores[best_idx];
+    const Float_ topscore = *top;
     Float_ second;
     if (best_idx == 0) {
         second = *std::max_element(scores.begin() + 1, scores.end());

@@ -68,16 +68,17 @@ template<bool query_sparse_, typename Index_, typename Value_, typename Float_>
 class AnnotateIntegrated {
 private:
     Index_ my_num_universe; 
-
     SubsetRemapper<Index_> my_remapper;
+
     RankedVector<Value_, Index_> my_subset_query;
     RankedVector<Index_, Index_> my_subset_ref;
     std::optional<RankedVector<Index_, Index_> > my_subset_ref_positive;
 
-    std::vector<Float_> my_scaled_query;
     std::optional<std::vector<std::pair<Index_, Float_> > > my_scaled_ref_sparse;
     std::optional<std::vector<Float_> > my_scaled_ref_dense;
-    typename std::conditional<query_sparse_, std::vector<std::pair<Index_, Float_> >, bool>::type my_scaled_query_sparse_buffer;
+
+    typename std::conditional<query_sparse_, SparseScaled<Index_, Float_>, bool>::type my_scaled_query_sparse;
+    std::optional<std::vector<Float_> > my_scaled_query_dense;
 
     std::vector<Float_> my_all_l2;
 
@@ -90,7 +91,6 @@ public:
             my_subset_ref_positive->reserve(my_num_universe);
         }
 
-        sanisizer::resize(my_scaled_query, my_num_universe);
         if (details.any_sparse) {
             my_scaled_ref_sparse.emplace();
             sanisizer::reserve(*my_scaled_ref_sparse, my_num_universe);
@@ -99,8 +99,12 @@ public:
             my_scaled_ref_dense.emplace();
             sanisizer::reserve(*my_scaled_ref_dense, my_num_universe);
         }
+
         if constexpr(query_sparse_) {
-            my_scaled_query_sparse_buffer.reserve(my_num_universe);
+            sanisizer::reserve(my_scaled_query_sparse.nonzero, my_num_universe);
+        }
+        if (!query_sparse_ || details.any_sparse) {
+            my_scaled_query_dense.emplace(sanisizer::cast<I<decltype(my_scaled_query_dense->size())> >(my_num_universe));
         }
 
         sanisizer::reserve(my_all_l2, details.max_num_samples);
@@ -155,6 +159,7 @@ private:
         const auto num_markers = my_remapper.size();
         my_remapper.remap(query_ranked, my_subset_query);
         bool query_has_nonzero = false;
+
         if constexpr(query_sparse_) {
             const auto sStart = my_subset_query.begin(), sEnd = my_subset_query.end();
             auto zero_ranges = find_zero_ranges<Value_, Index_>(sStart, sEnd);
@@ -164,14 +169,18 @@ private:
                 zero_ranges.first,
                 zero_ranges.second,
                 sEnd,
-                my_scaled_query_sparse_buffer,
-                my_scaled_query.data()
+                my_scaled_query_sparse
             );
+            if (my_scaled_ref_sparse.has_value()) {
+                densify_sparse_vector(num_markers, my_scaled_query_sparse, *my_scaled_query_dense);
+            } else {
+                std::sort(my_scaled_query_sparse.nonzero.begin(), my_scaled_query_sparse.nonzero.end()); // improve cache locality in scaled_ranks_sparse_l2().
+            }
         } else {
             query_has_nonzero = scaled_ranks_dense(
                 num_markers,
                 my_subset_query,
-                my_scaled_query.data()
+                my_scaled_query_dense->data()
             );
         }
 
@@ -206,7 +215,7 @@ private:
 
                     const auto l2 = scaled_ranks_sparse_l2(
                         num_markers,
-                        my_scaled_query.data(),
+                        my_scaled_query_dense->data(),
                         query_has_nonzero,
                         my_subset_ref,
                         *my_subset_ref_positive,
@@ -224,12 +233,22 @@ private:
                     auto refend = refstart + my_num_universe;
                     my_remapper.remap(refstart, refend, my_subset_ref);
 
-                    const auto l2 = scaled_ranks_dense_l2(
-                        num_markers,
-                        my_scaled_query.data(),
-                        my_subset_ref,
-                        my_scaled_ref_dense->data()
-                    );
+                    Float_ l2;
+                    if constexpr(query_sparse_) {
+                        l2 = scaled_ranks_sparse_l2(
+                            num_markers,
+                            my_scaled_query_sparse,
+                            my_subset_ref,
+                            my_scaled_ref_dense->data()
+                        );
+                    } else {
+                        l2 = scaled_ranks_dense_l2(
+                            num_markers,
+                            my_scaled_query_dense->data(),
+                            my_subset_ref,
+                            my_scaled_ref_dense->data()
+                        );
+                    }
 
                     my_all_l2.push_back(l2);
                 }
@@ -286,14 +305,12 @@ void annotate_cells_integrated_raw(
     Float_* delta,
     int num_threads
 ) {
-    const auto NR = test.nrow();
-    if (!sanisizer::is_equal(NR, trained.test_nrow())) {
-        throw std::runtime_error("number of rows in 'test' do not match up with those expected by 'trained'");
-    }
-
     const auto& subset = trained.subset();
     SubsetNoop<query_sparse_, Index_> subsorted(subset);
 
+    if (quantile < 0 || quantile > 1) {
+        throw std::runtime_error("'quantile' should be in [0, 1]");
+    }
     const auto precomputed = precompute_integrated_details(trained, quantile);
     const auto num_universe = precomputed.num_universe;
 
@@ -370,6 +387,10 @@ void annotate_cells_integrated(
     Float_* delta,
     int num_threads
 ) {
+    if (!sanisizer::is_equal(test.nrow(), trained.test_nrow())) {
+        throw std::runtime_error("number of rows in 'test' do not match up with those expected by 'trained'");
+    }
+
     if (test.is_sparse()) {
         annotate_cells_integrated_raw<true>(test, trained, assigned, quantile, fine_tune, threshold, best, scores, delta, num_threads);
     } else {

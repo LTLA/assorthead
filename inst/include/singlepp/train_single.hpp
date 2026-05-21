@@ -7,10 +7,12 @@
 
 #include "build_reference.hpp"
 #include "subset_to_markers.hpp"
+#include "utils.hpp"
 
 #include <vector>
 #include <memory>
 #include <cstddef>
+#include <cassert>
 
 /**
  * @file train_single.hpp
@@ -23,18 +25,6 @@ namespace singlepp {
  * @brief Options for `train_single()` and friends.
  */
 struct TrainSingleOptions {
-    /**
-     * Number of top markers to use from each pairwise comparison between labels.
-     * Larger values improve the stability of the correlations at the cost of increasing noise and computational work.
-     *
-     * When the test and reference datasets do not have the same features, the specified number of top markers is taken from the intersection of features.
-     * This avoids that some markers will be selected even if not all genes in `markers` are present in the test dataset.
-     *
-     * Setting this to a negative value will instruct `train_single()` to use all supplied markers.
-     * This is useful in situations where the supplied markers have already been curated.
-     */
-    int top = -1;
-
     /**
      * Number of threads to use.
      * The parallelization scheme is determined by `tatami::parallelize()`.
@@ -89,7 +79,7 @@ public:
      */
     TrainedSingle(
         Index_ test_nrow,
-        Markers<Index_> markers,
+        PairwiseMarkers<Index_> markers,
         std::vector<Index_> subset,
         BuiltReference<Index_, Float_> built
     ) : 
@@ -97,14 +87,16 @@ public:
         my_markers(std::move(markers)),
         my_subset(std::move(subset)),
         my_built(std::move(built)) 
-    {}
+    {
+        assert(is_sorted_unique(subset.size(), subset.data()));
+    }
     /**
      * @endcond
      */
 
 private:
     Index_ my_test_nrow;
-    Markers<Index_> my_markers;
+    PairwiseMarkers<Index_> my_markers;
     std::vector<Index_> my_subset;
     BuiltReference<Index_, Float_> my_built;
 
@@ -122,7 +114,7 @@ public:
      * e.g., `subset()[markers()[2][1].front()]` is the row index of the first marker of the third label over the first label.
      * The set of marker genes is a subset of the input `markers` used in `train_single()`. 
      */
-    const Markers<Index_>& markers() const {
+    const PairwiseMarkers<Index_>& markers() const {
         return my_markers;
     }
 
@@ -187,10 +179,10 @@ template<typename Float_ = double, typename Value_, typename Index_, typename La
 TrainedSingle<Index_, Float_> train_single(
     const tatami::Matrix<Value_, Index_>& ref,
     const Label_* labels,
-    Markers<Index_> markers,
+    PairwiseMarkers<Index_> markers,
     const TrainSingleOptions& options
 ) {
-    auto subset = internal::subset_to_markers(markers, options.top);
+    auto subset = subset_to_markers(ref.nrow(), markers);
     auto subref = build_reference<Float_>(ref, labels, subset, options.num_threads);
     const Index_ test_nrow = ref.nrow(); // remember, test and ref are assumed to have the same features.
     return TrainedSingle<Index_, Float_>(test_nrow, std::move(markers), std::move(subset), std::move(subref));
@@ -232,11 +224,11 @@ TrainedSingle<Index_, Float_> train_single(
     const Intersection<Index_>& intersection,
     const tatami::Matrix<Value_, Index_>& ref, 
     const Label_* labels,
-    Markers<Index_> markers,
+    PairwiseMarkers<Index_> markers,
     std::vector<Index_>* ref_subset,
     const TrainSingleOptions& options
 ) {
-    auto pairs = internal::subset_to_markers(intersection, markers, options.top);
+    auto pairs = subset_to_markers(test_nrow, intersection, ref.nrow(), markers);
     auto subref = build_reference<Float_>(ref, labels, pairs.second, options.num_threads);
     if (ref_subset) {
         *ref_subset = std::move(pairs.second);
@@ -283,7 +275,7 @@ TrainedSingle<Index_, Float_> train_single(
     const tatami::Matrix<Value_, Index_>& ref, 
     const Id_* ref_id, 
     const Label_* labels,
-    Markers<Index_> markers,
+    PairwiseMarkers<Index_> markers,
     std::vector<Index_>* ref_subset,
     const TrainSingleOptions& options
 ) {

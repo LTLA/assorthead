@@ -26,10 +26,11 @@ namespace singlepp {
 template<typename Float_ = DefaultFloat>
 struct ClassifySingleOptions {
     /**
-     * Quantile to use to define a per-label score for each test cell,
+     * Quantile probability in [0, 1].
+     * This is used to define a per-label score for each test cell,
      * by applying it to the distribution of correlations between the test cell and that label's reference profiles.
-     * Values closer to 0.5 focus on the behavior of the majority of a label's reference profiles.
-     * Smaller values will be more sensitive to the presence of a subset of profiles that are more similar to the test cell,
+     * A value closer to 0.5 focuses on the behavior of the majority of a label's reference profiles.
+     * A smaller value will be more sensitive to the presence of a subset of profiles that are more similar to the test cell,
      * which can be useful when the reference profiles themselves are heterogeneous.
      */
     Float_ quantile = 0.8;
@@ -161,9 +162,12 @@ struct ClassifySingleResults {
     /**
      * @cond
      */
-    ClassifySingleResults(std::size_t num_cells, std::size_t num_labels) : best(num_cells), delta(num_cells) {
+    ClassifySingleResults(const std::size_t num_cells, const std::size_t num_labels) :
+        best(sanisizer::cast<I<decltype(best.size())> >(num_cells)),
+        delta(sanisizer::cast<I<decltype(delta.size())> >(num_cells))
+    {
         scores.reserve(num_labels);
-        for (decltype(num_labels) l = 0; l < num_labels; ++l) {
+        for (I<decltype(num_labels)> l = 0; l < num_labels; ++l) {
             scores.emplace_back(num_cells);
         }
     }
