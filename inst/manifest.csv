@@ -55,4 +55,4 @@ chihaya,https://github.com/ArtifactDB/chihaya,v1.1.2,"A C++ validator for delaye
 sanisizer,https://github.com/LTLA/sanisizer,v0.2.2,"Sanitize sizes to avoid integer overflow"
 topicks,https://github.com/libscran/topicks,v0.2.2,"Pick top genes for downstream analyses"
 factorize,https://github.com/libscran/factorize,v0.1.0,"Pick top genes for downstream analyses"
-gesel,https://github.com/gesel-inc/gesel-spec,v0.1.1,"Validation of gene set selection formats"
+gesel,https://github.com/gesel-inc/gesel-spec,v0.2.0,"Validation of gene set selection formats"
