@@ -56,7 +56,7 @@ struct SummarizeEffectsOptions {
 
     /**
      * Probabilites of the quantiles of the effect sizes for each group, to be reported.
-     * If set, the vector should be sorted and each entry should lie in \$f[0, 1]\f$.
+     * If set, the vector should be sorted and each entry should lie in \f$[0, 1]\f$.
      * If not set, no quantiles are reported.
      */
     std::optional<std::vector<double> > compute_quantiles;
@@ -120,8 +120,8 @@ struct SummarizeEffectsOptions {
  * @tparam Stat_ Floating-point type of the statistics.
  * @tparam Rank_ Numeric type of the minimum rank.
  *
- * @param ngenes Number of genes.
- * @param ngroups Number of groups.
+ * @param num_genes Number of genes.
+ * @param num_groups Number of groups.
  * @param[in] effects Pointer to a 3-dimensional array containing the pairwise statistics, see `ScoreMarkersPairwiseBuffers::cohens_d` for the expected contents.
  * The entry \f$(i, j, k)\f$ (i.e., `effects[i * N * N + j * N + k]`) represents the effect size of gene \f$i\f$ upon comparing group \f$j\f$ against group \f$k\f$.
  * @param[out] summaries Vector of length equal to the number of groups.
@@ -132,15 +132,15 @@ struct SummarizeEffectsOptions {
  */
 template<typename Gene_, typename Stat_, typename Rank_>
 void summarize_effects(
-    const Gene_ ngenes,
-    const std::size_t ngroups,
+    const Gene_ num_genes,
+    const std::size_t num_groups,
     const Stat_* const effects,
     const std::vector<SummaryBuffers<Stat_, Rank_> >& summaries,
     const SummarizeEffectsOptions& options
 ) {
-    internal::compute_min_rank_pairwise(ngenes, ngroups, effects, summaries, options.min_rank_preserve_ties, options.num_threads);
+    internal::compute_min_rank_pairwise(num_genes, num_groups, effects, summaries, options.min_rank_preserve_ties, options.num_threads);
     internal::validate_quantiles(options.compute_quantiles);
-    internal::summarize_comparisons(ngenes, ngroups, effects, options.compute_quantiles, summaries, options.num_threads); 
+    internal::summarize_comparisons(num_genes, num_groups, effects, options.compute_quantiles, summaries, options.num_threads); 
 }
 
 /**
@@ -150,8 +150,8 @@ void summarize_effects(
  * @tparam Stat Floating point type of the statistics.
  * @tparam Rank_ Numeric type of the minimum rank.
  *
- * @param ngenes Number of genes.
- * @param ngroups Number of groups.
+ * @param num_genes Number of genes.
+ * @param num_groups Number of groups.
  * @param[in] effects Pointer to a 3-dimensional array containing the pairwise statistics, see `ScoreMarkersPairwiseBuffers::cohens_d` for the expected contents.
  * The entry \f$(i, j, k)\f$ (i.e., `effects[i * N * N + j * N + k]`) represents the effect size of gene \f$i\f$ upon comparing group \f$j\f$ against group \f$k\f$.
  * @param options Further options.
@@ -161,15 +161,15 @@ void summarize_effects(
  */
 template<typename Stat_ = double, typename Rank_ = int, typename Gene_>
 std::vector<SummaryResults<Stat_, Rank_> > summarize_effects(
-    const Gene_ ngenes,
-    const std::size_t ngroups,
+    const Gene_ num_genes,
+    const std::size_t num_groups,
     const Stat_* const effects,
     const SummarizeEffectsOptions& options
 ) {
     std::vector<SummaryResults<Stat_, Rank_> > output;
     const auto ptrs = internal::fill_summary_results(
-        ngenes,
-        ngroups,
+        num_genes,
+        num_groups,
         output,
         options.compute_min,
         options.compute_mean,
@@ -178,7 +178,7 @@ std::vector<SummaryResults<Stat_, Rank_> > summarize_effects(
         options.compute_quantiles,
         options.compute_min_rank
     );
-    summarize_effects(ngenes, ngroups, effects, ptrs, options);
+    summarize_effects(num_genes, num_groups, effects, ptrs, options);
     return output;
 }
 

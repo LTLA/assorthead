@@ -8,6 +8,7 @@
 #include "irlba/irlba.hpp"
 #include "scran_pca/scran_pca.hpp"
 #include "sanisizer/sanisizer.hpp"
+#include "quickstats/quickstats.hpp"
 
 #include "Options.hpp"
 #include "Results.hpp"
@@ -59,8 +60,11 @@ irlba::Metrics compute(const tatami::Matrix<Value_, Index_>& matrix, const Optio
     sopt.irlba_options = options.irlba_options;
     const auto res = scran_pca::simple_pca(matrix, sopt);
 
-    const Float_ shift = std::accumulate(res.center.begin(), res.center.end(), static_cast<Float_>(0)) / matrix.nrow();
+    quickstats::PairwiseSumWorkspace<Float_> pswrk;
+    quickstats::PairwiseSumOptions psopt;
+    const Float_ shift = quickstats::pairwise_sum(res.center.size(), res.center.data(), pswrk, psopt) / matrix.nrow();
     std::fill_n(output.scores, matrix.ncol(), shift);
+
     process_output(res.rotation, res.components, options.scale, res.scale, output);
 
     return res.metrics;

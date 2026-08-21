@@ -1,10 +1,10 @@
 #ifndef TATAMI_MULT_HPP
 #define TATAMI_MULT_HPP
 
-#include "dense_row.hpp"
-#include "sparse_row.hpp"
-#include "dense_column.hpp"
-#include "sparse_column.hpp"
+#include "single_vector/dispatch.hpp"
+#include "multiple_vectors/dispatch.hpp"
+#include "dense_matrix/dispatch.hpp"
+#include "sparse_matrix/dispatch.hpp"
 
 #include <vector>
 
@@ -23,243 +23,217 @@
 namespace tatami_mult {
 
 /**
- * @brief Options for `multiply()`.
+ * @brief Options for `multiply_with_matrix()`.
  */
-struct Options {
+struct MultiplyWithMatrixOptions {
     /**
-     * Number of threads to use, for parallelization via `tatami::parallelize()`.
+     * Options to pass to `multiply_row_with_dense_matrix()`, if `right` is a dense matrix that prefers row access.
      */
-    int num_threads = 1;
+    MultiplyWithDenseMatrixOptions dense_matrix;
 
     /**
-     * Whether to iterate over the preferred dimension of the larger matrix,
-     * for the `multiply()` overload that accepts two `tatami::Matrix` objects.
-     * This organizes the multiplication so that it only passes over the larger matrix once,
-     * while passing through the other matrix multiple times. 
-     * If false, the multiplication is performed with the supplied left and right matrices.
+     * Options to pass to `multiply_row_with_sparse_matrix()`, if `right` is a sparse matrix that prefers row access.
      */
-    bool prefer_larger = true;
+    MultiplyWithSparseMatrixOptions sparse_matrix;
 
     /**
-     * Whether to save the product as a column-major matrix in `output`,
-     * for the `multiply()` overload that accepts two `tatami::Matrix` objects.
-     * If false, the product is instead saved as a row-major matrix.
+     * Whether to set the larger matrix as the LHS matrix in the delegated functions.
+     * If `right` is larger, we transpose and swap `left` and `right` prior to calling the delegated functions.
+     * This ensures that we only pass over the larger matrix once while potentially passing through the smaller matrix multiple times. 
+     * The result does not change though the delegated function will now be chosen based on the transposed `left`.
+     *
+     * If this is false (or `right` is already smaller), the multiplication is performed exactly with the supplied left and right matrices.
      */
-    bool column_major_output = true;
+    bool larger_left = true;
 };
 
 /**
- * Compute the product `left * right`, storing the result in `output`.
+ * Set the number of threads to use in all multiplication functions involving two matrices.
+ * Different numbers of threads may slightly change the results due to differences in floating-point round-off error, depending on the delegated function.
  *
- * @tparam Value_ Numeric type of the matrix value.
- * @tparam Index_ Integer type of the matrix index.
- * @tparam Right_ Numeric type of the vector on the right hand side.
- * @tparam Output_ Numeric type of the output array.
- *
- * @param left A **tatami** matrix to be multiplied.
- * @param[in] right Pointer to an array of length `left.ncol()`,
- * containing the vector with which to multiply `left`.
- * @param[out] output Pointer to an array of length `left.nrow()`.
- * On output, this stores the product `left * right`.
- * @param opt Further options.
+ * @param options Options to be set.
+ * @param num_threads Number of threads, should be positive.
  */
-template<typename Value_, typename Index_, typename Right_, typename Output_>
-void multiply(const tatami::Matrix<Value_, Index_>& left, const Right_* right, Output_* output, const Options& opt) {
-    if (left.sparse()) {
-        if (left.prefer_rows()) {
-            internal::sparse_row_vector(left, right, output, opt.num_threads);
-        } else {
-            internal::sparse_column_vector(left, right, output, opt.num_threads);
-        }
-    } else {
-        if (left.prefer_rows()) {
-            internal::dense_row_vector(left, right, output, opt.num_threads);
-        } else {
-            internal::dense_column_vector(left, right, output, opt.num_threads);
-        }
-    }
+inline void set_num_threads(MultiplyWithMatrixOptions& options, int num_threads) {
+    set_num_threads(options.dense_matrix, num_threads);
+    set_num_threads(options.sparse_matrix, num_threads);
 }
 
 /**
- * Compute the product `t(left) * right`, storing the result in `output`.
+ * Set the primary block size to use in all multiplication functions involving two dense matrices.
+ * See the \f$B\f$ parameter in the @ref dense-blocking "Blocking for dense matrices" section for more details.
  *
- * @tparam Left_ Numeric type of the vector on the left hand side.
- * @tparam Value_ Numeric type of the matrix value.
- * @tparam Index_ Integer type of the matrix index.
- * @tparam Output_ Numeric type of the output array.
- *
- * @param[in] left Pointer to an array of length `right.nrow()`,
- * containing the vector with which to multiply `right`.
- * @param right A **tatami** matrix to be multiplied. 
- * @param[out] output Pointer to an array of length `right.ncol()`.
- * On output, this stores the product `t(left) * right`.
- * @param opt Further options.
+ * @param options Options to be set.
+ * @param primary_block_size Primary block size.
  */
-template<typename Left_, typename Value_, typename Index_, typename Output_>
-void multiply(const Left_* left, const tatami::Matrix<Value_, Index_>& right, Output_* output, const Options& opt) {
-    auto tright = tatami::make_DelayedTranspose(tatami::wrap_shared_ptr(&right));
-    if (tright->sparse()) {
-        if (tright->prefer_rows()) {
-            internal::sparse_row_vector(*tright, left, output, opt.num_threads);
-        } else {
-            internal::sparse_column_vector(*tright, left, output, opt.num_threads);
-        }
-    } else {
-        if (tright->prefer_rows()) {
-            internal::dense_row_vector(*tright, left, output, opt.num_threads);
-        } else {
-            internal::dense_column_vector(*tright, left, output, opt.num_threads);
-        }
-    }
+inline void set_dense_primary_block_size(MultiplyWithMatrixOptions& options, int primary_block_size) {
+    set_dense_primary_block_size(options.dense_matrix, primary_block_size);
 }
 
 /**
- * Compute the product `left * right[i]` for each array `i`, storing the result in `output[i]`.
+ * Set the secondary block size to use in all multiplication functions involving two dense matrices.
+ * See the \f$C\f$ parameter in the @ref dense-blocking "Blocking for dense matrices" section for more details.
+ * Different secondary block sizes may slightly change the results due to differences in floating-point round-off error, depending on the delegated function.
  *
- * @tparam Value_ Numeric type of the matrix value.
- * @tparam Index_ Integer type of the matrix index.
- * @tparam Right_ Numeric type of the vectors on the right hand side.
- * @tparam Output_ Numeric type of the output array.
- *
- * @param left A **tatami** matrix to be multiplied.
- * @param[in] right Vector of pointers, each of which points to an array of length `left.ncol()`.
- * Each entry contains a vector with which to multiply `left`.
- * @param[out] output Vector of pointers, each of which points to an array of length `left.nrow()`.
- * On output, the `i`-th entry stores the product `left * right[i]`.
- * @param opt Further options.
+ * @param options Options to be set.
+ * @param secondary_block_size Secondary block size.
  */
-template<typename Value_, typename Index_, typename Right_, typename Output_>
-void multiply(const tatami::Matrix<Value_, Index_>& left, const std::vector<Right_*>& right, const std::vector<Output_*>& output, const Options& opt) {
-    if (left.sparse()) {
-        if (left.prefer_rows()) {
-            internal::sparse_row_vectors(left, right, output, opt.num_threads);
-        } else {
-            internal::sparse_column_vectors(left, right, output, opt.num_threads);
-        }
-    } else {
-        if (left.prefer_rows()) {
-            internal::dense_row_vectors(left, right, output, opt.num_threads);
-        } else {
-            internal::dense_column_vectors(left, right, output, opt.num_threads);
-        }
-    }
+inline void set_dense_secondary_block_size(MultiplyWithMatrixOptions& options, int secondary_block_size) {
+    set_dense_secondary_block_size(options.dense_matrix, secondary_block_size);
 }
 
 /**
- * Compute the product `t(left[i]) * right` for each array `i`, storing the result in `output[i]`.
+ * Set the block size to use in all multiplication functions involving a sparse matrix. 
+ * See the @ref sparse-blocking "Blocking for sparse matrices" section for more details.
  *
- * @tparam Left_ Numeric type of the vector on the left hand side.
- * @tparam Value_ Numeric type of the matrix value.
- * @tparam Index_ Integer type of the matrix index.
+ * @param options Options to be set.
+ * @param block_size Block size.
+ */
+inline void set_sparse_block_size(MultiplyWithMatrixOptions& options, int block_size) {
+    set_sparse_block_size(options.dense_matrix, block_size);
+    set_sparse_block_size(options.sparse_matrix, block_size);
+}
+
+/**
+ * This function delegates to `multiply_with_dense_matrix()` or `multiply_with_sparse_matrix()`,
+ * depending on the properties of `left`, `right` and the choice of `MultiplyWithMatrixOptions::larger_left`.
+ *
+ * This function will iterate over `left`, realizing rows/columns into memory as needed.
+ * It may either simultaneously iterate over `right` or realize all of `right` into memory for fast repeated accesses.
+ * If `MultiplyWithMatrixOptions::larger_left = true` and `right` is larger, this function will iterate over `right` instead, and may realize `left` into memory.
+ *
+ * depending on the choice of delegated function.
+ * @tparam LeftValue_ Numeric type of the LHS matrix value.
+ * @tparam LeftIndex_ Integer type of the LHS matrix index.
+ * @tparam RightValue_ Numeric type of the RHS matrix value.
+ * @tparam RightIndex_ Integer type of the RHS matrix index.
  * @tparam Output_ Numeric type of the output array.
  *
- * @param[in] left Vector of pointers, each of which points to an array of length `right.nrow()`.
- * Each entry contains a vector with which to multiply `right`.
- * @param right A **tatami** matrix to be multiplied. 
- * @param[out] output Vector of pointers, each of which points to an array of length `right.ncol()`.
- * On output, the `i`-th entry stores the product `t(left[i]) * right`.
- * @param opt Further options.
+ * @param left LHS matrix to be multiplied.
+ * @param right RHS matrix to be multiplied.
+ * `right.nrow()` and `left.ncol()` should be equal.
+ * @param[out] output Pointer to an array of length equal to `left.nrow() * right.ncol()`. 
+ * On output, this stores the product of `left` and `right` in either row- or column-major format depending on `output_row_major`.
+ * @param output_row_major Whether to store the matrix product in row-major format in `output`.
+ * @param options Further options.
  */
-template<typename Left_, typename Value_, typename Index_, typename Output_>
-void multiply(const std::vector<Left_*>& left, const tatami::Matrix<Value_, Index_>& right, const std::vector<Output_*>& output, const Options& opt) {
-    auto tright = tatami::make_DelayedTranspose(tatami::wrap_shared_ptr(&right));
-    if (tright->sparse()) {
-        if (tright->prefer_rows()) {
-            internal::sparse_row_vectors(*tright, left, output, opt.num_threads);
-        } else {
-            internal::sparse_column_vectors(*tright, left, output, opt.num_threads);
+template<typename LeftValue_, typename LeftIndex_, typename RightValue_, typename RightIndex_, typename Output_>
+void multiply_with_matrix(
+    const tatami::Matrix<LeftValue_, LeftIndex_>& left,
+    const tatami::Matrix<RightValue_, RightIndex_>& right,
+    Output_* const output,
+    const bool output_row_major,
+    const MultiplyWithMatrixOptions& options
+) {
+    if (options.larger_left) {
+        if (sanisizer::is_less_than(left.nrow(), right.ncol())) {
+            auto tright = tatami::make_DelayedTranspose(tatami::wrap_shared_ptr(&right));
+            auto tleft = tatami::make_DelayedTranspose(tatami::wrap_shared_ptr(&left));
+            if (tleft->is_sparse()) {
+                multiply_with_sparse_matrix(*tright, *tleft, output, !output_row_major, options.sparse_matrix);
+            } else {
+                multiply_with_dense_matrix(*tright, *tleft, output, !output_row_major, options.dense_matrix);
+            }
+            return;
         }
+    }
+
+    if (right.is_sparse()) {
+        multiply_with_sparse_matrix(left, right, output, output_row_major, options.sparse_matrix);
     } else {
-        if (tright->prefer_rows()) {
-            internal::dense_row_vectors(*tright, left, output, opt.num_threads);
-        } else {
-            internal::dense_column_vectors(*tright, left, output, opt.num_threads);
-        }
+        multiply_with_dense_matrix(left, right, output, output_row_major, options.dense_matrix);
     }
 }
 
 /**
  * @cond
  */
-namespace internal {
+// For back-compatibility only.
+struct Options {
+    int num_threads = 1;
+    bool prefer_larger = true;
+    bool column_major_output = true;
+};
 
-template<typename LeftValue_, typename LeftIndex_, typename RightValue_, typename RightIndex_, typename Output_>
-void multiply(const tatami::Matrix<LeftValue_, LeftIndex_>& left, const tatami::Matrix<RightValue_, RightIndex_>& right, Output_* output, bool column_major_out, int num_threads) {
-    RightIndex_ row_shift;
-    LeftIndex_ col_shift;
-    if (column_major_out) {
-        row_shift = 1;
-        col_shift = left.nrow();
-    } else {
-        row_shift = right.ncol();
-        col_shift = 1;
-    }
-
-    if (left.sparse()) {
-        if (left.prefer_rows()) {
-            if (right.sparse()) {
-                internal::sparse_row_tatami_sparse(left, right, output, row_shift, col_shift, num_threads);
-            } else {
-                internal::sparse_row_tatami_dense(left, right, output, row_shift, col_shift, num_threads);
-            }
-        } else {
-            if (right.sparse()) {
-                internal::sparse_column_tatami_sparse(left, right, output, row_shift, col_shift, num_threads);
-            } else {
-                internal::sparse_column_tatami_dense(left, right, output, row_shift, col_shift, num_threads);
-            }
-        }
-    } else {
-        if (left.prefer_rows()) {
-            if (right.sparse()) {
-                internal::dense_row_tatami_sparse(left, right, output, row_shift, col_shift, num_threads);
-            } else {
-                internal::dense_row_tatami_dense(left, right, output, row_shift, col_shift, num_threads);
-            }
-        } else {
-            if (right.sparse()) {
-                internal::dense_column_tatami_sparse(left, right, output, row_shift, col_shift, num_threads);
-            } else {
-                internal::dense_column_tatami_dense(left, right, output, row_shift, col_shift, num_threads);
-            }
-        }
-    }
+// For back-compatibility only.
+template<typename Value_, typename Index_, typename Right_, typename Output_>
+void multiply(const tatami::Matrix<Value_, Index_>& left, const Right_* right, Output_* output, const Options& opt) {
+    multiply_with_single_vector(
+        left,
+        right,
+        output,
+        [&](){
+            MultiplyWithSingleVectorOptions mopt;
+            set_num_threads(mopt, opt.num_threads);
+            return mopt;
+        }()
+    );
 }
 
+// For back-compatibility only.
+template<typename Left_, typename Value_, typename Index_, typename Output_>
+void multiply(const Left_* left, const tatami::Matrix<Value_, Index_>& right, Output_* output, const Options& opt) {
+    multiply_with_single_vector(
+        left,
+        right,
+        output,
+        [&](){
+            MultiplyWithSingleVectorOptions mopt;
+            set_num_threads(mopt, opt.num_threads);
+            return mopt;
+        }()
+    );
+}
+
+// For back-compatibility only.
+template<typename Value_, typename Index_, typename Right_, typename Output_>
+void multiply(const tatami::Matrix<Value_, Index_>& left, const std::vector<Right_*>& right, const std::vector<Output_*>& output, const Options& opt) {
+    multiply_with_multiple_vectors(
+        left,
+        right,
+        output,
+        [&](){
+            MultiplyWithMultipleVectorsOptions mopt;
+            set_num_threads(mopt, opt.num_threads);
+            return mopt;
+        }()
+    );
+}
+
+// For back-compatibility only.
+template<typename Left_, typename Value_, typename Index_, typename Output_>
+void multiply(const std::vector<Left_*>& left, const tatami::Matrix<Value_, Index_>& right, const std::vector<Output_*>& output, const Options& opt) {
+    multiply_with_multiple_vectors(
+        left,
+        right,
+        output,
+        [&](){
+            MultiplyWithMultipleVectorsOptions mopt;
+            set_num_threads(mopt, opt.num_threads);
+            return mopt;
+        }()
+    );
+}
+
+// For back-compatibility only.
+template<typename LeftValue_, typename LeftIndex_, typename RightValue_, typename RightIndex_, typename Output_>
+void multiply(const tatami::Matrix<LeftValue_, LeftIndex_>& left, const tatami::Matrix<RightValue_, RightIndex_>& right, Output_* const output, const Options& opt) {
+    multiply_with_matrix(
+        left,
+        right,
+        output,
+        !opt.column_major_output,
+        [&](){
+            MultiplyWithMatrixOptions mopt;
+            set_num_threads(mopt, opt.num_threads);
+            mopt.larger_left = opt.prefer_larger;
+            return mopt;
+        }()
+    );
 }
 /**
  * @endcond
  */
-
-/**
- * Compute the product `left * right`, storing the result in `output`.
- *
- * @tparam RightValue_ Numeric type of the right matrix value.
- * @tparam RightIndex_ Integer type of the right matrix index.
- * @tparam LeftValue_ Numeric type of the left matrix value.
- * @tparam LeftIndex_ Integer type of the left matrix index.
- * @tparam Output_ Numeric type of the output array.
- *
- * @param left A **tatami** matrix to use in the multiplication.
- * @param right A **tatami** matrix to use in the multiplication.
- * `right.nrow()` and `left.ncol()` should be equal.
- * @param[out] output Pointer to an array of length equal to `left.nrow() * right.ncol()`. 
- * On output, this stores the matrix product as a column- or row-major matrix (see `Options::column_major_output`).
- * @param opt Further options.
- */
-template<typename LeftValue_, typename LeftIndex_, typename RightValue_, typename RightIndex_, typename Output_>
-void multiply(const tatami::Matrix<LeftValue_, LeftIndex_>& left, const tatami::Matrix<RightValue_, RightIndex_>& right, Output_* output, const Options& opt) {
-    if (opt.prefer_larger) {
-        if (sanisizer::is_less_than(left.nrow(), right.ncol())) {
-            auto tright = tatami::make_DelayedTranspose(tatami::wrap_shared_ptr(&right));
-            auto tleft = tatami::make_DelayedTranspose(tatami::wrap_shared_ptr(&left));
-            internal::multiply(*tright, *tleft, output, !opt.column_major_output, opt.num_threads);
-            return;
-        }
-    }
-
-    internal::multiply(left, right, output, opt.column_major_output, opt.num_threads);
-}
 
 }
 

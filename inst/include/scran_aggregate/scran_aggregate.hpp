@@ -3,8 +3,6 @@
 
 #include "aggregate_across_genes.hpp"
 #include "aggregate_across_cells.hpp"
-#include "combine_factors.hpp"
-#include "clean_factor.hpp"
 
 /**
  * @file scran_aggregate.hpp

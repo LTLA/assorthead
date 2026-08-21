@@ -40,15 +40,21 @@ namespace gsdecon {
  * @param[in] matrix A matrix where columns correspond to cells and rows correspond to genes.
  * Entries are typically log-expression values. 
  * @param[in] block Pointer to an array of length equal to the number of columns in `matrix`.
- * This should contain the blocking factor as 0-based block assignments 
- * (i.e., for \f$N\f$ blocks, block identities should run from 0 to \f$N-1\f$ with at least one entry for each block.)
+ * This should contain block assignment for each cell as an integer in `[0, num_blocks)`. 
+ * @param num_blocks Number of blocks.
  * @param options Further options. 
  * @param[out] output Collection of buffers in which to store the scores and weights.
  *
  * @return Metrics for IRLBA, including whether the algorithm converged and the number of iterations/multiplications required. 
  */
 template<typename Value_, typename Index_, typename Block_, typename Float_>
-irlba::Metrics compute_blocked(const tatami::Matrix<Value_, Index_>& matrix, const Block_* const block, const Options& options, const Buffers<Float_>& output) {
+irlba::Metrics compute_blocked(
+    const tatami::Matrix<Value_, Index_>& matrix,
+    const Block_* const block,
+    const std::size_t num_blocks,
+    const Options& options,
+    const Buffers<Float_>& output
+) {
     if (check_edge_cases(matrix, options.rank, output)) {
         irlba::Metrics metrics;
         metrics.converged = true;
@@ -64,7 +70,7 @@ irlba::Metrics compute_blocked(const tatami::Matrix<Value_, Index_>& matrix, con
     bopt.num_threads = options.num_threads;
     bopt.irlba_options = options.irlba_options;
     bopt.center_scores_by_block = true; // we'll add them back in afterwards.
-    const auto res = scran_pca::blocked_pca(matrix, block, bopt);
+    const auto res = scran_pca::blocked_pca(matrix, block, num_blocks, bopt);
 
     // Here, we restore the block-specific centers.
     static_assert(!Eigen::MatrixXd::IsRowMajor); // just double-checking...
@@ -101,14 +107,19 @@ irlba::Metrics compute_blocked(const tatami::Matrix<Value_, Index_>& matrix, con
  * @param[in] matrix A matrix where columns correspond to cells and rows correspond to genes.
  * Entries are typically log-expression values. 
  * @param[in] block Pointer to an array of length equal to the number of columns in `matrix`.
- * This should contain the blocking factor as 0-based block assignments 
- * (i.e., for \f$N\f$ blocks, block identities should run from 0 to \f$N-1\f$ with at least one entry for each block.)
+ * This should contain block assignment for each cell as an integer in `[0, num_blocks)`. 
+ * @param num_blocks Number of blocks.
  * @param options Further options. 
  *
  * @return Results of the gene set score calculation.
  */
 template<typename Float_ = double, typename Value_, typename Index_, typename Block_>
-Results<Float_> compute_blocked(const tatami::Matrix<Value_, Index_>& matrix, const Block_* const block, const Options& options) {
+Results<Float_> compute_blocked(
+    const tatami::Matrix<Value_, Index_>& matrix,
+    const Block_* const block,
+    const std::size_t num_blocks,
+    const Options& options
+) {
     Results<Float_> output;
     sanisizer::resize(output.weights, matrix.nrow()
 #ifdef SCRAN_QC_TEST_INIT
@@ -125,7 +136,7 @@ Results<Float_> compute_blocked(const tatami::Matrix<Value_, Index_>& matrix, co
     buffers.weights = output.weights.data();
     buffers.scores = output.scores.data();
 
-    output.metrics = compute_blocked(matrix, block, options, buffers);
+    output.metrics = compute_blocked(matrix, block, num_blocks, options, buffers);
     return output;
 }
 

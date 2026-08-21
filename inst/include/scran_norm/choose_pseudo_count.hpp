@@ -4,6 +4,11 @@
 #include <algorithm>
 #include <vector>
 #include <cstddef>
+#include <cassert>
+#include <array>
+
+#include "quickstats/quickstats.hpp"
+#include "sanisizer/sanisizer.hpp"
 
 #include "utils.hpp"
 
@@ -19,7 +24,7 @@ namespace scran_norm {
  */
 struct ChoosePseudoCountOptions {
     /**
-     * Quantile to use for finding the smallest/largest size factors.
+     * Quantile probability for finding the smallest/largest size factors.
      * Setting this to zero will use the observed minimum and maximum, though in practice, this is usually too sensitive to outliers.
      * The default is to take the 5th and 95th percentile to obtain a range that captures most of the distribution.
      */
@@ -37,27 +42,6 @@ struct ChoosePseudoCountOptions {
      */
     double min_value = 1;
 };
-
-/**
- * @cond
- */
-namespace internal {
-
-template<typename Float_>
-Float_ find_quantile(Float_ quantile, std::size_t n, Float_* ptr) {
-    double raw = static_cast<double>(n - 1) * quantile;
-    std::size_t index = std::ceil(raw);
-    std::nth_element(ptr, ptr + index, ptr + n);
-    double upper = *(ptr + index);
-    std::nth_element(ptr, ptr + index - 1, ptr + index);
-    double lower = *(ptr + index - 1);
-    return lower * (index - raw) + upper * (raw - (index - 1));
-}
-
-}
-/**
- * @endcond
- */
 
 /**
  * Choose a pseudo-count for log-transformation (see `NormalizeCountsOptions::pseudo_count`) that aims to control the transformation-induced bias.
@@ -94,36 +78,33 @@ Float_ find_quantile(Float_ quantile, std::size_t n, Float_* ptr) {
  * @return The suggested pseudo-count to control the log-transformation-induced bias below the specified threshold.
  */
 template<typename Float_>
-Float_ choose_pseudo_count_raw(std::size_t num, Float_* const size_factors, const ChoosePseudoCountOptions& options) {
-    if (num <= 1) {
-        return options.min_value;
-    }
-
+Float_ choose_pseudo_count_raw(const std::size_t num, Float_* const size_factors, const ChoosePseudoCountOptions& options) {
     // Avoid problems with zeros.
-    I<decltype(num)> counter = 0;
+    I<decltype(num)> actual_num = 0;
     for (I<decltype(num)> i = 0; i < num; ++i) {
         const auto val = size_factors[i];
         if (std::isfinite(val) && val > 0) {
-            if (i != counter) {
-                size_factors[counter] = val;
+            if (i != actual_num) {
+                size_factors[actual_num] = val;
             }
-            ++counter;
+            ++actual_num;
         }
     }
-    num = counter;
 
-    if (num <= 1) {
+    if (actual_num == 0) {
         return options.min_value;
     }
 
-    Float_ lower_sf, upper_sf;
-    if (options.quantile == 0) {
-        lower_sf = *std::min_element(size_factors, size_factors + num);
-        upper_sf = *std::max_element(size_factors, size_factors + num);
-    } else {
-        lower_sf = internal::find_quantile(options.quantile, num, size_factors);
-        upper_sf = internal::find_quantile(1 - options.quantile, num, size_factors);
+    if (options.quantile < 0 || options.quantile >= 0.5) {
+        throw std::runtime_error("'quantile' should be in [0, 0.5)");
     }
+    quickstats::MultipleQuantilesFixedNumber<Float_> comp(actual_num, std::vector<double>{ options.quantile, 1.0 - options.quantile });
+    std::array<Float_, 2> sf;
+    comp(size_factors, [&](std::size_t i, Float_ val) -> void {
+        sf[i] = val;
+    });
+    const Float_ lower_sf = sf[0];
+    const Float_ upper_sf = sf[1];
 
     // Very confusing formulation in Equation 3, but whatever.
     const Float_ pseudo_count = (1.0 / lower_sf - 1.0 / upper_sf) / (8 * options.max_bias);

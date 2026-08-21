@@ -9,10 +9,11 @@
 
 #include "tatami/tatami.hpp"
 #include "sanisizer/sanisizer.hpp"
+#include "quickstats/quickstats.hpp"
 
-#include "find_median_mad.hpp"
 #include "per_cell_qc_metrics.hpp"
 #include "choose_filter_thresholds.hpp"
+#include "utils.hpp"
 
 /**
  * @file crispr_quality_control.hpp
@@ -34,8 +35,11 @@ struct ComputeCrisprQcMetricsOptions {
 
 /**
  * @brief Buffers for `compute_crispr_qc_metrics()`.
- * @tparam Sum_ Numeric type to store the summed expression.
- * @tparam Detected_ Integer type to store the number of cells.
+ *
+ * @tparam Sum_ Numeric type of the sums, usually floating-point.
+ * If integer, this should be large enough to avoid overflow.
+ * @tparam Detected_ Integer type of the number of detected cells.
+ * This should be large enough to avoid integer overflow, typically set to the same type as `Index_`.
  * @tparam Value_ Type of matrix value.
  * @tparam Index_ Type of the matrix indices.
  *
@@ -45,18 +49,21 @@ template<typename Sum_ = double, typename Detected_ = int, typename Value_ = dou
 struct ComputeCrisprQcMetricsBuffers {
     /**
      * Pointer to an array of length equal to the number of cells, to store the sum of CRISPR counts per cell.
+     * All values should be non-negative.
      * This is analogous to `ComputeCrisprQcMetricsResults::sum`. 
      */
     Sum_* sum;
 
     /**
      * Pointer to an array of length equal to the number of cells, to store the number of detected guides per cell.
+     * All values should be non-negative.
      * This is analogous to `ComputeCrisprQcMetricsResults::detected`.
      */
     Detected_* detected;
 
     /**
      * Pointer to an array of length equal to the number of cells, to store the maximum count for each cell.
+     * All values should be non-negative.
      * This is analogous to `ComputeCrisprQcMetricsResults::max_value`.
      */
     Value_* max_value;
@@ -69,30 +76,28 @@ struct ComputeCrisprQcMetricsBuffers {
 };
 
 /**
- * Given a feature-by-cell guide count matrix, this function uses `per_cell_qc_metrics()` to compute several CRISPR-relevant QC metrics:
+ * Given a guide-by-cell count matrix, this function uses `per_cell_qc_metrics()` to compute several CRISPR-relevant QC metrics:
  * 
  * - The sum of counts for each cell.
- *   Low counts indicate that the cell was not successfully transfected with a construct,
- *   or that library preparation and sequencing failed.
+ *   Low counts indicate that the cell was not successfully transfected with a construct or that library preparation and sequencing failed.
  * - The number of detected guides per cell.
  *   In theory, this should be 1, as each cell should express no more than one guide construct.
  *   However, ambient contamination may introduce non-zero counts for multiple guides, without necessarily interfering with downstream analyses.
  *   As such, this metric is less useful for guide data, though we compute it anyway.
  * - The maximum count in the most abundant guide construct.
- *   Low values indicate that the cell was not successfully transfected,
- *   or that library preparation and sequencing failed.
+ *   Low values indicate that the cell was not successfully transfected or that library preparation and sequencing failed.
  *   The identity of the most abundant guide is also reported.
  *
  * We use these metrics to define thresholds for filtering in `compute_crispr_qc_filters()`.
  *
  * @tparam Value_ Type of matrix value.
  * @tparam Index_ Type of the matrix indices.
- * @tparam Sum_ Numeric type to store the summed expression.
+ * @tparam Sum_ Numeric type of the sums, usually floating-point.
+ * If integer, this should be large enough to avoid overflow.
+ * @tparam Detected_ Integer type of the number of detected cells.
+ * This should be large enough to avoid integer overflow, typically set to the same type as `Index_`.
  *
- * Meaningful instances of this object should generally be constructed by calling the `compute_crispr_qc_metrics()` function.
- * @tparam Detected_ Integer type to store the number of cells.
- *
- * @param mat A **tatami** matrix containing count data.
+ * @param mat A matrix of non-negative counts.
  * Rows correspond to CRISPR guides while columns correspond to cells.
  * @param[out] output `ComputeCrisprQcMetricsBuffers` object in which to store the output.
  * @param options Further options.
@@ -116,25 +121,33 @@ void compute_crispr_qc_metrics(
 
 /**
  * @brief Results of `compute_crispr_qc_metrics()`.
- * @tparam Sum_ Numeric type to store the summed expression.
- * @tparam Detected_ Integer type to store the number of cells.
+ *
+ * @tparam Sum_ Numeric type of the sums, usually floating-point.
+ * If integer, this should be large enough to avoid overflow.
+ * @tparam Detected_ Integer type of the number of detected cells.
+ * This should be large enough to avoid integer overflow, typically set to the same type as `Index_`.
  * @tparam Value_ Type of matrix value.
  * @tparam Index_ Type of the matrix indices.
+ *
+ * Meaningful instances of this object should generally be constructed by calling the `compute_crispr_qc_metrics()` function.
  */
 template<typename Sum_ = double, typename Detected_ = int, typename Value_ = double, typename Index_ = int>
 struct ComputeCrisprQcMetricsResults {
     /**
      * Vector of length equal to the number of cells in the dataset, containing the sum of counts for each cell.
+     * All values should be non-negative.
      */
     std::vector<Sum_> sum;
 
     /**
      * Vector of length equal to the number of cells in the dataset, containing the number of detected features in each cell.
+     * All values should be non-negative.
      */
     std::vector<Detected_> detected;
 
     /**
      * Vector of length equal to the number of cells in the dataset, containing the maximum count for each cell.
+     * All values should be non-negative.
      */
     std::vector<Value_> max_value;
 
@@ -147,14 +160,16 @@ struct ComputeCrisprQcMetricsResults {
 /**
  * Overload of `compute_crispr_qc_metrics()` that allocates memory for the results.
  *
- * @tparam Sum_ Numeric type to store the summed expression.
- * @tparam Detected_ Integer type to store the number of cells.
+ * @tparam Sum_ Numeric type of the sums, usually floating-point.
+ * If integer, this should be large enough to avoid overflow.
+ * @tparam Detected_ Integer type of the number of detected cells.
+ * This should be large enough to avoid integer overflow, typically set to the same type as `Index_`.
  * @tparam Value_ Type of matrix value.
  * @tparam Index_ Type of the matrix indices.
  * @tparam Subset_ Either a pointer to an array of booleans or a `vector` of indices.
  *
- * @param mat A **tatami** matrix containing counts.
- * Each row should correspond to a guide while each column should correspond to a cell.
+ * @param mat A matrix of non-negative counts.
+ * Each row should correspond to a CRISPR guide while each column should correspond to a cell.
  * @param options Further options.
  *
  * @return An object containing the QC metrics.
@@ -164,7 +179,7 @@ ComputeCrisprQcMetricsResults<Sum_, Detected_, Value_, Index_> compute_crispr_qc
     const tatami::Matrix<Value_, Index_>& mat,
     const ComputeCrisprQcMetricsOptions& options)
 {
-    auto NC = mat.ncol();
+    const auto NC = mat.ncol();
     ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_> x;
     ComputeCrisprQcMetricsResults<Sum_, Detected_, Value_, Index_> output;
 
@@ -214,43 +229,62 @@ struct ComputeCrisprQcFiltersOptions {
 /**
  * @cond
  */
-namespace internal {
-
 template<typename Float_, class Host_, typename Sum_, typename Detected_, typename Value_, typename Index_, typename BlockSource_>
-void crispr_populate(Host_& host, std::size_t n, const ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_>& res, BlockSource_ block, const ComputeCrisprQcFiltersOptions& options) {
+void compute_crispr_qc_filters_internal(
+    Host_& host,
+    const std::size_t num_cells,
+    const ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_>& res,
+    BlockSource_ block,
+    const std::size_t num_blocks,
+    const ComputeCrisprQcFiltersOptions& options
+) {
     constexpr bool unblocked = std::is_same<BlockSource_, bool>::value;
     auto buffer = [&]{
         if constexpr(unblocked) {
-            return sanisizer::create<std::vector<Float_> >(n);
+            return sanisizer::create<std::vector<Float_> >(num_cells);
         } else {
-            return FindMedianMadWorkspace<Float_>(n, block);
+            return ChooseFilterThresholdsBlockedWorkspace<Float_>(num_cells, block, num_blocks);
         }
     }();
 
     // Subsetting to the observations in the top 50% of proportions.
     static_assert(std::is_floating_point<Float_>::value);
     std::vector<Float_> maxprop;
-    maxprop.reserve(n);
-    for (decltype(n) i = 0; i < n; ++i) {
+    maxprop.reserve(num_cells);
+    for (I<decltype(num_cells)> i = 0; i < num_cells; ++i) {
         maxprop.push_back(static_cast<Float_>(res.max_value[i]) / static_cast<Float_>(res.sum[i]));
     }
 
-    FindMedianMadOptions fopt;
-    fopt.median_only = true;
     auto prop_res = [&]{
+        quickstats::MedianOptions<Float_> medopt;
+        medopt.placeholder = std::numeric_limits<Float_>::quiet_NaN();
+
         if constexpr(unblocked) {
-            return find_median_mad(n, maxprop.data(), buffer.data(), fopt);
+            std::copy_n(maxprop.begin(), num_cells, buffer.begin());
+            return quickstats::median<Float_>(num_cells, buffer.data(), medopt);
         } else {
-            return find_median_mad_blocked(n, maxprop.data(), block, &buffer, fopt);
+            std::vector<Float_> output;
+            output.reserve(num_blocks);
+            process_blocks_for_choose_filter_thresholds(
+                num_cells,
+                maxprop.data(),
+                block,
+                num_blocks,
+                buffer,
+                [&](const std::size_t len, Float_* const ptr) -> void {
+                    output.push_back(quickstats::median<Float_>(len, ptr, medopt));
+                }
+            );
+            return output;
         }
     }();
 
-    for (decltype(n) i = 0; i < n; ++i) {
+    for (I<decltype(num_cells)> i = 0; i < num_cells; ++i) {
         auto limit = [&]{
             if constexpr(unblocked){
-                return prop_res.median;
+                return prop_res;
             } else {
-                return prop_res[block[i]].median;
+                return prop_res[block[i]];
             }
         }();
         if (maxprop[i] >= limit) {
@@ -267,20 +301,26 @@ void crispr_populate(Host_& host, std::size_t n, const ComputeCrisprQcMetricsBuf
     copt.upper = false;
     host.get_max_value() = [&]{
         if constexpr(unblocked) {
-            return choose_filter_thresholds(n, maxprop.data(), buffer.data(), copt).lower;
+            return choose_filter_thresholds(num_cells, maxprop.data(), buffer.data(), copt).lower;
         } else {
-            return internal::strip_threshold<true>(choose_filter_thresholds_blocked(n, maxprop.data(), block, &buffer, copt));
+            return extract_filter_thresholds<true>(choose_filter_thresholds_blocked(num_cells, maxprop.data(), block, num_blocks, buffer, copt));
         }
     }();
 }
 
 template<class Host_, typename Sum_, typename Detected_, typename Value_, typename Index_, typename BlockSource_, typename Output_>
-void crispr_filter(const Host_& host, std::size_t n, const ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_>& metrics, BlockSource_ block, Output_* output) {
+void apply_crispr_qc_filters_internal(
+    const Host_& host,
+    const std::size_t n,
+    const ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_>& metrics,
+    BlockSource_ block,
+    Output_* const output
+) {
     constexpr bool unblocked = std::is_same<BlockSource_, bool>::value;
     std::fill_n(output, n, 1);
 
     const auto& mv = host.get_max_value();
-    for (decltype(n) i = 0; i < n; ++i) {
+    for (I<decltype(n)> i = 0; i < n; ++i) {
         auto thresh = [&]{
             if constexpr(unblocked) {
                 return mv;
@@ -293,7 +333,7 @@ void crispr_filter(const Host_& host, std::size_t n, const ComputeCrisprQcMetric
 }
 
 template<typename Sum_, typename Detected_, typename Value_, typename Index_>
-ComputeCrisprQcMetricsBuffers<const Sum_, const Detected_, const Value_, const Index_> to_buffer(const ComputeCrisprQcMetricsResults<Sum_, Detected_, Value_, Index_>& metrics) {
+ComputeCrisprQcMetricsBuffers<const Sum_, const Detected_, const Value_, const Index_> crispr_qc_results_to_buffers(const ComputeCrisprQcMetricsResults<Sum_, Detected_, Value_, Index_>& metrics) {
     ComputeCrisprQcMetricsBuffers<const Sum_, const Detected_, const Value_, const Index_> buffer;
     buffer.sum = metrics.sum.data();
     buffer.detected = metrics.detected.data();
@@ -301,15 +341,13 @@ ComputeCrisprQcMetricsBuffers<const Sum_, const Detected_, const Value_, const I
     buffer.max_index = metrics.max_index.data();
     return buffer;
 }
-
-}
 /**
  * @endcond
  */
 
 /**
  * @brief Filter for high-quality cells using CRISPR-based metrics. 
- * @tparam Float_ Floating-point type for filter thresholds.
+ * @tparam Float_ Floating-point type of the filter thresholds.
  *
  * Instances of this class are typically created by `compute_crispr_qc_filters()`.
  */
@@ -335,47 +373,47 @@ private:
 
 public:
     /**
-     * @tparam Sum_ Numeric type to store the summed expression.
-     * @tparam Detected_ Integer type to store the number of cells.
+     * @tparam Sum_ Numeric type of the summed expression.
+     * @tparam Detected_ Integer type of the number of detected cells.
      * @tparam Value_ Type of matrix value.
      * @tparam Index_ Type of the matrix indices.
-     * @tparam Output_ Boolean type to store the high quality flags.
+     * @tparam Output_ Boolean type of the high quality flags.
      *
-     * @param num Number of cells.
+     * @param num_cells Number of cells.
      * @param metrics A collection of arrays containing CRISPR-based QC metrics, filled by `compute_crispr_qc_metrics()`.
-     * @param[out] output Pointer to an array of length `num`.
+     * @param[out] output Pointer to an array of length `num_cells`.
      * On output, this is truthy for cells considered to be of high quality, and false otherwise.
      */
     template<typename Sum_, typename Detected_, typename Value_, typename Index_, typename Output_>
-    void filter(std::size_t num, const ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_>& metrics, Output_* output) const {
-        internal::crispr_filter(*this, num, metrics, false, output);
+    void filter(const std::size_t num_cells, const ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_>& metrics, Output_* const output) const {
+        apply_crispr_qc_filters_internal(*this, num_cells, metrics, false, output);
     }
 
     /**
-     * @tparam Sum_ Numeric type to store the summed expression.
-     * @tparam Detected_ Integer type to store the number of cells.
+     * @tparam Sum_ Numeric type of the summed expression.
+     * @tparam Detected_ Integer type of the number of detected cells.
      * @tparam Value_ Type of matrix value.
      * @tparam Index_ Type of the matrix indices.
-     * @tparam Output_ Boolean type to store the high quality flags.
+     * @tparam Output_ Boolean type of the high quality flags.
      *
      * @param metrics CRISPR-based QC metrics returned by `compute_crispr_qc_metrics()`.
-     * @param[out] output Pointer to an array of length `num`. 
+     * @param[out] output Pointer to an array of length `num_cells`. 
      * On output, this is truthy for cells considered to be of high quality, and false otherwise.
      */
     template<typename Sum_, typename Detected_, typename Value_, typename Index_, typename Output_>
-    void filter(const ComputeCrisprQcMetricsResults<Sum_, Detected_, Value_, Index_>& metrics, Output_* output) const {
-        return filter(metrics.max_value.size(), internal::to_buffer(metrics), output);
+    void filter(const ComputeCrisprQcMetricsResults<Sum_, Detected_, Value_, Index_>& metrics, Output_* const output) const {
+        return filter(metrics.max_value.size(), crispr_qc_results_to_buffers(metrics), output);
     }
 
     /**
-     * @tparam Output_ Boolean type to store the high quality flags.
-     * @tparam Sum_ Numeric type to store the summed expression.
-     * @tparam Detected_ Integer type to store the number of cells.
+     * @tparam Output_ Boolean type of the high quality flags.
+     * @tparam Sum_ Numeric type of the summed expression.
+     * @tparam Detected_ Integer type of the number of detected cells.
      * @tparam Value_ Type of matrix value.
      * @tparam Index_ Type of the matrix indices.
      *
      * @param metrics CRISPR-based QC metrics returned by `compute_crispr_qc_metrics()`.
-     * @return Vector of length `num`, containing the high-quality calls.
+     * @return Vector of length `num_cells`, containing the high-quality calls.
      */
     template<typename Output_ = unsigned char, typename Sum_, typename Detected_, typename Value_, typename Index_>
     std::vector<Output_> filter(const ComputeCrisprQcMetricsResults<Sum_, Detected_, Value_, Index_>& metrics) const {
@@ -390,33 +428,33 @@ public:
 };
 
 /**
- * In CRISPR data, low-quality cells are defined as those with a low count for the most abundant guides.
- * However, directly defining a threshold on the maximum count is somewhat tricky as unsuccessful transfection is not uncommon.
- * This often results in a large subpopulation with low maximum counts, inflating the MAD and compromising the threshold calculation.
+ * In CRISPR data, a cell is considered to be of low quality if it has a low count for its most abundant guide.
+ * However, directly applying `choose_filter_thresholds()` on the maximum count is somewhat tricky as unsuccessful transfection can be common.
+ * This results in a large subpopulation with low maximum counts, inflating the MAD and compromising the threshold calculation.
  * Instead, we use the following approach:
  *
- * 1. Compute the median of the proportion of counts in the most abundant guide (i.e., the maximum proportion),
- * 2. Subset the cells to only those with maximum proportions above the median.
- * 3. Define a threshold for low outliers on the log-transformed maximum count within the subset (see `choose_filter_thresholds()` for details).
+ * 1. Compute the proportion of counts in the most abundant guide (i.e., the maximum proportion) in each cell.
+ *    Cells that were successfully transfected should have high maximum proportions.
+ *    In contrast, unsuccessfully transfected cells will be dominated by ambient contamination and have low proportions.
+ * 2. Subset the dataset to only retain those cells with maximum proportions above the median.
+ *    This assumes that at least 50% of cells were successfully transfected.
+ *    Thus, we remove all of the unsucessful transfections and enrich for mostly-high-quality cells.
+ * 3. Define a MAD-based threshold for low outliers on the log-transformed maximum count within the subset (see `choose_filter_thresholds()` for details).
+ *    This is now possible as we can assume that most of the remaining cells are of high quality.
  *
- * This assumes that over 50% of cells were successfully transfected with a single guide construct and have high maximum proportions.
- * In contrast, unsuccessful transfections will be dominated by ambient contamination and have low proportions.
- * By taking the subset above the median proportion, we remove all of the unsuccessful transfections and enrich for mostly-high-quality cells.
- * From there, we can apply the usual outlier detection methods on the maximum count, with log-transformation to avoid a negative threshold.
+ * Note that the maximum proportion is only used to define the subset for threshold calculation.
+ * Once the maximum count threshold is computed, it is applied to all cells regardless of their maximum proportions.
+ * This ensures that we correctly remove cells with low coverage, even if the proportion is high.
+ * It also allows us to retain cells transfected with multiple guides, as long as the maximum is high enough -
+ * such cells are not necessarily uninteresting, e.g., for examining interaction effects, so we will err on the side of caution and leave them in.
  *
- * Keep in mind that the maximum proportion is only used to define the subset for threshold calculation.
- * Once the maximum count threshold is computed, they are applied to all cells, regardless of their maximum proportions.
- * This allows us to recover good cells that would have been filtered out by our aggressive median subset.
- * It also ensures that we do not remove cells transfected with multiple guides - such cells are not necessarily uninteresting, e.g., for examining interaction effects,
- * so we will err on the side of caution and leave them in.
- *
- * @tparam Float_ Floating-point type for the thresholds.
- * @tparam Sum_ Numeric type to store the summed expression.
- * @tparam Detected_ Integer type to store the number of cells.
+ * @tparam Float_ Floating-point type of the thresholds.
+ * @tparam Sum_ Numeric type of the summed expression.
+ * @tparam Detected_ Integer type of the number of detected cells.
  * @tparam Value_ Type of matrix value.
  * @tparam Index_ Type of the matrix indices.
  *
- * @param num Number of cells.
+ * @param num_cells Number of cells.
  * @param metrics A collection of arrays containing CRISPR-based QC metrics, filled by `compute_crispr_qc_metrics()`.
  * @param options Further options for filtering.
  *
@@ -424,19 +462,19 @@ public:
  */
 template<typename Float_ = double, typename Sum_, typename Detected_, typename Value_, typename Index_>
 CrisprQcFilters<Float_> compute_crispr_qc_filters(
-    std::size_t num,
+    const std::size_t num_cells,
     const ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_>& metrics,
     const ComputeCrisprQcFiltersOptions& options)
 {
     CrisprQcFilters<Float_> output;
-    internal::crispr_populate<Float_>(output, num, metrics, false, options);
+    compute_crispr_qc_filters_internal<Float_>(output, num_cells, metrics, false, 0, options);
     return output;
 }
 
 /**
- * @tparam Float_ Floating-point type for the thresholds.
- * @tparam Sum_ Numeric type to store the summed expression.
- * @tparam Detected_ Integer type to store the number of cells.
+ * @tparam Float_ Floating-point type of the thresholds.
+ * @tparam Sum_ Numeric type of the summed expression.
+ * @tparam Detected_ Integer type of the number of detected cells.
  * @tparam Value_ Type of matrix value.
  * @tparam Index_ Type of the matrix indices.
  *
@@ -450,12 +488,12 @@ CrisprQcFilters<Float_> compute_crispr_qc_filters(
     const ComputeCrisprQcMetricsResults<Sum_, Detected_, Value_, Index_>& metrics,
     const ComputeCrisprQcFiltersOptions& options)
 {
-    return compute_crispr_qc_filters(metrics.max_value.size(), internal::to_buffer(metrics), options);
+    return compute_crispr_qc_filters(metrics.max_value.size(), crispr_qc_results_to_buffers(metrics), options);
 }
 
 /**
  * @brief Filter on using CRISPR-based QC metrics with blocking.
- * @tparam Float_ Floating-point type for filter thresholds.
+ * @tparam Float_ Floating-point type of the filter thresholds.
  * Instances of this class are typically created by `compute_crispr_qc_filters_blocked()`.
  */
 template<typename Float_ = double>
@@ -483,60 +521,60 @@ private:
 
 public:
     /**
-     * @tparam Sum_ Numeric type to store the summed expression.
-     * @tparam Detected_ Integer type to store the number of cells.
+     * @tparam Sum_ Numeric type of the summed expression.
+     * @tparam Detected_ Integer type of the number of detected cells.
      * @tparam Value_ Type of matrix value.
      * @tparam Index_ Type of the matrix indices.
-     * @tparam Block_ Integer type for the block assignment.
-     * @tparam Output_ Boolean type to store the high quality flags.
+     * @tparam Block_ Integer type of the block assignment.
+     * @tparam Output_ Boolean type of the high quality flags.
      *
-     * @param num Number of cells.
+     * @param num_cells Number of cells.
      * @param metrics A collection of arrays containing CRISPR-based QC metrics, filled by `compute_crispr_qc_metrics()`.
-     * @param[in] block Pointer to an array of length `num` containing block identifiers.
+     * @param[in] block Pointer to an array of length `num_cells` containing block identifiers.
      * Each identifier should correspond to the same blocks used in the constructor.
-     * @param[out] output Pointer to an array of length `num`.
+     * @param[out] output Pointer to an array of length `num_cells`.
      * On output, this is truthy for cells considered to be of high quality, and false otherwise.
      */
     template<typename Sum_, typename Detected_, typename Value_, typename Index_, typename Block_, typename Output_>
-    void filter(std::size_t num, const ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_>& metrics, const Block_* block, Output_* output) const {
-        internal::crispr_filter(*this, num, metrics, block, output);
+    void filter(const std::size_t num_cells, const ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_>& metrics, const Block_* const block, Output_* const output) const {
+        apply_crispr_qc_filters_internal(*this, num_cells, metrics, block, output);
     }
 
     /**
-     * @tparam Sum_ Numeric type to store the summed expression.
-     * @tparam Detected_ Integer type to store the number of cells.
+     * @tparam Sum_ Numeric type of the summed expression.
+     * @tparam Detected_ Integer type of the number of detected cells.
      * @tparam Value_ Type of matrix value.
      * @tparam Index_ Type of the matrix indices.
-     * @tparam Block_ Integer type for the block assignment.
-     * @tparam Output_ Boolean type to store the high quality flags.
+     * @tparam Block_ Integer type of the block assignment.
+     * @tparam Output_ Boolean type of the high quality flags.
      *
      * @param metrics CRISPR-based QC metrics computed by `compute_crispr_qc_metrics()`.
-     * @param[in] block Pointer to an array of length `num` containing block identifiers.
+     * @param[in] block Pointer to an array of length `num_cells` containing block identifiers.
      * Each identifier should correspond to the same blocks used in the constructor.
-     * @param[out] output Pointer to an array of length `num`.
+     * @param[out] output Pointer to an array of length `num_cells`.
      * On output, this is truthy for cells considered to be of high quality, and false otherwise.
      */
     template<typename Sum_, typename Detected_, typename Value_, typename Index_, typename Block_, typename Output_>
-    void filter(const ComputeCrisprQcMetricsResults<Sum_, Detected_, Value_, Index_>& metrics, const Block_* block, Output_* output) const {
-        filter(metrics.max_value.size(), internal::to_buffer(metrics), block, output);
+    void filter(const ComputeCrisprQcMetricsResults<Sum_, Detected_, Value_, Index_>& metrics, const Block_* const block, Output_* const output) const {
+        filter(metrics.max_value.size(), crispr_qc_results_to_buffers(metrics), block, output);
     }
 
     /**
-     * @tparam Output_ Boolean type to store the high quality flags.
-     * @tparam Sum_ Numeric type to store the summed expression.
-     * @tparam Detected_ Integer type to store the number of cells.
+     * @tparam Output_ Boolean type of the high quality flags.
+     * @tparam Sum_ Numeric type of the summed expression.
+     * @tparam Detected_ Integer type of the number of detected cells.
      * @tparam Value_ Type of matrix value.
      * @tparam Index_ Type of the matrix indices.
-     * @tparam Block_ Integer type for the block assignment.
+     * @tparam Block_ Integer type of the block assignment.
      * 
      * @param metrics CRISPR-based QC metrics computed by `compute_crispr_qc_metrics()`.
-     * @param[in] block Pointer to an array of length `num` containing block identifiers.
+     * @param[in] block Pointer to an array of length `num_cells` containing block identifiers.
      * Each identifier should correspond to the same blocks used in the constructor.
      *
-     * @return Vector of length `num`, containing the high-quality calls.
+     * @return Vector of length `num_cells`, containing the high-quality calls.
      */
     template<typename Output_ = unsigned char, typename Sum_, typename Detected_, typename Value_, typename Index_, typename Block_>
-    std::vector<Output_> filter(const ComputeCrisprQcMetricsResults<Sum_, Detected_, Value_, Index_>& metrics, const Block_* block) const {
+    std::vector<Output_> filter(const ComputeCrisprQcMetricsResults<Sum_, Detected_, Value_, Index_>& metrics, const Block_* const block) const {
         auto output = sanisizer::create<std::vector<Output_> >(metrics.max_value.size()
 #ifdef SCRAN_QC_TEST_INIT
             , SCRAN_QC_TEST_INIT
@@ -552,42 +590,45 @@ public:
  * Each blocking level has its own thresholds, equivalent to calling `compute_crispr_qc_filters()` on the cells from each block.
  * This ensures that uninteresting inter-block differences do not inflate the MAD, see `choose_filter_thresholds_blocked()` for more details.
 
- * @tparam Sum_ Numeric type to store the summed expression.
- * @tparam Detected_ Integer type to store the number of cells.
+ * @tparam Sum_ Numeric type of the summed expression.
+ * @tparam Detected_ Integer type of the number of detected cells.
  * @tparam Value_ Type of matrix value.
  * @tparam Index_ Type of the matrix indices.
- * @tparam Block_ Integer type for the block assignments.
+ * @tparam Block_ Integer type of the block assignments.
  *
- * @param num Number of cells.
+ * @param num_cells Number of cells.
  * @param metrics A collection of arrays containing CRISPR-based QC metrics, filled by `compute_crispr_qc_metrics()`.
- * @param[in] block Pointer to an array of length `num` containing block identifiers.
+ * @param[in] block Pointer to an array of length `num_cells` containing block identifiers.
  * Values should be integer IDs in \f$[0, N)\f$ where \f$N\f$ is the number of blocks.
+ * @param num_blocks Total number of blocks, i.e., \f$N\f$.
  * @param options Further options for filtering.
  *
  * @return Object containing filter thresholds for each block.
  */
 template<typename Float_ = double, typename Sum_, typename Detected_, typename Value_, typename Index_, typename Block_>
 CrisprQcBlockedFilters<Float_> compute_crispr_qc_filters_blocked(
-    std::size_t num,
+    const std::size_t num_cells,
     const ComputeCrisprQcMetricsBuffers<Sum_, Detected_, Value_, Index_>& metrics,
-    const Block_* block,
-    const ComputeCrisprQcFiltersOptions& options)
-{
+    const Block_* const block,
+    const std::size_t num_blocks,
+    const ComputeCrisprQcFiltersOptions& options
+) {
     CrisprQcBlockedFilters<Float_> output;
-    internal::crispr_populate<Float_>(output, num, metrics, block, options);
+    compute_crispr_qc_filters_internal<Float_>(output, num_cells, metrics, block, num_blocks, options);
     return output;
 }
 
 /**
- * @tparam Sum_ Numeric type to store the summed expression.
- * @tparam Detected_ Integer type to store the number of cells.
+ * @tparam Sum_ Numeric type of the summed expression.
+ * @tparam Detected_ Integer type of the number of detected cells.
  * @tparam Value_ Type of matrix value.
  * @tparam Index_ Type of the matrix indices.
- * @tparam Block_ Integer type for the block assignments.
+ * @tparam Block_ Integer type of the block assignments.
  *
  * @param metrics CRISPR-based QC metrics computed by `compute_crispr_qc_metrics()`.
- * @param[in] block Pointer to an array of length `num` containing block identifiers.
+ * @param[in] block Pointer to an array of length `num_cells` containing block identifiers.
  * Values should be integer IDs in \f$[0, N)\f$ where \f$N\f$ is the number of blocks.
+ * @param num_blocks Total number of blocks, i.e., \f$N\f$.
  * @param options Further options for filtering.
  *
  * @return Object containing filter thresholds for each block.
@@ -595,10 +636,11 @@ CrisprQcBlockedFilters<Float_> compute_crispr_qc_filters_blocked(
 template<typename Float_ = double, typename Sum_, typename Detected_, typename Value_, typename Index_, typename Block_>
 CrisprQcBlockedFilters<Float_> compute_crispr_qc_filters_blocked(
     const ComputeCrisprQcMetricsResults<Sum_, Detected_, Value_, Index_>& metrics,
-    const Block_* block,
-    const ComputeCrisprQcFiltersOptions& options)
-{
-    return compute_crispr_qc_filters_blocked(metrics.max_value.size(), internal::to_buffer(metrics), block, options);
+    const Block_* const block,
+    const std::size_t num_blocks,
+    const ComputeCrisprQcFiltersOptions& options
+) {
+    return compute_crispr_qc_filters_blocked(metrics.max_value.size(), crispr_qc_results_to_buffers(metrics), block, num_blocks, options);
 }
 
 }

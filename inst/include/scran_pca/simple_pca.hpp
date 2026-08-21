@@ -5,9 +5,11 @@
 #include <type_traits>
 #include <algorithm>
 #include <memory>
+#include <optional>
 
 #include "tatami/tatami.hpp"
 #include "tatami_stats/tatami_stats.hpp"
+#include "quickstats/quickstats.hpp"
 #include "irlba/irlba.hpp"
 #include "irlba/parallel.hpp"
 #include "irlba_tatami/irlba_tatami.hpp"
@@ -84,75 +86,20 @@ struct SimplePcaOptions {
 /**
  * @cond
  */
-template<bool sparse_, typename Value_, typename Index_, class EigenVector_>
+template<typename Value_, typename Index_, class EigenVector_>
 void compute_row_means_and_variances(const tatami::Matrix<Value_, Index_>& mat, const int num_threads, EigenVector_& center_v, EigenVector_& scale_v) {
-    const auto ngenes = mat.nrow();
+    tatami_stats::RssOptions<typename EigenVector_::Scalar> opts;
+    opts.num_threads = num_threads;
+    opts.mean_placeholder = 0; // rss() emits NaNs if there are no cells, we replace them with zeros to avoid downstream problems with propagation.
 
-    if (mat.prefer_rows()) {
-        tatami::parallelize([&](const int, const Index_ start, const Index_ length) -> void {
-            auto ext = tatami::consecutive_extractor<sparse_>(mat, true, start, length, [&]{
-                tatami::Options opt;
-                opt.sparse_extract_index = false;
-                return opt;
-            }());
-            const auto ncells = mat.ncol();
-            auto vbuffer = tatami::create_container_of_Index_size<std::vector<Value_> >(ncells);
+    tatami_stats::RssBuffers<typename EigenVector_::Scalar> buffers;
+    buffers.mean = center_v.data();
+    buffers.rss = scale_v.data();
+    tatami_stats::rss(true, mat, buffers, opts);
 
-            for (Index_ g = start, end = start + length; g < end; ++g) {
-                const auto results = [&]{
-                    if constexpr(sparse_) {
-                        auto range = ext->fetch(vbuffer.data(), NULL);
-                        return tatami_stats::variances::direct(range.value, range.number, ncells, /* skip_nan = */ false);
-                    } else {
-                        auto ptr = ext->fetch(vbuffer.data());
-                        return tatami_stats::variances::direct(ptr, ncells, /* skip_nan = */ false);
-                    }
-                }();
-                center_v.coeffRef(g) = results.first;
-                scale_v.coeffRef(g) = results.second;
-            }
-        }, ngenes, num_threads);
-
-    } else {
-        tatami::parallelize([&](int t, Index_ start, Index_ length) -> void {
-            const auto ncells = mat.ncol();
-            auto ext = tatami::consecutive_extractor<sparse_>(mat, false, static_cast<Index_>(0), ncells, start, length);
-
-            typedef typename EigenVector_::Scalar Scalar;
-            tatami_stats::LocalOutputBuffer<Scalar> cbuffer(t, start, length, center_v.data());
-            tatami_stats::LocalOutputBuffer<Scalar> sbuffer(t, start, length, scale_v.data());
-
-            auto running = [&]{
-                if constexpr(sparse_) {
-                    return tatami_stats::variances::RunningSparse<Scalar, Value_, Index_>(length, cbuffer.data(), sbuffer.data(), /* skip_nan = */ false, /* subtract = */ start);
-                } else {
-                    return tatami_stats::variances::RunningDense<Scalar, Value_, Index_>(length, cbuffer.data(), sbuffer.data(), /* skip_nan = */ false);
-                }
-            }();
-
-            auto vbuffer = tatami::create_container_of_Index_size<std::vector<Value_> >(length);
-            auto ibuffer = [&]{
-                if constexpr(sparse_) {
-                    return tatami::create_container_of_Index_size<std::vector<Index_> >(length);
-                } else {
-                    return false;
-                }
-            }();
-
-            for (Index_ c = 0; c < ncells; ++c) {
-                if constexpr(sparse_) {
-                    const auto range = ext->fetch(vbuffer.data(), ibuffer.data());
-                    running.add(range.value, range.index, range.number);
-                } else {
-                    const auto ptr = ext->fetch(vbuffer.data());
-                    running.add(ptr);
-                }
-            }
-
-            running.finish();
-            cbuffer.transfer();
-            sbuffer.transfer();
-        }, ngenes, num_threads);
+    const auto ncells = mat.ncol();
+    if (ncells > 1) {
+        scale_v /= ncells - 1;
     }
 }
 
@@ -223,22 +170,31 @@ std::unique_ptr<irlba::Matrix<EigenVector_, EigenMatrix_> > prepare_sparse_matri
         tatami::parallelize([&](const int, const Index_ start, const Index_ length) -> void {
             const auto& pointers = sparse_ptr->get_pointers();
             const auto& values = sparse_ptr->get_values();
+            quickstats::RssWorkspace<typename EigenVector_::Scalar> work;
+
             for (Index_ g = start, end = start + length; g < end; ++g) {
                 const auto offset = pointers[g];
                 const auto next_offset = pointers[g + 1]; // increment won't overflow as 'g + 1 <= end'.
                 const Index_ num_nonzero = next_offset - offset;
-                const auto results = tatami_stats::variances::direct(values.data() + offset, num_nonzero, ncells, /* skip_nan = */ false);
-                center_v.coeffRef(g) = results.first;
-                scale_v.coeffRef(g) = results.second;
+                const auto results = quickstats::rss(ncells, num_nonzero, values.data() + offset, work);
+                center_v.coeffRef(g) = results.mean;
+                scale_v.coeffRef(g) = results.rss;
             }
         }, ngenes, options.num_threads);
+
+        if (ncells > 1) { 
+            // if there are fewer than 2 cells, scale_v will naturally be set to zero.
+            scale_v /= ncells - 1;
+        } else if (!ncells) {
+            // override quickstats::rss()'s setting of the mean to NaN if there are no cells.
+            std::fill(center_v.begin(), center_v.end(), 0);
+        }
 
         total_var = process_scale_vector(options.scale, scale_v);
 
     } else {
-        compute_row_means_and_variances<true>(mat, options.num_threads, center_v, scale_v);
+        compute_row_means_and_variances(mat, options.num_threads, center_v, scale_v);
         total_var = process_scale_vector(options.scale, scale_v);
-
         output.reset(
             new irlba_tatami::Transposed<EigenVector_, EigenMatrix_, Value_, Index_, decltype(&mat)>(&mat, options.num_threads)
         ); 
@@ -282,18 +238,14 @@ std::unique_ptr<irlba::Matrix<EigenVector_, EigenMatrix_> > prepare_dense_matrix
         );
 
         center_v.array() = emat->array().colwise().sum();
-        if (ncells) {
+        if (ncells) { // if there are no cells, center_v will naturally be set to zero.
             center_v /= ncells;
-        } else {
-            std::fill(center_v.begin(), center_v.end(), std::numeric_limits<typename EigenVector_::Scalar>::quiet_NaN());
         }
         emat->array().rowwise() -= center_v.adjoint().array(); // applying it to avoid wasting time with deferred operations inside IRLBA.
 
         scale_v.array() = emat->array().colwise().squaredNorm();
-        if (ncells > 1) {
+        if (ncells > 1) { // if there are fewer than 2 cells, scale_v will naturally be set to zero.
             scale_v /= ncells - 1;
-        } else {
-            std::fill(scale_v.begin(), scale_v.end(), std::numeric_limits<typename EigenVector_::Scalar>::quiet_NaN());
         }
 
         total_var = process_scale_vector(options.scale, scale_v);
@@ -306,9 +258,8 @@ std::unique_ptr<irlba::Matrix<EigenVector_, EigenMatrix_> > prepare_dense_matrix
         );
 
     } else {
-        compute_row_means_and_variances<false>(mat, options.num_threads, center_v, scale_v);
+        compute_row_means_and_variances(mat, options.num_threads, center_v, scale_v);
         total_var = process_scale_vector(options.scale, scale_v);
-
         std::unique_ptr<irlba::Matrix<EigenVector_, EigenMatrix_> > output(
             new irlba_tatami::Transposed<EigenVector_, EigenMatrix_, Value_, Index_, decltype(&mat)>(&mat, options.num_threads)
         ); 
@@ -358,15 +309,19 @@ struct SimplePcaResults {
 
     /**
      * Centering vector.
-     * Each entry corresponds to a row in the matrix and contains the mean value for that feature.
+     * Each entry corresponds to a gene (i.e., row of the input matrix) and contains the mean value of that gene.
+     * If the input matrix has no cells, the mean is set to zero for all genes.
      */
     EigenVector_ center;
 
     /**
      * Scaling vector, only returned if `SimplePcaOptions::scale = true`.
-     * Each entry corresponds to a row in the matrix and contains the scaling factor used to divide the feature values if `SimplePcaOptions::scale = true`.
+     * Each entry corresponds to a gene (i.e., row of the input matrix) and contains the scaling factor used to divide the feature values if `SimplePcaOptions::scale = true`.
+     * This is usually the sample standard deviation of that gene.
+     * For genes with zero variance, the scaling factor is set to 1 to avoid non-finite values upon scaling.
+     * For input matrices with fewer than 2 cells, the scaling factor is set to 1 for all genes. 
      */
-    EigenVector_ scale;
+    std::optional<EigenVector_> scale;
 
     /**
      * Metrics for IRLBA, including whether the algorithm converged and the number of iterations/multiplications required. 
@@ -386,11 +341,12 @@ void simple_pca_internal(
 ) {
     irlba::EigenThreadScope t(options.num_threads);
 
+    auto scale = tatami::create_container_of_Index_size<EigenVector_>(mat.nrow());
     std::unique_ptr<irlba::Matrix<EigenVector_, EigenMatrix_> > ptr;
     if (mat.sparse()) {
-        ptr = prepare_sparse_matrix_for_irlba<EigenMatrix_>(mat, options, output.center, output.scale, output.total_variance);
+        ptr = prepare_sparse_matrix_for_irlba<EigenMatrix_>(mat, options, output.center, scale, output.total_variance);
     } else {
-        ptr = prepare_dense_matrix_for_irlba<EigenMatrix_>(mat, options, output.center, output.scale, output.total_variance);
+        ptr = prepare_dense_matrix_for_irlba<EigenMatrix_>(mat, options, output.center, scale, output.total_variance);
     }
 
     output.metrics = irlba::compute(*ptr, options.number, output.components, output.rotation, output.variance_explained, options.irlba_options);
@@ -402,8 +358,8 @@ void simple_pca_internal(
         output.components.adjointInPlace();
     }
 
-    if (!options.scale) {
-        output.scale = EigenVector_();
+    if (options.scale) {
+        output.scale = std::move(scale);
     }
 }
 /**

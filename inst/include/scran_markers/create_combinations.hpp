@@ -5,39 +5,46 @@
 #include <cstddef>
 
 #include "sanisizer/sanisizer.hpp"
+#include "tatami/tatami.hpp"
 
 #include "utils.hpp"
 
 namespace scran_markers {
 
-namespace internal {
+template<typename Index_>
+struct BlockedCombinations {
+    BlockedCombinations(const Index_ num_cells, const std::size_t num_combinations) :
+        num_combinations(num_combinations),
+        combinations(tatami::cast_Index_to_container_size<I<decltype(combinations)> >(num_cells)),
+        frequencies(sanisizer::cast<I<decltype(frequencies.size())> >(num_combinations))
+    {}
 
-// When we combine 'group' and 'block' into a single 'combinations' factor, the
-// resulting combinations can be considered to index into a 2-dimensional array
-// of dimension 'ngroups * nblocks' where the group is the faster-changing
-// dimension. This 2D array layout is used for all 'combo_*'-prefixed arrays
-// like 'combo_weights', 'combo_means', etc.
-template<typename Group_, typename Block_>
-std::vector<std::size_t> create_combinations(const std::size_t ngroups, const Group_* const group, const std::size_t nblocks, const Block_* const block, const std::size_t NC) {
-    sanisizer::product<std::size_t>(ngroups, nblocks); // check that all products below are safe.
-    auto combinations = sanisizer::create<std::vector<std::size_t> >(NC);
-    for (I<decltype(NC)> c = 0; c < NC; ++c) {
-        combinations[c] = sanisizer::nd_offset<std::size_t>(group[c], ngroups, block[c]); // group is the faster changing dimension.
-    }
-    return combinations;
-}
+    std::size_t num_combinations;
 
-// We can't just use tatami_stats::tabulate_groups as downstream is expecting a 'ngroups * nblocks' array;
-// tabulate_groups() will not report the full length if not all combinations are observed.
-template<typename Count_>
-std::vector<Count_> tabulate_combinations(const std::size_t ngroups, const std::size_t nblocks, const std::vector<std::size_t>& combinations) {
-    std::vector<Count_> output(sanisizer::product<typename std::vector<Count_>::size_type>(ngroups, nblocks));
-    for (const auto c : combinations) {
-        ++output[c];
+    std::vector<std::size_t> combinations;
+
+    std::vector<Index_> frequencies;
+};
+
+// Wwe combine 'group' and 'block' into a single 'combinations' factor.
+// The resulting combinations index into a 2-dimensional array of dimension 'ngroups * nblocks' where the group is the faster-changing dimension.
+// This 2D array layout is used for all 'combo_*'-prefixed arrays like 'combo_weights', 'combo_means', etc.
+template<typename Index_, typename Group_, typename Block_>
+BlockedCombinations<Index_> create_combinations(
+    const Index_ num_cells,
+    const Group_* const group,
+    const std::size_t num_groups,
+    const Block_* const block,
+    const std::size_t num_blocks
+) {
+    const auto num_combos = sanisizer::product<std::size_t>(num_groups, num_blocks);
+    BlockedCombinations<Index_> output(num_cells, num_combos);
+    for (Index_ c = 0; c < num_cells; ++c) {
+        const auto combo = sanisizer::nd_offset<std::size_t>(group[c], num_groups, block[c]); // group is the faster changing dimension.
+        output.combinations[c] = combo;
+        ++output.frequencies[combo];
     }
     return output;
-}
-
 }
 
 }

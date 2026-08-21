@@ -148,11 +148,9 @@ private:
 
 private:
     void search_nn(const Data_* query) {
-        /* Computing distances to all centers and sorting them. The aim is to
-         * go through the nearest centers first, to try to get the shortest
-         * threshold (i.e., 'nearest.limit()') possible at the start;
-         * this allows us to skip searches of the later clusters.
-         */
+        // Computing distances to all centers and sorting them.
+        // The aim is to go through the nearest centers first, to try to get the shortest threshold (i.e., 'nearest.limit()') possible at the start;
+        // this allows us to skip searches of the later clusters.
         {
             const auto query_san = sanitize_query(query);
             const auto ncenters = my_parent.my_sizes.size();
@@ -167,66 +165,76 @@ private:
         }
 
         // Computing the distance to each center, and deciding whether to proceed for each cluster.
+        const auto& dist2centers = my_parent.my_dist_to_centroid;
         Distance_ threshold_raw = std::numeric_limits<Distance_>::infinity();
+
         for (const auto& curcent : my_center_order) {
             const Index_ center = curcent.second;
-            const Distance_ dist2center = my_parent.my_metric_center->normalize(curcent.first);
-
-            const auto cur_nobs = my_parent.my_sizes[center];
-            const Distance_* dIt = my_parent.my_dist_to_centroid.data() + my_parent.my_offsets[center];
-            const Distance_ maxdist = *(dIt + cur_nobs - 1);
-
-            Index_ firstcell = 0;
-#if KNNCOLLE_KMKNN_USE_UPPER
-            Distance_ upper_bd = std::numeric_limits<Distance_>::max();
-#endif
+            Index_ firstsubj = my_parent.my_offsets[center], lastsubj = firstsubj + my_parent.my_sizes[center];
 
             if (!std::isinf(threshold_raw)) {
                 const Distance_ threshold = my_parent.my_metric_center->normalize(threshold_raw);
+                const Distance_ query2center = my_parent.my_metric_center->normalize(curcent.first);
+                const Distance_ max_subj2center = dist2centers[lastsubj - 1];
 
-                /* The conditional expression below exploits the triangle inequality; it is equivalent to asking whether:
-                 *     threshold + maxdist < dist2center
-                 * All points (if any) within this cluster with distances above 'lower_bd' are potentially countable.
+                /* This exploits the triangle inequality to ignore points where:
+                 *     threshold + subject-to-center < query-to-center 
+                 * All points (if any) within this cluster with distances at or above 'lower_bd' are potentially countable.
+                 *
+                 * If the maximum distance between a subject and the center is less than 'lower_bd', there's no point proceeding,
+                 * as we know that all other subjects will have smaller distances and are thus uncountable.
                  */
-                const Distance_ lower_bd = dist2center - threshold;
-                if (maxdist < lower_bd) {
+                const Distance_ lower_bd = query2center - threshold;
+                if (max_subj2center < lower_bd) {
                     continue;
                 }
+                firstsubj = std::lower_bound(dist2centers.begin() + firstsubj, dist2centers.begin() + lastsubj, lower_bd) - dist2centers.begin();
 
-                firstcell = std::lower_bound(dIt, dIt + cur_nobs, lower_bd) - dIt;
-
-#if KNNCOLLE_KMKNN_USE_UPPER
                 /* This exploits the reverse triangle inequality, to ignore points where:
-                 *     threshold + dist2center < point-to-center distance
+                 *     threshold + query-to-center < subject-to-center
+                 * All points (if any) within this cluster with distances at or below 'upper_bd' are potentially countable.
+                 *
+                 * If the maximum distance between a subject and the center is less than or equal to 'upper_bd', we can just skip the search.
+                 * No subjects will have a distance-to-center greater than 'upper_bd' so we know that we have to examine all subjects. 
+                 *
+                 * We could also skip this center altogther if the minimum subject-to-center distance is greater than 'upper_bd'.
+                 * However, this seems too unlikely to warrant a special clause.
                  */
-                upper_bd = threshold + dist2center;
-#endif
+                const Distance_ upper_bd = query2center + threshold;
+                if (max_subj2center > upper_bd) {
+                    lastsubj = std::upper_bound(dist2centers.begin() + firstsubj, dist2centers.begin() + lastsubj, upper_bd) - dist2centers.begin();
+                }
             }
 
-            const auto cur_start = my_parent.my_offsets[center];
-            for (auto celldex = firstcell; celldex < cur_nobs; ++celldex) {
-                const auto other_cell = my_parent.my_data.data() + sanisizer::product_unsafe<std::size_t>(cur_start + celldex, my_parent.my_dim);
-
-#if KNNCOLLE_KMKNN_USE_UPPER
-                if (*(dIt + celldex) > upper_bd) {
-                    break;
-                }
-#endif
-
-                auto dist2cell_raw = my_parent.my_metric_data->raw(my_parent.my_dim, query, other_cell);
-                if (dist2cell_raw <= threshold_raw) {
-                    my_nearest.add(cur_start + celldex, dist2cell_raw);
+            for (auto s = firstsubj; s < lastsubj; ++s) {
+                const auto other_subj = my_parent.my_data.data() + sanisizer::product_unsafe<std::size_t>(s, my_parent.my_dim);
+                auto dist2subj_raw = my_parent.my_metric_data->raw(my_parent.my_dim, query, other_subj);
+                if (dist2subj_raw <= threshold_raw) {
+                    my_nearest.add(s, dist2subj_raw);
                     if (my_nearest.is_full()) {
                         threshold_raw = my_nearest.limit(); // Shrinking the threshold, if an earlier NN has been found.
-#if KNNCOLLE_KMKNN_USE_UPPER
-                        upper_bd = my_parent.my_metric_data->normalize(threshold_raw) + dist2center; 
-#endif
+
+                        /* P.S. We could also consider increasing 'firstsubj' as 'threshold_raw' decreases. 
+                         * The idea would be to exploit the triangle inequality to quickly skip over more points. 
+                         * However, this is pointless because 'lower_bd' will never increase enough to skip subsequent observations.
+                         * We wouldn't have been able to skip the observation that we just added,
+                         * so there's no way we could skip observations with larger subject-to-center distances.
+                         *
+                         * P.P.S. We could also consider decreasing 'lastsubj' as 'threshold_raw' decreases.
+                         * The idea would be to exploit the triangle inequality to terminate sooner. 
+                         * However, this doesn't seem to provide a lot of benefit in practice. 
+                         * In theory, we can only trim the search space if the query already lies in a center's hypersphere (as 'upper_bd' cannot decrease below 'query2center').
+                         * Even then, 'upper_bd' is usually too large; testing indicates that a reduced 'upper_bd' only trims away a single observation at a time.
+                         * There are also practical challenges as changes to 'lastsubj' within the loop might prevent out-of-order CPU execution;
+                         * we need to do more memory accesses to 'dist2centers' to check if 'lastsubj' can be decreased;
+                         * and we need to run an extra 'normalize()' to recompute 'upper_bd' inside the loop.
+                         * All in all, I don't think it's worth it.
+                         */
                     }
                 }
             }
         }
     }
-
 
 public:
     void search(Index_ i, Index_ k, std::vector<Index_>* output_indices, std::vector<Distance_>* output_distances) {
@@ -260,51 +268,37 @@ private:
         Distance_ threshold_raw = my_parent.my_metric_center->denormalize(threshold);
         const auto query_san = sanitize_query(query);
 
-        /* Computing distances to all centers. We don't sort them here 
-         * because the threshold is constant so there's no point.
-         */
+        // Computing distances to all centers. We don't sort them here because the threshold is constant so there's no point.
         const auto ncenters = my_parent.my_sizes.size();
+        const auto& dist2centers = my_parent.my_dist_to_centroid;
+
         for (I<decltype(ncenters)> center = 0; center < ncenters; ++center) {
             auto center_ptr = my_parent.my_centers.data() + sanisizer::product_unsafe<std::size_t>(center, my_parent.my_dim);
-            const Distance_ dist2center = my_parent.my_metric_center->normalize(my_parent.my_metric_center->raw(my_parent.my_dim, query_san, center_ptr));
+            const Distance_ query2center = my_parent.my_metric_center->normalize(my_parent.my_metric_center->raw(my_parent.my_dim, query_san, center_ptr));
+            Index_ firstsubj = my_parent.my_offsets[center], lastsubj = firstsubj + my_parent.my_sizes[center];
+            const Distance_ max_subj2center = dist2centers[lastsubj - 1];
 
-            auto cur_nobs = my_parent.my_sizes[center];
-            const Distance_* dIt = my_parent.my_dist_to_centroid.data() + my_parent.my_offsets[center];
-            const Distance_ maxdist = *(dIt + cur_nobs - 1);
-
-            /* The conditional expression below exploits the triangle inequality; it is equivalent to asking whether:
-             *     threshold + maxdist < dist2center
-             * All points (if any) within this cluster with distances above 'lower_bd' are potentially countable.
-             */
-            const Distance_ lower_bd = dist2center - threshold;
-            if (maxdist < lower_bd) {
+            // Same logic as in search_nn().
+            const Distance_ lower_bd = query2center - threshold;
+            if (max_subj2center < lower_bd) {
                 continue;
             }
+            firstsubj = std::lower_bound(dist2centers.begin() + firstsubj, dist2centers.begin() + lastsubj, lower_bd) - dist2centers.begin();
 
-            Index_ firstcell = std::lower_bound(dIt, dIt + cur_nobs, lower_bd) - dIt;
-#if KNNCOLLE_KMKNN_USE_UPPER
-            /* This exploits the reverse triangle inequality, to ignore points where:
-             *     threshold + dist2center < point-to-center distance
-             */
-            Distance_ upper_bd = threshold + dist2center;
-#endif
+            // Same logic as in search_nn().
+            const Distance_ upper_bd = query2center + threshold;
+            if (max_subj2center > upper_bd) {
+                lastsubj = std::upper_bound(dist2centers.begin() + firstsubj, dist2centers.begin() + lastsubj, upper_bd) - dist2centers.begin();
+            }
 
-            const auto cur_start = my_parent.my_offsets[center];
-            for (auto celldex = firstcell; celldex < cur_nobs; ++celldex) {
-                const auto other_ptr = my_parent.my_data.data() + sanisizer::product_unsafe<std::size_t>(cur_start + celldex, my_parent.my_dim);
-
-#if KNNCOLLE_KMKNN_USE_UPPER
-                if (*(dIt + celldex) > upper_bd) {
-                    break;
-                }
-#endif
-
+            for (auto s = firstsubj; s < lastsubj; ++s) {
+                const auto other_ptr = my_parent.my_data.data() + sanisizer::product_unsafe<std::size_t>(s, my_parent.my_dim);
                 auto dist2cell_raw = my_parent.my_metric_data->raw(my_parent.my_dim, query, other_ptr);
                 if (dist2cell_raw <= threshold_raw) {
                     if constexpr(count_only_) {
                         ++all_neighbors;
                     } else {
-                        all_neighbors.emplace_back(dist2cell_raw, cur_start + celldex);
+                        all_neighbors.emplace_back(dist2cell_raw, s);
                     }
                 }
             }
@@ -472,7 +466,7 @@ public:
             }
 
             for (KmeansCluster_ c = 0; c < ncenters; ++c) {
-                auto begin = by_distance.begin() + my_offsets[c];
+                auto begin = by_distance.data() + my_offsets[c];
                 std::sort(begin, begin + my_sizes[c]);
             }
         }
@@ -501,7 +495,7 @@ public:
                 // We recursively perform a "thread" of replacements until we
                 // are able to find the home of the originally replaced 'o'.
                 auto optr = my_data.data() + sanisizer::product_unsafe<std::size_t>(o, my_dim);
-                std::copy_n(optr, my_dim, buffer.begin());
+                std::copy_n(optr, my_dim, buffer.data());
                 Index_ replacement = current.second;
                 do {
                     auto rptr = my_data.data() + sanisizer::product_unsafe<std::size_t>(replacement, my_dim);
@@ -520,8 +514,6 @@ public:
                 std::copy(buffer.begin(), buffer.end(), optr);
             }
         }
-
-        return;
     }
 
     friend class KmknnSearcher<Index_, Data_, Distance_, DistanceMetricData_, KmeansFloat_, DistanceMetricCenter_>;
@@ -748,7 +740,7 @@ public:
         auto work = data.new_known_extractor();
         for (I<decltype(nobs)> o = 0; o < nobs; ++o) {
             auto ptr = work->next();
-            std::copy_n(ptr, ndim, store.begin() + sanisizer::product_unsafe<std::size_t>(o, ndim)); 
+            std::copy_n(ptr, ndim, store.data() + sanisizer::product_unsafe<std::size_t>(o, ndim)); 
         }
 
         return new KmknnPrebuilt<Index_, Data_, Distance_, DistanceMetricData_, KmeansFloat_, DistanceMetricCenter_>(

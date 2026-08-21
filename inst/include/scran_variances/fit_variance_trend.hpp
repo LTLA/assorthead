@@ -140,7 +140,7 @@ struct FitVarianceTrendWorkspace {
  * @param[in] mean Pointer to an array of length `n`, containing the means for all features.
  * @param[in] variance Pointer to an array of length `n`, containing the variances for all features.
  * @param[out] fitted Pointer to an array of length `n`, to store the fitted values.
- * @param[out] residuals Pointer to an array of length `n`, to store the residuals.
+ * @param[out] residual Pointer to an array of length `n`, to store the residuals.
  * @param workspace Collection of temporary data structures.
  * This can be re-used across multiple `fit_variance_trend()` calls.
  * @param options Further options.
@@ -151,7 +151,7 @@ void fit_variance_trend(
     const Float_* const mean,
     const Float_* const variance,
     Float_* const fitted,
-    Float_* const residuals,
+    Float_* const residual,
     FitVarianceTrendWorkspace<Float_>& workspace,
     const FitVarianceTrendOptions& options
 ) {
@@ -199,7 +199,7 @@ void fit_variance_trend(
 
     // Using the residual array to store the robustness weights as a placeholder;
     // we'll be overwriting this later.
-    WeightedLowess::compute(counter, xbuffer.data(), ybuffer.data(), fitted, residuals, smooth_opt);
+    WeightedLowess::compute(counter, xbuffer.data(), ybuffer.data(), fitted, residual, smooth_opt);
 
     // Determining the left edge before we unpermute.
     const Float_ left_x = xbuffer[0];
@@ -223,7 +223,7 @@ void fit_variance_trend(
     }
 
     for (I<decltype(n)> i = 0; i < n; ++i) {
-        residuals[i] = variance[i] - fitted[i];
+        residual[i] = variance[i] - fitted[i];
     }
     return;
 }
@@ -249,7 +249,7 @@ struct FitVarianceTrendResults {
             , SCRAN_VARIANCES_TEST_INIT
 #endif
         ),
-        residuals(sanisizer::cast<I<decltype(residuals.size())> >(n)
+        residual(sanisizer::cast<I<decltype(residual.size())> >(n)
 #ifdef SCRAN_VARIANCES_TEST_INIT
             , SCRAN_VARIANCES_TEST_INIT
 #endif
@@ -267,7 +267,7 @@ struct FitVarianceTrendResults {
     /**
      * Vector of length equal to the number of features, containing residuals from the trend.
      */
-    std::vector<Float_> residuals;
+    std::vector<Float_> residual;
 };
 
 /**
@@ -286,7 +286,7 @@ template<typename Float_>
 FitVarianceTrendResults<Float_> fit_variance_trend(const std::size_t n, const Float_* const mean, const Float_* const variance, const FitVarianceTrendOptions& options) {
     FitVarianceTrendResults<Float_> output(n);
     FitVarianceTrendWorkspace<Float_> work;
-    fit_variance_trend(n, mean, variance, output.fitted.data(), output.residuals.data(), work, options);
+    fit_variance_trend(n, mean, variance, output.fitted.data(), output.residual.data(), work, options);
     return output;
 }
 

@@ -6,6 +6,7 @@
 
 #include "sanisizer/sanisizer.hpp"
 #include "scran_blocks/scran_blocks.hpp"
+#include "quickstats/quickstats.hpp"
 
 #include "block_averages.hpp"
 #include "utils.hpp"
@@ -71,7 +72,7 @@ std::pair<Stat_, Stat_> compute_simple_diff_blockquantile(
     const std::size_t ngroups,
     const std::size_t nblocks,
     std::vector<Stat_>& buffer,
-    scran_blocks::SingleQuantileVariable<Stat_, typename std::vector<Stat_>::iterator>& qcalc
+    quickstats::SingleQuantileVariableNumber<Stat_>& qcalc
 ) {
     buffer.clear();
     for (I<decltype(nblocks)> b = 0; b < nblocks; ++b) {
@@ -84,11 +85,11 @@ std::pair<Stat_, Stat_> compute_simple_diff_blockquantile(
     }
 
     std::pair<Stat_, Stat_> output;
-    output.first = qcalc(buffer.size(), buffer.begin(), buffer.end());
+    output.first = qcalc(buffer.size(), buffer.data());
     for (auto& x : buffer) {
         x *= -1;
     }
-    output.second = qcalc(buffer.size(), buffer.begin(), buffer.end());
+    output.second = qcalc(buffer.size(), buffer.data());
 
     return output;
 }
@@ -99,7 +100,7 @@ void compute_pairwise_simple_diff_blockquantile(
     const std::size_t ngroups,
     const std::size_t nblocks,
     std::vector<Stat_>& buffer,
-    scran_blocks::SingleQuantileVariable<Stat_, typename std::vector<Stat_>::iterator>& qcalc,
+    quickstats::SingleQuantileVariableNumber<Stat_>& qcalc,
     Stat_* const output
 ) {
     for (I<decltype(ngroups)> g1 = 0; g1 < ngroups; ++g1) {

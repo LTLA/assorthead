@@ -91,11 +91,12 @@ public:
             my_threads.emplace_back([run_job,this,&init_mut,&init_cv,&num_initialized](int thread) -> void { 
                 Helper env; // allocating this locally within each thread to reduce the risk of false sharing.
                 my_helpers[thread] = &env;
+
                 {
                     std::lock_guard lck(init_mut);
                     ++num_initialized;
-                    init_cv.notify_one();
                 }
+                init_cv.notify_one(); // only notify once the lock is released for better performance. 
 
                 while (1) {
                     std::unique_lock lck(env.mut);
@@ -116,6 +117,7 @@ public:
 
                     env.has_output = true;
                     env.available = true;
+                    lck.unlock(); // again, release the lock before notifying the waiting thread.
                     env.cv.notify_one();
                 }
             }, t);

@@ -7,6 +7,7 @@
 #include "OracularSlabCache.hpp"
 #include "OracularSubsettedSlabCache.hpp"
 #include "ChunkDimensionStats.hpp"
+#include "utils.hpp"
 
 #include <vector>
 #include <type_traits>
@@ -31,7 +32,7 @@ class SparseSingleWorkspace {
 public:
     SparseSingleWorkspace(Index_ target_chunkdim, Index_ non_target_chunkdim, bool needs_value, bool needs_index) : my_number(target_chunkdim) {
         if (needs_value) {
-            my_value_pool.resize(sanisizer::product<decltype(my_value_pool.size())>(target_chunkdim, non_target_chunkdim));
+            my_value_pool.resize(sanisizer::product<I<decltype(my_value_pool.size())> >(target_chunkdim, non_target_chunkdim));
             my_values.reserve(target_chunkdim);
             auto vptr = my_value_pool.data();
             for (Index_ p = 0; p < target_chunkdim; ++p, vptr += non_target_chunkdim) {
@@ -39,7 +40,7 @@ public:
             }
         }
         if (needs_index) {
-            my_index_pool.resize(sanisizer::product<decltype(my_index_pool.size())>(target_chunkdim, non_target_chunkdim));
+            my_index_pool.resize(sanisizer::product<I<decltype(my_index_pool.size())> >(target_chunkdim, non_target_chunkdim));
             my_indices.reserve(target_chunkdim);
             auto iptr = my_index_pool.data();
             for (Index_ p = 0; p < target_chunkdim; ++p, iptr += non_target_chunkdim) {
@@ -285,7 +286,7 @@ public:
         } else {
             auto final_slab_ptr = final_slab.data;
             auto tmp_buffer_ptr = tmp_work.data();
-            typedef decltype(tmp_work.size()) Size;
+            typedef I<decltype(tmp_work.size())> Size;
 
             extract_non_target_block(
                 row,
@@ -376,7 +377,7 @@ public:
         } else {
             auto final_slab_ptr = final_slab.data;
             auto tmp_buffer_ptr = tmp_work.data();
-            typedef decltype(tmp_work.size()) Size;
+            typedef I<decltype(tmp_work.size())> Size;
 
             extract_non_target_index(
                 row,

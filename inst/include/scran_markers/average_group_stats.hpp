@@ -6,6 +6,7 @@
 #include <cstddef>
 
 #include "sanisizer/sanisizer.hpp"
+#include "quickstats/quickstats.hpp"
 
 #include "utils.hpp"
 
@@ -64,7 +65,7 @@ void average_group_stats_blockquantile(
     const std::size_t nblocks,
     const Stat_* const stats,
     std::vector<Stat_>& buffer,
-    scran_blocks::SingleQuantileVariable<Stat_, typename std::vector<Stat_>::iterator>& qcalc,
+    quickstats::SingleQuantileVariableNumber<Stat_>& qcalc,
     const std::vector<Stat_*>& out_stats 
 ) {
     for (I<decltype(ngroups)> g = 0; g < ngroups; ++g) {
@@ -79,7 +80,7 @@ void average_group_stats_blockquantile(
             }
         }
 
-        out_stats[g][gene] = qcalc(buffer.size(), buffer.begin(), buffer.end());
+        out_stats[g][gene] = qcalc(buffer.size(), buffer.data());
     }
 }
 

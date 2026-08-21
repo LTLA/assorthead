@@ -49,7 +49,7 @@ for (i in seq_len(nrow(manifest))) {
     url <- manifest$url[i]
     version <- manifest$version[i]
 
-    if (name %in% c("annoy", "hnswlib", "Eigen", "clrm1")) {
+    if (name %in% c("annoy", "hnswlib", "Eigen")) {
         next
     }
 
@@ -148,35 +148,6 @@ for (i in seq_len(nrow(manifest))) {
     unlink(license.path, recursive=TRUE)
     dir.create(license.path, recursive=TRUE)
     dir_copy(file.path(tmpname), license.path, pattern="^COPYING\\.")
-
-    vfile <- get_version_file(name)
-    write(file=vfile, version)
-})()
-
-####################################################
-
-
-(function() {
-    name <- "clrm1"
-    i <- which(manifest$name == name)
-    version <- manifest$version[i]
-    url <- manifest$url[i]
-
-    if (already_exists(name, version)) {
-        cat(name, " (", version, ") is already present\n", sep="")
-        return(NULL)
-    }
-
-    tmpname <- git_clone(name, url, version)
-    include.path <- file.path("include", name)
-    unlink(include.path, recursive=TRUE)
-    dir.create(include.path, recursive=TRUE)
-    file.copy(file.path(tmpname, "package", "src", "clrm1.hpp"), include.path)
-
-    license.path <- file.path("licenses", name)
-    unlink(license.path, recursive=TRUE)
-    dir.create(license.path, recursive=TRUE)
-    file.copy(file.path(tmpname, "LICENSE"), license.path)
 
     vfile <- get_version_file(name)
     write(file=vfile, version)

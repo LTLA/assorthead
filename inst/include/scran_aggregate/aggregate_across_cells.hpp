@@ -6,9 +6,10 @@
 #include <cstddef>
 #include <type_traits>
 #include <cassert>
+#include <optional>
 
 #include "tatami/tatami.hpp"
-#include "tatami_stats/tatami_stats.hpp"
+#include "quickstats/quickstats.hpp"
 #include "sanisizer/sanisizer.hpp"
 
 #include "utils.hpp"
@@ -28,7 +29,7 @@ struct AggregateAcrossCellsOptions {
      * Whether to compute the sum of expression within each group.
      * This option only affects the `aggregate_across_cells()` overload where an `AggregateAcrossCellsResults` object is returned.
      */
-    bool compute_sums = true;
+    bool compute_sum = true;
 
     /**
      * Whether to compute the number of detected cells within each group.
@@ -40,7 +41,7 @@ struct AggregateAcrossCellsOptions {
      * Whether to compute the median expression withine ach group.
      * This option only affects the `aggregate_across_cells()` overload where an `AggregateAcrossCellsResults` object is returned.
      */
-    bool compute_medians = false; // false by default as we usually don't need this.
+    bool compute_median = false; // false by default as we usually don't need this.
 
     /**
      * Number of threads to use. 
@@ -66,7 +67,7 @@ struct AggregateAcrossCellsBuffers {
      *
      * If this is empty, the sums for each group are not computed.
      */
-    std::vector<Sum_*> sums;
+    std::vector<Sum_*> sum;
 
     /**
      * Vector of length equal to the number of groups.
@@ -84,7 +85,7 @@ struct AggregateAcrossCellsBuffers {
      * 
      * If this is empty, the median for each group is not computed.
      */
-    std::vector<Float_*> medians;
+    std::vector<Float_*> median;
 };
 
 /**
@@ -102,9 +103,9 @@ struct AggregateAcrossCellsResults {
      * Each inner vector is of length equal to the number of genes.
      * Each entry contains the summed expression across all cells in the corresponding group for each gene.
      *
-     * If `AggregateAcrossCellsOptions::compute_sums = false`, this vector is empty.
+     * If `AggregateAcrossCellsOptions::compute_sum = false`, this vector is empty.
      */
-    std::vector<std::vector<Sum_> > sums;
+    std::vector<std::vector<Sum_> > sum;
 
     /**
      * Vector of length equal to the number of groups.
@@ -122,203 +123,313 @@ struct AggregateAcrossCellsResults {
      *
      * If `AggregateAcrossCellsOptions::compute_median = false`, this vector is empty.
      */
-    std::vector<std::vector<Float_> > medians;
+    std::vector<std::vector<Float_> > median;
 };
 
 /**
  * @cond
  */
-template<bool sparse_, typename Data_, typename Index_, typename Group_, typename Sum_, typename Detected_, typename Float_>
+template<typename Data_, typename Index_, typename Group_, typename Sum_, typename Detected_, typename Float_>
 void aggregate_across_cells_by_row(
     const tatami::Matrix<Data_, Index_>& p,
     const Group_* const group,
+    const std::size_t num_groups,
     const AggregateAcrossCellsBuffers<Sum_, Detected_, Float_>& buffers,
     const AggregateAcrossCellsOptions& options
 ) {
-    tatami::Options opt;
-    opt.sparse_ordered_index = false;
+    const bool is_sparse = p.is_sparse();
+    const auto NC = p.ncol();
 
     std::optional<std::vector<Index_> > group_sizes;
-    const auto NC = p.ncol();
-    if (!buffers.medians.empty()) {
-        group_sizes = tatami_stats::tabulate_groups(group, NC);
+    if (!buffers.median.empty()) {
+        group_sizes.emplace(sanisizer::cast<I<decltype(group_sizes->size())> >(num_groups));
+        for (Index_ c = 0; c < NC; ++c) {
+            (*group_sizes)[group[c]] += 1;
+        }
+    }
+
+    const auto nsum = buffers.sum.size();
+    if (nsum) {
+        assert(nsum == num_groups);
+    }
+
+    const auto ndetected = buffers.detected.size();
+    if (ndetected) {
+        assert(ndetected == num_groups);
+    }
+
+    const auto nmedian = buffers.median.size();
+    if (nmedian) {
+        assert(nmedian == num_groups);
     }
 
     tatami::parallelize([&](const int, const Index_ s, const Index_ l) -> void {
-        auto ext = tatami::consecutive_extractor<sparse_>(p, true, s, l, opt);
-
-        std::vector<Sum_> tmp_sums;
-        const auto nsums = buffers.sums.size();
-        if (nsums) {
-            sanisizer::resize(tmp_sums, nsums);
+        // Create buffers to reduce false sharing during summations.
+        std::optional<std::vector<Sum_> > tmp_sum;
+        if (nsum) {
+            tmp_sum.emplace(sanisizer::cast<I<decltype(tmp_sum->size())> >(nsum));
         }
 
-        std::vector<Detected_> tmp_detected;
-        const auto ndetected = buffers.detected.size();
+        std::optional<std::vector<Detected_> > tmp_detected;
         if (ndetected) {
-            sanisizer::resize(tmp_detected, ndetected);
+            tmp_detected.emplace(sanisizer::cast<I<decltype(tmp_detected->size())> >(ndetected));
         }
 
-        std::vector<std::vector<Float_> > tmp_medians;
-        const auto nmedians = buffers.medians.size();
-        if (nmedians) {
-            sanisizer::resize(tmp_medians, nmedians);
-            for (I<decltype(nmedians)> l = 0; l < nmedians; ++l) {
-                sanisizer::reserve(tmp_medians[l], (*group_sizes)[l]);
+        std::optional<std::vector<std::vector<Float_> > > tmp_median;
+        if (nmedian) {
+            tmp_median.emplace(sanisizer::cast<I<decltype(tmp_median->size())> >(nmedian));
+            for (I<decltype(nmedian)> l = 0; l < nmedian; ++l) {
+                sanisizer::reserve((*tmp_median)[l], (*group_sizes)[l]);
             }
         }
 
-        const auto NC = p.ncol();
-        auto vbuffer = tatami::create_container_of_Index_size<std::vector<Data_> >(NC);
-        auto ibuffer = [&]{
-            if constexpr(sparse_) {
-                return tatami::create_container_of_Index_size<std::vector<Index_> >(NC);
-            } else {
-                return false;
-            }
-        }();
+        if (is_sparse) {
+            tatami::Options opt;
+            opt.sparse_ordered_index = false;
+            auto ext = tatami::consecutive_extractor<true>(p, true, s, l, opt);
+            auto vbuffer = tatami::create_container_of_Index_size<std::vector<Data_> >(NC);
+            auto ibuffer = tatami::create_container_of_Index_size<std::vector<Index_> >(NC);
 
-        for (Index_ x = s, end = s + l; x < end; ++x) {
-            const auto row = [&]{
-                if constexpr(sparse_) {
-                    return ext->fetch(vbuffer.data(), ibuffer.data());
-                } else {
-                    return ext->fetch(vbuffer.data());
-                }
-            }();
+            for (Index_ x = s, end = s + l; x < end; ++x) {
+                const auto row = ext->fetch(vbuffer.data(), ibuffer.data());
 
-            if (nsums) {
-                std::fill(tmp_sums.begin(), tmp_sums.end(), 0);
-
-                if constexpr(sparse_) {
+                if (nsum) {
+                    std::fill(tmp_sum->begin(), tmp_sum->end(), 0);
                     for (Index_ j = 0; j < row.number; ++j) {
-                        tmp_sums[group[row.index[j]]] += row.value[j];
+                        (*tmp_sum)[group[row.index[j]]] += row.value[j];
                     }
-                } else {
-                    for (Index_ j = 0; j < NC; ++j) {
-                        tmp_sums[group[j]] += row[j];
+                    for (I<decltype(nsum)> l = 0; l < nsum; ++l) {
+                        buffers.sum[l][x] = (*tmp_sum)[l];
                     }
                 }
 
-                // Computing before transferring for more cache-friendliness.
-                for (I<decltype(nsums)> l = 0; l < nsums; ++l) {
-                    buffers.sums[l][x] = tmp_sums[l];
-                }
-            }
-
-            if (ndetected) {
-                std::fill(tmp_detected.begin(), tmp_detected.end(), 0);
-
-                if constexpr(sparse_) {
+                if (ndetected) {
+                    std::fill(tmp_detected->begin(), tmp_detected->end(), 0);
                     for (Index_ j = 0; j < row.number; ++j) {
-                        tmp_detected[group[row.index[j]]] += (row.value[j] > 0);
+                        (*tmp_detected)[group[row.index[j]]] += (row.value[j] > 0);
                     }
-                } else {
-                    for (Index_ j = 0; j < NC; ++j) {
-                        tmp_detected[group[j]] += (row[j] > 0);
+                    for (I<decltype(ndetected)> l = 0; l < ndetected; ++l) {
+                        buffers.detected[l][x] = (*tmp_detected)[l];
                     }
                 }
 
-                for (I<decltype(ndetected)> l = 0; l < ndetected; ++l) {
-                    buffers.detected[l][x] = tmp_detected[l];
-                }
-            }
-
-            if (nmedians) {
-                if constexpr(sparse_) {
+                if (nmedian) {
+                    quickstats::MedianOptions<Float_> medopt;
+                    medopt.placeholder = std::numeric_limits<Float_>::quiet_NaN();
                     for (Index_ j = 0; j < row.number; ++j) {
-                        tmp_medians[group[row.index[j]]].push_back(row.value[j]);
+                        (*tmp_median)[group[row.index[j]]].push_back(row.value[j]);
                     }
-                    for (I<decltype(ndetected)> l = 0; l < nmedians; ++l) {
-                        auto& current = tmp_medians[l];
-                        buffers.medians[l][x] = tatami_stats::medians::direct<Float_>(current.data(), static_cast<Index_>(current.size()), (*group_sizes)[l], false);
-                        current.clear();
-                    }
-
-                } else {
-                    for (Index_ j = 0; j < NC; ++j) {
-                        tmp_medians[group[j]].push_back(row[j]);
-                    }
-                    for (I<decltype(ndetected)> l = 0; l < nmedians; ++l) {
-                        auto& current = tmp_medians[l];
-                        buffers.medians[l][x] = tatami_stats::medians::direct(current.data(), current.size(), false);
+                    for (I<decltype(ndetected)> l = 0; l < nmedian; ++l) {
+                        auto& current = (*tmp_median)[l];
+                        buffers.median[l][x] = quickstats::median<Float_>((*group_sizes)[l], current.size(), current.data(), medopt);
                         current.clear();
                     }
                 }
             }
+
+        } else {
+            auto ext = tatami::consecutive_extractor<false>(p, true, s, l);
+            auto vbuffer = tatami::create_container_of_Index_size<std::vector<Data_> >(NC);
+            for (Index_ x = s, end = s + l; x < end; ++x) {
+                const auto row = ext->fetch(vbuffer.data());
+
+                if (nsum) {
+                    std::fill(tmp_sum->begin(), tmp_sum->end(), 0);
+                    for (Index_ j = 0; j < NC; ++j) {
+                        (*tmp_sum)[group[j]] += row[j];
+                    }
+                    for (I<decltype(nsum)> l = 0; l < nsum; ++l) {
+                        buffers.sum[l][x] = (*tmp_sum)[l];
+                    }
+                }
+
+                if (ndetected) {
+                    std::fill(tmp_detected->begin(), tmp_detected->end(), 0);
+                    for (Index_ j = 0; j < NC; ++j) {
+                        (*tmp_detected)[group[j]] += (row[j] > 0);
+                    }
+                    for (I<decltype(ndetected)> l = 0; l < ndetected; ++l) {
+                        buffers.detected[l][x] = (*tmp_detected)[l];
+                    }
+                }
+
+                if (nmedian) {
+                    quickstats::MedianOptions<Float_> medopt;
+                    medopt.placeholder = std::numeric_limits<Float_>::quiet_NaN();
+                    for (Index_ j = 0; j < NC; ++j) {
+                        (*tmp_median)[group[j]].push_back(row[j]);
+                    }
+                    for (I<decltype(ndetected)> l = 0; l < nmedian; ++l) {
+                        auto& current = (*tmp_median)[l];
+                        buffers.median[l][x] = quickstats::median<Float_>(current.size(), current.data(), medopt);
+                        current.clear();
+                    }
+                }
+            }
         }
+
     }, p.nrow(), options.num_threads);
 }
 
-template<bool sparse_, typename Data_, typename Index_, typename Group_, typename Sum_, typename Detected_, typename Float_>
+template<typename Data_, typename Index_, typename Group_, typename Sum_, typename Detected_, typename Float_>
 void aggregate_across_cells_by_column(
     const tatami::Matrix<Data_, Index_>& p,
     const Group_* const group,
+    const std::size_t num_groups,
     const AggregateAcrossCellsBuffers<Sum_, Detected_, Float_>& buffers,
     const AggregateAcrossCellsOptions& options
 ) {
-    tatami::Options opt;
-    opt.sparse_ordered_index = false;
-    assert(buffers.medians.empty());
+    const auto is_sparse = p.is_sparse();
+    const auto NR = p.nrow();
+    assert(buffers.median.empty());
+    const bool do_parallel = options.num_threads > 1;
 
-    tatami::parallelize([&](const int t, const Index_ start, const Index_ length) -> void {
-        const auto NC = p.ncol();
-        auto ext = tatami::consecutive_extractor<sparse_>(p, false, static_cast<Index_>(0), NC, start, length, opt);
-        auto vbuffer = tatami::create_container_of_Index_size<std::vector<Data_> >(length);
-        auto ibuffer = [&]{
-            if constexpr(sparse_) {
-                return tatami::create_container_of_Index_size<std::vector<Index_> >(length);
-            } else {
-                return false;
+    const auto nsum = buffers.sum.size();
+    std::optional<std::vector<std::optional<std::vector<std::vector<Float_> > > > > per_thread_sum;
+    if (nsum) {
+        assert(nsum == num_groups);
+        for (std::size_t g = 0; g < num_groups; ++g) {
+            std::fill_n(buffers.sum[g], NR, 0);
+        }
+        if (do_parallel) {
+            per_thread_sum.emplace(sanisizer::cast<I<decltype(per_thread_sum->size())> >(options.num_threads - 1));
+        }
+    }
+
+    const auto ndetected = buffers.detected.size();
+    std::optional<std::vector<std::optional<std::vector<std::vector<Detected_> > > > > per_thread_detected;
+    if (ndetected) {
+        assert(ndetected == num_groups);
+        for (std::size_t g = 0; g < num_groups; ++g) {
+            std::fill_n(buffers.detected[g], NR, 0);
+        }
+        if (do_parallel) {
+            per_thread_detected.emplace(sanisizer::cast<I<decltype(per_thread_detected->size())> >(options.num_threads - 1));
+        }
+    }
+
+    const auto nused = tatami::parallelize([&](const int t, const Index_ start, const Index_ length) -> void {
+        std::optional<std::vector<std::vector<Float_> > > tmp_sum;
+        std::optional<std::vector<Float_*> > tmp_sum_ptrs;
+        std::optional<std::vector<std::vector<Detected_> > > tmp_detected;
+        std::optional<std::vector<Detected_*> > tmp_detected_ptrs;
+
+        Float_* const * sum_ptrs = NULL;
+        Detected_* const * det_ptrs = NULL;
+        if (t > 0) {
+            if (nsum) {
+                tmp_sum.emplace(sanisizer::cast<I<decltype(tmp_sum->size())> >(num_groups));
+                tmp_sum_ptrs.emplace(sanisizer::cast<I<decltype(tmp_sum->size())> >(num_groups));
+                for (std::size_t g = 0; g < num_groups; ++g) {
+                    tatami::resize_container_to_Index_size((*tmp_sum)[g], NR);
+                    (*tmp_sum_ptrs)[g] = (*tmp_sum)[g].data();
+                }
+                sum_ptrs = tmp_sum_ptrs->data();
             }
-        }();
+            if (ndetected) {
+                tmp_detected.emplace(sanisizer::cast<I<decltype(tmp_detected->size())> >(num_groups));
+                tmp_detected_ptrs.emplace(sanisizer::cast<I<decltype(tmp_detected->size())> >(num_groups));
+                for (std::size_t g = 0; g < num_groups; ++g) {
+                    tatami::resize_container_to_Index_size((*tmp_detected)[g], NR);
+                    (*tmp_detected_ptrs)[g] = (*tmp_detected)[g].data();
+                }
+                det_ptrs = tmp_detected_ptrs->data();
+            }
 
-        const auto num_sums = buffers.sums.size();
-        auto get_sum = [&](Index_ i) -> Sum_* { return buffers.sums[i]; };
-        tatami_stats::LocalOutputBuffers<Sum_, I<decltype(get_sum)>> local_sums(t, num_sums, start, length, std::move(get_sum));
+        } else {
+            if (nsum) {
+                sum_ptrs = buffers.sum.data();
+            }
+            if (ndetected) {
+                det_ptrs = buffers.detected.data();
+            }
+        }
 
-        const auto num_detected = buffers.detected.size();
-        auto get_detected = [&](Index_ i) -> Detected_* { return buffers.detected[i]; };
-        tatami_stats::LocalOutputBuffers<Detected_, I<decltype(get_detected)>> local_detected(t, num_detected, start, length, std::move(get_detected));
+        if (is_sparse) {
+            tatami::Options opt;
+            opt.sparse_ordered_index = false;
+            auto ext = tatami::consecutive_extractor<true>(p, false, start, length, opt);
+            auto vbuffer = tatami::create_container_of_Index_size<std::vector<Data_> >(NR);
+            auto ibuffer = tatami::create_container_of_Index_size<std::vector<Index_> >(NR);
 
-        for (Index_ x = 0; x < NC; ++x) {
-            const auto current = group[x];
-
-            if constexpr(sparse_) {
+            for (Index_ x = 0; x < length; ++x) {
                 const auto col = ext->fetch(vbuffer.data(), ibuffer.data());
-                if (num_sums) {
-                    const auto cursum = local_sums.data(current);
+                const auto curgroup = group[start + x];
+
+                if (nsum) {
+                    const auto cursum = sum_ptrs[curgroup];
                     for (Index_ i = 0; i < col.number; ++i) {
-                        cursum[col.index[i] - start] += col.value[i];
-                    }
-                }
-                if (num_detected) {
-                    const auto curdetected = local_detected.data(current);
-                    for (Index_ i = 0; i < col.number; ++i) {
-                        curdetected[col.index[i] - start] += (col.value[i] > 0);
+                        cursum[col.index[i]] += col.value[i];
                     }
                 }
 
-            } else {
+                if (ndetected) {
+                    const auto curdetected = det_ptrs[curgroup];
+                    for (Index_ i = 0; i < col.number; ++i) {
+                        curdetected[col.index[i]] += (col.value[i] > 0);
+                    }
+                }
+            }
+
+        } else {
+            auto ext = tatami::consecutive_extractor<false>(p, false, start, length);
+            auto vbuffer = tatami::create_container_of_Index_size<std::vector<Data_> >(NR);
+
+            for (Index_ x = 0; x < length; ++x) {
                 const auto col = ext->fetch(vbuffer.data());
-                if (num_sums) {
-                    const auto cursum = local_sums.data(current);
-                    for (Index_ i = 0; i < length; ++i) {
+                const auto curgroup = group[start + x];
+
+                if (nsum) {
+                    const auto cursum = sum_ptrs[curgroup];
+                    for (Index_ i = 0; i < NR; ++i) {
                         cursum[i] += col[i];
                     }
                 }
-                if (num_detected) {
-                    const auto curdetected = local_detected.data(current);
-                    for (Index_ i = 0; i < length; ++i) {
+
+                if (ndetected) {
+                    const auto curdetected = det_ptrs[curgroup];
+                    for (Index_ i = 0; i < NR; ++i) {
                         curdetected[i] += (col[i] > 0);
                     }
                 }
             }
         }
 
-        local_sums.transfer();
-        local_detected.transfer();
-    }, p.nrow(), options.num_threads);
+        if (t > 0) {
+            if (nsum) {
+                (*per_thread_sum)[t - 1] = std::move(tmp_sum);
+            }
+            if (ndetected) {
+                (*per_thread_detected)[t - 1] = std::move(tmp_detected);
+            }
+        }
+    }, p.ncol(), options.num_threads);
+
+    if (do_parallel) {
+        if (nsum) {
+            for (std::size_t g = 0; g < num_groups; ++g) {
+                const auto out = buffers.sum[g];
+                for (int u = 1; u < nused; ++u) {
+                    const auto ptrs = (*((*per_thread_sum)[u - 1]))[g];
+                    for (Index_ r = 0; r < NR; ++r) {
+                        out[r] += ptrs[r];
+                    }
+                }
+            }
+        }
+
+        if (ndetected) {
+            for (std::size_t g = 0; g < num_groups; ++g) {
+                const auto out = buffers.detected[g];
+                for (int u = 1; u < nused; ++u) {
+                    const auto ptrs = (*((*per_thread_detected)[u - 1]))[g];
+                    for (Index_ r = 0; r < NR; ++r) {
+                        out[r] += ptrs[r];
+                    }
+                }
+            }
+        }
+    }
 }
 /**
  * @endcond
@@ -342,7 +453,8 @@ void aggregate_across_cells_by_column(
  * @param input The input matrix, usually containing non-negative counts.
  * Rows are features and columns are cells.
  * @param[in] group Pointer to an array of length equal to the number of columns of `input`, containing the assigned group for each cell.
- * All entries should be integers in \f$[0, N)\f$ where \f$N\f$ is the number of unique groups.
+ * All entries should be integers in `[0, num_groups)`.
+ * @param num_groups Number of groups.
  * @param[out] buffers Pre-allocated buffers in which to store the computed statistics. 
  * @param options Further options.
  */
@@ -350,21 +462,14 @@ template<typename Data_, typename Index_, typename Group_, typename Sum_, typena
 void aggregate_across_cells(
     const tatami::Matrix<Data_, Index_>& input,
     const Group_* const group,
+    const std::size_t num_groups,
     const AggregateAcrossCellsBuffers<Sum_, Detected_, Float_>& buffers,
     const AggregateAcrossCellsOptions& options
 ) {
-    if (input.prefer_rows() || !buffers.medians.empty()) {
-        if (input.sparse()) {
-            aggregate_across_cells_by_row<true>(input, group, buffers, options);
-        } else {
-            aggregate_across_cells_by_row<false>(input, group, buffers, options);
-        }
+    if (input.prefer_rows() || !buffers.median.empty()) {
+        aggregate_across_cells_by_row(input, group, num_groups, buffers, options);
     } else {
-        if (input.sparse()) {
-            aggregate_across_cells_by_column<true>(input, group, buffers, options);
-        } else {
-            aggregate_across_cells_by_column<false>(input, group, buffers, options);
-        }
+        aggregate_across_cells_by_column(input, group, num_groups, buffers, options);
     }
 } 
 
@@ -383,7 +488,8 @@ void aggregate_across_cells(
  * @param input The input matrix, usually containing non-negative counts.
  * Rows are features and columns are cells.
  * @param[in] group Pointer to an array of length equal to the number of columns of `input`, containing the assigned group for each cell.
- * All entries should be integers in \f$[0, N)\f$ where \f$N\f$ is the number of unique groups.
+ * All entries should be integers in `[0, num_groups)`.
+ * @param num_groups Number of groups.
  * @param options Further options.
  *
  * @return Results of the aggregation, where the available statistics depend on `AggregateAcrossCellsOptions`.
@@ -392,39 +498,32 @@ template<typename Sum_ = double, typename Detected_ = int, typename Float_ = dou
 AggregateAcrossCellsResults<Sum_, Detected_, Float_> aggregate_across_cells(
     const tatami::Matrix<Data_, Index_>& input,
     const Group_* const group,
+    const std::size_t num_groups,
     const AggregateAcrossCellsOptions& options
 ) {
     const Index_ NR = input.nrow();
-    const Index_ NC = input.ncol();
-    const std::size_t ngroups = [&]{
-        if (NC) {
-            return sanisizer::sum<std::size_t>(*std::max_element(group, group + NC), 1);
-        } else {
-            return static_cast<std::size_t>(0);
-        }
-    }();
 
     AggregateAcrossCellsResults<Sum_, Detected_, Float_> output;
     AggregateAcrossCellsBuffers<Sum_, Detected_, Float_> buffers;
 
-    if (options.compute_sums) {
-        sanisizer::resize(output.sums, ngroups);
-        sanisizer::resize(buffers.sums, ngroups);
-        for (I<decltype(ngroups)> l = 0; l < ngroups; ++l) {
-            auto& cursum = output.sums[l];
+    if (options.compute_sum) {
+        sanisizer::resize(output.sum, num_groups);
+        sanisizer::resize(buffers.sum, num_groups);
+        for (I<decltype(num_groups)> l = 0; l < num_groups; ++l) {
+            auto& cursum = output.sum[l];
             tatami::resize_container_to_Index_size<I<decltype(cursum)>>(cursum, NR
 #ifdef SCRAN_AGGREGATE_TEST_INIT
                 , SCRAN_AGGREGATE_TEST_INIT
 #endif
             );
-            buffers.sums[l] = cursum.data();
+            buffers.sum[l] = cursum.data();
         }
     }
 
     if (options.compute_detected) {
-        sanisizer::resize(output.detected, ngroups);
-        sanisizer::resize(buffers.detected, ngroups);
-        for (I<decltype(ngroups)> l = 0; l < ngroups; ++l) {
+        sanisizer::resize(output.detected, num_groups);
+        sanisizer::resize(buffers.detected, num_groups);
+        for (I<decltype(num_groups)> l = 0; l < num_groups; ++l) {
             auto& curdet = output.detected[l];
             tatami::resize_container_to_Index_size<I<decltype(curdet)>>(curdet, NR
 #ifdef SCRAN_AGGREGATE_TEST_INIT
@@ -435,22 +534,22 @@ AggregateAcrossCellsResults<Sum_, Detected_, Float_> aggregate_across_cells(
         }
     }
 
-    if (options.compute_medians) {
-        sanisizer::resize(output.medians, ngroups);
-        sanisizer::resize(buffers.medians, ngroups);
-        for (I<decltype(ngroups)> l = 0; l < ngroups; ++l) {
-            auto& curdet = output.medians[l];
-            tatami::resize_container_to_Index_size<I<decltype(curdet)>>(curdet, NR
+    if (options.compute_median) {
+        sanisizer::resize(output.median, num_groups);
+        sanisizer::resize(buffers.median, num_groups);
+        for (I<decltype(num_groups)> l = 0; l < num_groups; ++l) {
+            auto& curmed = output.median[l];
+            tatami::resize_container_to_Index_size<I<decltype(curmed)>>(curmed, NR
 #ifdef SCRAN_AGGREGATE_TEST_INIT
                 , SCRAN_AGGREGATE_TEST_INIT
 #endif
             );
-            buffers.medians[l] = curdet.data();
+            buffers.median[l] = curmed.data();
         }
     }
 
 
-    aggregate_across_cells(input, group, buffers, options);
+    aggregate_across_cells(input, group, num_groups, buffers, options);
     return output;
 } 
 

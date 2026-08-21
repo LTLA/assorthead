@@ -304,8 +304,8 @@ public:
                 std::lock_guard ilck(init_mut);
                 initialized = true;
                 my_sync = &sync;
-                init_cv.notify_one();
             }
+            init_cv.notify_one(); // only notify after lock is released for better perf.
 
             while (true) {
                 while (!sync.ready.load(std::memory_order_acquire)) {

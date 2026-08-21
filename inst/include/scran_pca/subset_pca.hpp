@@ -40,30 +40,42 @@ std::vector<Index_> invert_subset(const Index_ total, const SubsetVector_& subse
     return output;
 }
 
-template<typename Value_, typename Index_, typename EigenMatrix_, typename Scalar_>
-void multiply_by_right_singular_vectors(
-    const tatami::Matrix<Value_, Index_>& mat,
-    const EigenMatrix_& rhs_vectors,
-    std::vector<Scalar_>& output,
-    std::vector<Scalar_*>& out_ptrs,
-    int num_threads
-) {
+template<typename Value_, typename Index_, typename EigenMatrix_>
+std::vector<typename EigenMatrix_::Scalar> multiply_by_right_singular_vectors(const tatami::Matrix<Value_, Index_>& mat, const EigenMatrix_& rhs_vectors, int num_threads) {
     const auto num_features = mat.nrow();
     const auto num_cells = mat.ncol();
     const auto rank = rhs_vectors.cols();
-    static_assert(!EigenMatrix_::IsRowMajor);
 
-    output.resize(sanisizer::product<I<decltype(output.size())> >(num_features, rank));
-    sanisizer::resize(out_ptrs, rank);
-    auto rhs_ptrs = sanisizer::create<std::vector<const typename EigenMatrix_::Scalar*> >(rank);
-    for (I<decltype(rank)> r = 0; r < rank; ++r) {
-        rhs_ptrs[r] = rhs_vectors.data() + sanisizer::product_unsafe<std::size_t>(r, num_cells);
-        out_ptrs[r] = output.data() + sanisizer::product_unsafe<std::size_t>(r, num_features);
+    typedef typename EigenMatrix_::Scalar Scalar;
+    std::vector<Scalar> output(sanisizer::product<typename std::vector<Scalar>::size_type>(num_features, rank));
+    static_assert(!EigenMatrix_::IsRowMajor);
+    auto get_right = [&](I<decltype(rank)> r) -> auto {
+        return rhs_vectors.data() + sanisizer::product_unsafe<std::size_t>(r, num_cells);
+    };
+
+    if (mat.sparse()) {
+        if (mat.prefer_rows()) {
+            tatami_mult::MultiplySparseRowWithDenseColumnMatrixToColumnOutputOptions options;
+            options.num_threads = num_threads;
+            tatami_mult::multiply_sparse_row_with_dense_column_matrix_to_column_output(mat, rank, get_right, output.data(), options);
+        } else {
+            tatami_mult::MultiplySparseColumnWithDenseColumnMatrixToColumnOutputOptions options;
+            options.num_threads = num_threads;
+            tatami_mult::multiply_sparse_column_with_dense_column_matrix_to_column_output(mat, rank, get_right, output.data(), options);
+        }
+    } else {
+        if (mat.prefer_rows()) {
+            tatami_mult::MultiplyDenseRowWithDenseColumnMatrixToColumnOutputOptions options;
+            options.num_threads = num_threads;
+            tatami_mult::multiply_dense_row_with_dense_column_matrix_to_column_output(mat, rank, get_right, output.data(), options);
+        } else {
+            tatami_mult::MultiplyDenseColumnWithDenseColumnMatrixToColumnOutputOptions options;
+            options.num_threads = num_threads;
+            tatami_mult::multiply_dense_column_with_dense_column_matrix_to_column_output(mat, rank, get_right, output.data(), options);
+        }
     }
 
-    tatami_mult::Options opt;
-    opt.num_threads = num_threads;
-    tatami_mult::multiply(mat, rhs_ptrs, out_ptrs, opt);
+    return output;
 }
 
 template<class SubsetVector_, class EigenVector_>
@@ -173,29 +185,23 @@ void subset_pca(
             const auto num_inv = inv_mat.nrow();
             auto inv_center = sanisizer::create<EigenVector_>(num_inv);
             auto inv_scale = sanisizer::create<EigenVector_>(num_inv);
-            if (inv_mat.sparse()) {
-                compute_row_means_and_variances<true>(inv_mat, options.num_threads, inv_center, inv_scale);
-            } else {
-                compute_row_means_and_variances<false>(inv_mat, options.num_threads, inv_center, inv_scale);
-            }
+            compute_row_means_and_variances(inv_mat, options.num_threads, inv_center, inv_scale);
             process_scale_vector(options.scale, inv_scale);
 
-            std::vector<typename EigenVector_::Scalar> product;
-            std::vector<typename EigenVector_::Scalar*> product_ptrs;
-            multiply_by_right_singular_vectors(
-                inv_mat,
-                rhs_vectors,
-                product,
-                product_ptrs,
-                options.num_threads
-            );
-
+            const auto product = multiply_by_right_singular_vectors(inv_mat, rhs_vectors, options.num_threads);
             const auto rank = rhs_vectors.cols();
             final_rotation.resize(sanisizer::cast<Eigen::Index>(full_size), rank);
             for (I<decltype(rank)> r = 0; r < rank; ++r) {
-                const auto curshift = rhs_vectors.col(r).sum();
                 const auto varexp = sing_vals.coeff(r);
-                const auto optr = product_ptrs[r];
+                if (varexp == 0) {
+                    for (I<decltype(num_inv)> i = 0; i < num_inv; ++i) {
+                        final_rotation.coeffRef(inv_subset[i], r) = 0;
+                    }
+                    continue;
+                }
+
+                const auto curshift = rhs_vectors.col(r).sum();
+                const auto optr = product.data() + sanisizer::product_unsafe<std::size_t>(r, num_inv);
                 const auto compute = [&](I<decltype(num_inv)> i) -> typename EigenVector_::Scalar {
                     return (optr[i] - curshift * inv_center.coeff(i)) / varexp;
                 };
@@ -222,8 +228,8 @@ void subset_pca(
     output.center.swap(final_center);
 
     if (options.scale) {
-        expand_into_vector(subset, output.scale, final_scale);
-        output.scale.swap(final_scale);
+        expand_into_vector(subset, *(output.scale), final_scale);
+        output.scale->swap(final_scale);
     }
 
     expand_into_matrix_rows(subset, output.rotation, final_rotation);
@@ -305,7 +311,8 @@ using SubsetPcaBlockedResults = BlockedPcaResults<EigenMatrix_, EigenVector_>;
  * This should be sorted and unique.
  * @param[in] block Pointer to an array of length equal to the number of cells, 
  * containing the block assignment for each cell. 
- * Each assignment should be an integer in \f$[0, N)\f$ where \f$N\f$ is the number of blocks.
+ * Each assignment should be a non-negative integer that is less than `num_blocks`.
+ * @param num_blocks Number of blocks in `block`.
  * @param options Further options.
  * @param[out] output On output, the results of the PCA on `mat`.
  * This can be re-used across multiple calls to `subset_pca_blocked()`. 
@@ -314,12 +321,16 @@ template<typename Value_, typename Index_, class SubsetVector_, typename Block_,
 void subset_pca_blocked(
     const tatami::Matrix<Value_, Index_>& mat,
     const SubsetVector_& subset,
-    const Block_* block, 
+    const Block_* block,
+    const std::size_t num_blocks,
     const SubsetPcaBlockedOptions<EigenVector_>& options,
     SubsetPcaBlockedResults<EigenMatrix_, EigenVector_>& output
 ) {
     const auto full_size = mat.nrow();
-    EigenMatrix_ final_center;
+    EigenMatrix_ final_center(
+        sanisizer::cast<I<decltype(std::declval<EigenMatrix_>().rows())> >(num_blocks),
+        sanisizer::cast<I<decltype(std::declval<EigenMatrix_>().cols())> >(full_size)
+    );
     auto final_scale = sanisizer::create<EigenVector_>(full_size);
     EigenMatrix_ final_rotation;
 
@@ -329,68 +340,61 @@ void subset_pca_blocked(
     blocked_pca_internal<Value_, Index_, Block_, EigenMatrix_, EigenVector_>(
         sub_mat,
         block,
+        num_blocks,
         options,
         output,
         [&](
-            const BlockingDetails<Index_, EigenVector_>& block_details,
+            const std::size_t num_blocks,
+            const std::vector<Index_>& block_sizes,
+            const std::optional<BlockingDetails<EigenVector_> >& block_details,
             const EigenMatrix_& rhs_vectors,
             const EigenVector_& sing_vals
         ) -> void {
-            final_center.resize(
-                sanisizer::cast<I<decltype(final_center.rows())> >(block_details.block_size.size()),
-                sanisizer::cast<I<decltype(final_center.cols())> >(full_size)
-            );
-            final_rotation.resize(
-                sanisizer::cast<I<decltype(final_rotation.rows())> >(full_size),
-                rhs_vectors.cols()
-            ); 
-
             auto inv_subset = invert_subset(mat.nrow(), subset);
             // Don't move inv_subset into the constructor, we'll need it later.
             tatami::DelayedSubsetSortedUnique<Value_, Index_, I<decltype(inv_subset)> > inv_mat(tatami::wrap_shared_ptr(&mat), inv_subset, true);
 
             const auto num_cells = inv_mat.ncol();
             const auto num_inv = inv_mat.nrow();
-            const auto num_blocks = block_details.block_size.size();
-            EigenMatrix_ inv_center(
-                sanisizer::cast<Eigen::Index>(num_blocks),
-                sanisizer::cast<Eigen::Index>(num_inv)
-            );
+            EigenMatrix_ inv_center;
             auto inv_scale = sanisizer::create<EigenVector_>(num_inv);
-            compute_blockwise_mean_and_variance_tatami(inv_mat, block, block_details, inv_center, inv_scale, options.num_threads);
+            compute_blockwise_mean_and_variance_tatami(inv_mat, block, num_blocks, block_sizes, block_details, inv_center, inv_scale, options.num_threads);
             process_scale_vector(options.scale, inv_scale);
 
             // Need to adjust the RHS singular vector matrix to mimic weighting of the input matrix.
             const EigenMatrix_* rhs_ptr = NULL;
             std::optional<EigenMatrix_> weighted_rhs;
-            if (block_details.weighted) {
+            if (block_details.has_value()) {
                 weighted_rhs = rhs_vectors;
-                weighted_rhs->array().colwise() *= block_details.expanded_weights.array();
+                weighted_rhs->array().colwise() *= block_details->expanded_weights.array();
                 rhs_ptr = &(*weighted_rhs);
             } else {
                 rhs_ptr = &rhs_vectors;
             }
 
-            std::vector<typename EigenVector_::Scalar> product;
-            std::vector<typename EigenVector_::Scalar*> out_ptrs;
-            multiply_by_right_singular_vectors(
-                inv_mat,
-                *rhs_ptr,
-                product,
-                out_ptrs,
-                options.num_threads
-            );
+            const auto product = multiply_by_right_singular_vectors(inv_mat, *rhs_ptr, options.num_threads);
+            final_rotation.resize(
+                sanisizer::cast<I<decltype(final_rotation.rows())> >(full_size),
+                rhs_vectors.cols()
+            ); 
 
             const auto rank = rhs_vectors.cols();
             auto shift_buffer = sanisizer::create<EigenVector_>(num_blocks);
             for (I<decltype(rank)> r = 0; r < rank; ++r) {
+                const auto varexp = sing_vals.coeff(r);
+                if (varexp == 0) {
+                    for (I<decltype(num_inv)> i = 0; i < num_inv; ++i) {
+                        final_rotation.coeffRef(inv_subset[i], r) = 0;
+                    }
+                    continue;
+                }
+
                 std::fill(shift_buffer.begin(), shift_buffer.end(), 0);
                 for (I<decltype(num_cells)> i = 0; i < num_cells; ++i) {
                     shift_buffer.coeffRef(block[i]) += rhs_vectors.coeff(i, r);
                 }
 
-                const auto varexp = sing_vals.coeff(r);
-                const auto optr = out_ptrs[r];
+                const auto optr = product.data() + sanisizer::product_unsafe<std::size_t>(r, num_inv);
                 const auto compute = [&](I<decltype(num_inv)> i) -> typename EigenVector_::Scalar {
                     typename EigenVector_::Scalar curshift = 0;
                     for (I<decltype(num_blocks)> b = 0; b < num_blocks; ++b) {
@@ -421,8 +425,8 @@ void subset_pca_blocked(
     output.center.swap(final_center);
 
     if (options.scale) {
-        expand_into_vector(subset, output.scale, final_scale);
-        output.scale.swap(final_scale);
+        expand_into_vector(subset, (*output.scale), final_scale);
+        output.scale->swap(final_scale);
     }
 
     expand_into_matrix_rows(subset, output.rotation, final_rotation);
@@ -447,7 +451,8 @@ void subset_pca_blocked(
  * This should be sorted and unique.
  * @param[in] block Pointer to an array of length equal to the number of cells, 
  * containing the block assignment for each cell. 
- * Each assignment should be an integer in \f$[0, N)\f$ where \f$N\f$ is the number of blocks.
+ * Each assignment should be a non-negative integer that is less than `num_blocks`.
+ * @param num_blocks Number of blocks in `block`.
  * @param options Further options.
  *
  * @return Results of the blocked and subsetted PCA. 
@@ -457,10 +462,11 @@ SubsetPcaBlockedResults<EigenMatrix_, EigenVector_>  subset_pca_blocked(
     const tatami::Matrix<Value_, Index_>& mat,
     const SubsetVector_& subset,
     const Block_* block, 
+    const std::size_t num_blocks,
     const SubsetPcaBlockedOptions<EigenVector_>& options
 ) {
     SubsetPcaBlockedResults<EigenMatrix_, EigenVector_> output;
-    subset_pca_blocked(mat, subset, block, options, output);
+    subset_pca_blocked(mat, subset, block, num_blocks, options, output);
     return output;
 }
 

@@ -7,7 +7,7 @@
 #include <type_traits>
 #include <cstddef>
 
-#include "tatami_stats/tatami_stats.hpp"
+#include "sanisizer/sanisizer.hpp"
 
 #include "sanitize_size_factors.hpp"
 #include "utils.hpp"
@@ -46,21 +46,22 @@ struct ComputeMeanSizeFactorOptions {
  *
  * @tparam SizeFactor_ Floating-point type of the size factors.
  *
- * @param num Number of cells.
- * @param[in] size_factors Pointer to an array of length `num`, containing the size factor for each cell.
+ * @param num_cells Number of cells.
+ * @param[in] size_factors Pointer to an array of length `num_cells`, containing the size factor for each cell.
  * @param options Further options.
  *
  * @return The mean size factor.
+ * If `num_cells = 0` or there are no valid size factors, a value of zero is returned.
  */
 template<typename SizeFactor_>
-SizeFactor_ compute_mean_size_factor(const std::size_t num, const SizeFactor_* const size_factors, const ComputeMeanSizeFactorOptions& options) {
+SizeFactor_ compute_mean_size_factor(const std::size_t num_cells, const SizeFactor_* const size_factors, const ComputeMeanSizeFactorOptions& options) {
     static_assert(std::is_floating_point<SizeFactor_>::value);
     SizeFactor_ mean = 0;
-    I<decltype(num)> denom = 0;
+    I<decltype(num_cells)> denom = 0;
 
     if (options.ignore_invalid) {
         SizeFactorDiagnostics tmpdiag;
-        for (I<decltype(num)> i = 0; i < num; ++i) {
+        for (I<decltype(num_cells)> i = 0; i < num_cells; ++i) {
             const auto val = size_factors[i];
             if (!internal::is_invalid(val, tmpdiag)) {
                 mean += val;
@@ -72,8 +73,8 @@ SizeFactor_ compute_mean_size_factor(const std::size_t num, const SizeFactor_* c
         }
 
     } else {
-        mean = std::accumulate(size_factors, size_factors + num, static_cast<SizeFactor_>(0));
-        denom = num;
+        mean = std::accumulate(size_factors, size_factors + num_cells, static_cast<SizeFactor_>(0));
+        denom = num_cells;
     }
 
     if (denom) {
@@ -89,34 +90,36 @@ SizeFactor_ compute_mean_size_factor(const std::size_t num, const SizeFactor_* c
  * @tparam SizeFactor_ Floating-point type of the size factors.
  * @tparam Block_ Integer type of the block assignments.
  *
- * @param num Number of cells.
- * @param[in] size_factors Pointer to an array of length `num`, containing the size factor for each cell.
- * @param[in] block Pointer to an array of length `num`, containing the block assignment for each cell.
+ * @param num_cells Number of cells.
+ * @param[in] size_factors Pointer to an array of length `num_cells`, containing the size factor for each cell.
+ * @param[in] block Pointer to an array of length `num_cells`, containing the block assignment for each cell.
  * Each assignment should be an integer in \f$[0, N)\f$ where \f$N\f$ is the total number of blocks.
+ * @param num_blocks Number of blocks, i.e., \f$N\f$.
  * @param options Further options.
  *
  * @return Vector of length \f$N\f$ containing the mean size factor for each block.
+ * For empty blocks or blocks with no valid size factors, the mean is set to 0.
  */
 template<typename SizeFactor_, typename Block_>
 std::vector<SizeFactor_> compute_mean_size_factor_blocked(
-    const std::size_t num,
+    const std::size_t num_cells,
     const SizeFactor_* const size_factors,
     const Block_* const block,
+    const std::size_t num_blocks,
     const ComputeMeanSizeFactorOptions& options
 ) {
     static_assert(std::is_floating_point<SizeFactor_>::value);
-    const auto ngroups = tatami_stats::total_groups(block, num);
-    auto group_mean = sanisizer::create<std::vector<SizeFactor_> >(ngroups);
-    auto group_num = sanisizer::create<std::vector<I<decltype(num)>> >(ngroups);
+    auto block_mean = sanisizer::create<std::vector<SizeFactor_> >(num_blocks);
+    auto block_num = sanisizer::create<std::vector<I<decltype(num_cells)> > >(num_blocks);
 
     if (options.ignore_invalid) {
         SizeFactorDiagnostics tmpdiag;
-        for (I<decltype(num)> i = 0; i < num; ++i) {
+        for (I<decltype(num_cells)> i = 0; i < num_cells; ++i) {
             const auto val = size_factors[i];
             if (!internal::is_invalid(val, tmpdiag)) {
                 const auto b = block[i];
-                group_mean[b] += val;
-                ++(group_num[b]);
+                block_mean[b] += val;
+                ++(block_num[b]);
             }
         }
         if (options.diagnostics != NULL) {
@@ -124,20 +127,20 @@ std::vector<SizeFactor_> compute_mean_size_factor_blocked(
         }
 
     } else {
-        for (I<decltype(num)> i = 0; i < num; ++i) {
+        for (I<decltype(num_cells)> i = 0; i < num_cells; ++i) {
             const auto b = block[i];
-            group_mean[b] += size_factors[i];
-            ++(group_num[b]);
+            block_mean[b] += size_factors[i];
+            ++(block_num[b]);
         }
     }
 
-    for (I<decltype(ngroups)> g = 0; g < ngroups; ++g) {
-        if (group_num[g]) {
-            group_mean[g] /= group_num[g];
+    for (I<decltype(num_blocks)> g = 0; g < num_blocks; ++g) {
+        if (block_num[g]) {
+            block_mean[g] /= block_num[g];
         }
     }
 
-    return group_mean;
+    return block_mean;
 }
 
 /**
@@ -182,8 +185,8 @@ struct CenterSizeFactorsOptions {
  * 
  * @tparam SizeFactor_ Floating-point type of the size factors.
  *
- * @param num Number of cells.
- * @param[in,out] size_factors Pointer to an array of length `num`, containing the size factor for each cell.
+ * @param num_cells Number of cells.
+ * @param[in,out] size_factors Pointer to an array of length `num_cells`, containing the size factor for each cell.
  * On output, this contains the centered size factors, scaled such that their mean is equal to `CenterSizeFactorsOptions::center`.
  * If the mean of the input size factors is zero, no scaling is performed.
  * @param options Further options.
@@ -191,18 +194,18 @@ struct CenterSizeFactorsOptions {
  * @return The mean of the input size factors (if `CenterSizeFactorsOptions::report_final = false`) or the mean of the size factors after centering (otherwise).
  */
 template<typename SizeFactor_>
-SizeFactor_ center_size_factors(const std::size_t num, SizeFactor_* const size_factors, const CenterSizeFactorsOptions& options) {
+SizeFactor_ center_size_factors(const std::size_t num_cells, SizeFactor_* const size_factors, const CenterSizeFactorsOptions& options) {
     ComputeMeanSizeFactorOptions copt;
     copt.ignore_invalid = options.ignore_invalid;
     copt.diagnostics = options.diagnostics;
-    const auto mean = compute_mean_size_factor(num, size_factors, copt);
+    const auto mean = compute_mean_size_factor(num_cells, size_factors, copt);
 
     if (mean == 0) {
         return 0;
     }
 
     const SizeFactor_ mult = options.center / mean;
-    for (I<decltype(num)> i = 0; i < num; ++i){
+    for (I<decltype(num_cells)> i = 0; i < num_cells; ++i){
         size_factors[i] *= mult;
     }
 
@@ -281,33 +284,34 @@ struct CenterSizeFactorsBlockedOptions {
  * @tparam SizeFactor_ Floating-point type of the size factors.
  * @tparam Block_ Integer type of the block assignments.
  *
- * @param num Number of cells.
- * @param[in,out] size_factors Pointer to an array of length `num`, containing the size factor for each cell.
+ * @param num_cells Number of cells.
+ * @param[in,out] size_factors Pointer to an array of length `num_cells`, containing the size factor for each cell.
  * On output, this contains size factors that are centered according to `CenterSizeFactorsOptions::block_mode`.
- * @param[in] block Pointer to an array of length `num`, containing the block assignment for each cell.
+ * @param[in] block Pointer to an array of length `num_cells`, containing the block assignment for each cell.
  * Each assignment should be an integer in \f$[0, N)\f$ where \f$N\f$ is the total number of blocks.
+ * @param num_blocks Total number of blocks, i.e., \f$N\f$.
  * @param options Further options.
  *
  * @return Vector of length \f$N\f$ containing the mean size factor for each block, used to scale `size_factors` on output.
  */
 template<typename SizeFactor_, typename Block_>
 std::vector<SizeFactor_> center_size_factors_blocked(
-    const std::size_t num,
+    const std::size_t num_cells,
     SizeFactor_* const size_factors,
     const Block_* const block,
+    const std::size_t num_blocks,
     const CenterSizeFactorsBlockedOptions& options
 ) {
     ComputeMeanSizeFactorOptions copt;
     copt.ignore_invalid = options.ignore_invalid;
     copt.diagnostics = options.diagnostics;
-    auto group_mean = compute_mean_size_factor_blocked(num, size_factors, block, copt);
-    const auto ngroups = group_mean.size();
+    auto block_mean = compute_mean_size_factor_blocked(num_cells, size_factors, block, num_blocks, copt);
 
     if (options.block_mode == CenterBlockMode::PER_BLOCK) {
         std::vector<SizeFactor_> fac;
-        fac.reserve(ngroups);
-        for (I<decltype(ngroups)> g = 0; g < ngroups; ++g) {
-            const auto gm = group_mean[g];
+        fac.reserve(num_blocks);
+        for (I<decltype(num_blocks)> g = 0; g < num_blocks; ++g) {
+            const auto gm = block_mean[g];
             if (gm) {
                 fac.emplace_back(1 / gm);
             } else {
@@ -315,25 +319,25 @@ std::vector<SizeFactor_> center_size_factors_blocked(
             }
         }
 
-        for (I<decltype(num)> i = 0; i < num; ++i) {
+        for (I<decltype(num_cells)> i = 0; i < num_cells; ++i) {
             size_factors[i] *= fac[block[i]];
         }
 
         if (options.report_final) {
-            for (auto& gm : group_mean) {
+            for (auto& gm : block_mean) {
                 if (gm) {
                     gm = 1;
                 }
             }
         }
 
-        return group_mean;
+        return block_mean;
 
     } else if (options.block_mode == CenterBlockMode::LOWEST) {
         SizeFactor_ min = 0;
         bool found = false;
-        for (const auto m : group_mean) {
-            // Ignore groups with means of zeros, either because they're full
+        for (const auto m : block_mean) {
+            // Ignore blocks with means of zeros, either because they're full
             // of zeros themselves or they have no cells associated with them.
             if (m) {
                 if (!found || m < min) {
@@ -345,33 +349,32 @@ std::vector<SizeFactor_> center_size_factors_blocked(
 
         if (min) {
             const SizeFactor_ mult = 1 / min;
-            for (I<decltype(num)> i = 0; i < num; ++i) {
+            for (I<decltype(num_cells)> i = 0; i < num_cells; ++i) {
                 size_factors[i] *= mult;
             }
 
             if (options.report_final) {
-                for (auto& gm : group_mean) {
+                for (auto& gm : block_mean) {
                     gm /= min;
                 }
             }
         }
 
-        return group_mean;
+        return block_mean;
 
     } else { // i.e., options.block_mode == CenterBlockMode::CUSTOM
         if (!options.custom_centers.has_value()) {
             throw std::runtime_error("'custom_centers' should be set for custom block centers"); 
         }
         const auto& custom = *(options.custom_centers);
-        const auto ngroups = group_mean.size();
-        if (custom.size() != ngroups) {
-            throw std::runtime_error("length of 'custom_centers' should be equal to the number of groups"); 
+        if (custom.size() != num_blocks) {
+            throw std::runtime_error("length of 'custom_centers' should be equal to the number of blocks"); 
         }
 
         std::vector<SizeFactor_> fac;
-        fac.reserve(ngroups);
-        for (I<decltype(ngroups)> g = 0; g < ngroups; ++g) {
-            const auto gm = group_mean[g];
+        fac.reserve(num_blocks);
+        for (I<decltype(num_blocks)> g = 0; g < num_blocks; ++g) {
+            const auto gm = block_mean[g];
             if (gm) {
                 fac.emplace_back(custom[g] / gm);
             } else {
@@ -379,20 +382,20 @@ std::vector<SizeFactor_> center_size_factors_blocked(
             }
         }
 
-        for (I<decltype(num)> i = 0; i < num; ++i) {
+        for (I<decltype(num_cells)> i = 0; i < num_cells; ++i) {
             size_factors[i] *= fac[block[i]];
         }
 
         if (options.report_final) {
-            for (I<decltype(ngroups)> g = 0; g < ngroups; ++g) {
-                auto& gm = group_mean[g];
+            for (I<decltype(num_blocks)> g = 0; g < num_blocks; ++g) {
+                auto& gm = block_mean[g];
                 if (gm) {
                     gm = custom[g];
                 }
             }
         }
 
-        return group_mean;
+        return block_mean;
     }
 }
 

@@ -1,6 +1,8 @@
 #ifndef TATAMI_CHUNKED_LRU_SLAB_CACHE_HPP
 #define TATAMI_CHUNKED_LRU_SLAB_CACHE_HPP
 
+#include "utils.hpp"
+
 #include <unordered_map>
 #include <list>
 #include <cstddef>
@@ -40,11 +42,11 @@ private:
 
 public:
     /**
-     * @tparam MaxSlabs_ Integer type of the maximum number of slabs.
+     * @tparam Index_ Integer type of the maximum number of slabs, see the template parameter of the same name in `SlabCacheStats`.
      * @param max_slabs Maximum number of slabs to store in the cache.
      */
-    template<typename MaxSlabs_>
-    LruSlabCache(MaxSlabs_ max_slabs) : my_max_slabs(sanisizer::cast<decltype(my_max_slabs)>(max_slabs)) {}
+    template<typename Index_>
+    LruSlabCache(Index_ max_slabs) : my_max_slabs(sanisizer::cast<I<decltype(my_max_slabs)> >(max_slabs)) {}
 
     /**
      * Deleted as the cache holds persistent iterators.
@@ -126,7 +128,7 @@ public:
 public:
     /**
      * @return Maximum number of slabs in the cache.
-     * The type is an unsigned integer defined in `std::list::size_type`.
+     * The type is an unsigned integer of the same type as that returned by `get_num_slabs()`.
      */
     auto get_max_slabs() const {
         return my_max_slabs;
@@ -134,7 +136,7 @@ public:
 
     /**
      * @return Number of slabs currently in the cache.
-     * The type is an unsigned integer defined in `std::list::size_type`.
+     * The type is an unsigned integer of the same type as that returned by `get_max_slabs()`. 
      */
     auto get_num_slabs() const {
         return my_cache_data.size();

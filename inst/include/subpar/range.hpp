@@ -24,7 +24,7 @@ namespace subpar {
  *
  * It is not strictly necessary to run `sanitize_num_workers()` prior to `parallelize_range()` as the latter will automatically behave correctly with all inputs.
  * However, on occasion, applications need a better upper bound on the number of workers, e.g., to pre-allocate expensive per-worker data structures.
- * In such cases, the return value of `sanitize_num_workers()` can be used by the application before being passed to `parallelize_range()`.
+ * This upper bound can be obtained by `sanitize_num_workers()` to refine the number of workers prior to calling `parallelize_range()`.
  *
  * @tparam Task_ Integer type for the number of tasks.
  *
@@ -33,49 +33,70 @@ namespace subpar {
  * @param num_tasks Number of tasks.
  * This should be a non-negative integer.
  *
- * @return A more suitable number of workers.
- * Negative or zero `num_workers` are converted to 1 if `num_tasks > 0`, otherwise zero.
- * If `num_workers` is greater than `num_tasks`, the former is set to the latter.
+ * @return A more suitable number of workers, possibly zero.
+ * The return value of `sanitize_num_workers()` will be an upper bound to the return value of `parallelize_range()` with the same `num_workers` and `num_tasks`.
  */
 template<typename Task_>
 int sanitize_num_workers(const int num_workers, const Task_ num_tasks) {
-    if (num_workers <= 0) {
-        return num_tasks > 0;
-    } else {
-        return sanisizer::min(num_workers, num_tasks);
+    // This code mirrors the return logic in the default parallelize_range(), but would be an upper bound even with a custom SUBPAR_CUSTOM_PARALLELIZE_RANGE.
+    // Remember that run_task_range must be called with a non-empty range so if num_tasks = 0, there is no choice but to not perform any calls.
+    // Similarly, we can't perform more than one call if num_tasks = 1, and we can't perform more calls than there are workers.
+
+    if (num_tasks <= 0) {
+        return 0;
     }
+
+    if (num_workers <= 1 || num_tasks == 1) {
+        return 1;
+    }
+
+    return sanisizer::min(num_workers, num_tasks);
 }
 
 /**
  * @brief Parallelize a range of tasks across multiple workers.
  *
- * The aim is to split tasks in `[0, num_tasks)` into non-overlapping contiguous ranges that are executed by different workers.
- * In the default parallelization scheme, we create `num_workers` evenly-sized ranges that are executed via OpenMP (if available) or `<thread>` (otherwise).
+ * This function splits the integer sequence `[0, num_tasks)` into non-overlapping non-empty contiguous ranges.
+ * Each range is passed to the user-supplied `run_task_range()` function for parallel execution by different workers via OpenMP (if available) or `<thread>` (otherwise).
  * Not all workers may be used, e.g., if `num_tasks < num_workers`, but each worker will process no more than one range.
- * 
+ * By default, the ranges are evenly sized for efficient load-sharing across workers.
+ * The partitioning of the ranges is also deterministic -
+ * given the same `num_workers` and `num_tasks`,`parallelize_range()` will always call `run_task_range()` with the same combinations of arguments (`w`, `start` and `length`).
+ * This avoids stochasticity in downstream applications that perform, e.g., reductions of floating-point results generated in each worker.
+ *
  * The `SUBPAR_USES_OPENMP_RANGE` macro will be defined as 1 if and only if OpenMP was used in the default scheme.
  * Users can define the `SUBPAR_NO_OPENMP_RANGE` macro to force `parallelize_range()` to use `<thread>` even if OpenMP is available.
  * This is occasionally useful when OpenMP cannot be used in some parts of the application, e.g., with POSIX forks.
  *
  * Advanced users can substitute in their own parallelization scheme by defining `SUBPAR_CUSTOM_PARALLELIZE_RANGE` before including the **subpar** header.
- * This should be a function-like macro or the name of a function that accepts the same arguments as `parallelize_range()` and returns an integer.
- * If defined, the custom scheme will be used instead of the default scheme whenever `parallelize_range()` is called.
- * Macro authors should note the expectations on `run_task_range()`, as well as the one-to-zero-or-one mapping between workers and ranges.
+ * For example, we might restrict the number of used workers to the number of physical cores available on the system,
+ * or we might create task ranges of different lengths for targeted execution on performance or efficiency cores. 
+ * `SUBPAR_CUSTOM_PARALLELIZE_RANGE` should be a function-like macro or the name of a function that accepts the same arguments as `parallelize_range()`,
+ * partitions the tasks into `num_workers` or fewer ranges, calls `run_task_range()` on each task range, and returns the number of used workers.
+ * All expectations for the arguments and return value for `parallelize_range()` are still applicable here.
+ * Partitioning of task ranges should be deterministic but can vary across compute environments, e.g., with different numbers of available cores. 
+ * Once the macro is defined, the custom scheme will be used instead of the default scheme whenever `parallelize_range()` is called.
  *
  * If `nothrow_ = true`, exception handling is omitted from the default parallelization scheme.
  * This avoids some unnecessary work when the caller knows that `run_task_range()` will never throw. 
  * For custom schemes, if `SUBPAR_CUSTOM_PARALLELIZE_RANGE_NOTHROW` is defined, it will be used if `nothrow_ = true`;
  * otherwise, `SUBPAR_CUSTOM_PARALLELIZE_RANGE` will continue to be used.
+ * Any definition of `SUBPAR_CUSTOM_PARALLELIZE_RANGE_NOTHROW` should follow the same rules described above for `SUBPAR_CUSTOM_PARALLELIZE_RANGE`.
+ *
+ * A worker ID of zero may or may not indicate that execution is being performed on the main thread.
+ * This relationship is true for the default `<thread>`-based implementation but may not be for OpenMP. 
+ * (Note that the OpenMP thread number is not the same as the worker ID.)
+ * Custom overrides may also use a non-main thread to execute `run_task_range()` with `w = 0`. 
  *
  * @tparam nothrow_ Whether the `Run_` function cannot throw an exception.
  * @tparam Task_ Integer type for the number of tasks.
  * @tparam Run_ Function that accepts three arguments:
  * - `w`, the identity of the worker executing this task range.
- *   This will be passed as an `int`.
+ *   This will be passed as an `int` in `[0, num_workers)`.
  * - `start`, the start index of the task range.
- *   This will be passed as a `Task_`.
+ *   This will be passed as a `Task_` in `[0, num_tasks)`.
  * - `length`, the number of tasks in the task range.
- *   This will be passed as a `Task_`.
+ *   This will be passed as a `Task_` in `(0, num_tasks)`, i.e., it is guaranteed to be positive.
  * .
  * Any return value is ignored.
  *
@@ -91,13 +112,13 @@ int sanitize_num_workers(const int num_workers, const Task_ num_tasks) {
  * - `w` is guaranteed to be in `[0, K)` where `K` is the return value of `parallelize_range()`.
  *   `K` itself is guaranteed to be no greater than `num_workers`.
  * - `[start, start + length)` is guaranteed to be a non-empty range of tasks that lies in `[0, num_tasks)`.
- *   It will not overlap with any other range in any other call to `run_task_range()`.
+ *   It will not overlap with the task range used in any other call to `run_task_range()` in the same call to `parallelize_range()`.
  * .
  * This function may throw an exception if `nothrow_ = false`.
  *
  * @return The number of workers (`K`) that were actually used. 
- * This is guaranteed to be no greater than `num_workers`.
- * It can also be assumed that `run_task_range` was called once for each of `[0, 1, ..., K-1]`.
+ * This is guaranteed to be no greater than `num_workers` (or 1, if `num_workers` is not positive).
+ * It can be assumed that `run_task_range` was called once for each of `[0, 1, ..., K-1]`, where the union of task ranges across all `K` workers is `[0, num_tasks)`.
  */
 template<bool nothrow_ = false, typename Task_, class Run_>
 int parallelize_range(int num_workers, const Task_ num_tasks, const Run_ run_task_range) {

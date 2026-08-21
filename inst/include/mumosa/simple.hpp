@@ -10,7 +10,7 @@
 #include <type_traits>
 
 #include "knncolle/knncolle.hpp"
-#include "tatami_stats/tatami_stats.hpp"
+#include "quickstats/quickstats.hpp"
 #include "sanisizer/sanisizer.hpp"
 
 #include "utils.hpp"
@@ -57,7 +57,7 @@ struct Options {
  */
 template<typename Index_, typename Distance_>
 std::pair<Distance_, Distance_> compute_distance(const Index_ num_cells, Distance_* const distances) {
-    const Distance_ med = tatami_stats::medians::direct(distances, num_cells, /* skip_nan = */ false);
+    const Distance_ med = quickstats::median(num_cells, distances);
     Distance_ rmsd = 0;
     for (Index_ i = 0; i < num_cells; ++i) {
         const auto d = distances[i];

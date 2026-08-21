@@ -46,17 +46,17 @@ struct CenterSpikeInFactorsOptions {
  *
  * @tparam SizeFactor_ Floating-point type of the size factors.
  *
- * @param num Number of cells.
- * @param[in] endogenous Pointer to an array of length `num`, containing the size factor for endogenous genes for each cell.
+ * @param num_cells Number of cells.
+ * @param[in] endogenous Pointer to an array of length `num_cells`, containing the size factor for endogenous genes for each cell.
  * On output, this contains size factors that are centered at 1.
  * @param[in] spike_ins Vector of length equal to the number of spike-in sets (e.g., ERCCs, SIRV).
- * Each entry should be a pointer to an array of length `num`, containing the size factor for its corresponding spike-in set for each cell.
+ * Each entry should be a pointer to an array of length `num_cells`, containing the size factor for its corresponding spike-in set for each cell.
  * On output, this contains size factors that are centered at 1.
  * @param options Further options.
  */
 template<typename SizeFactor_>
 void center_spike_in_factors(
-    const std::size_t num,
+    const std::size_t num_cells,
     SizeFactor_* const endogenous,
     const std::vector<SizeFactor_*>& spike_ins,
     const CenterSpikeInFactorsOptions& options
@@ -64,7 +64,7 @@ void center_spike_in_factors(
     CenterSizeFactorsOptions cent_opt;
     cent_opt.ignore_invalid = options.ignore_invalid;
     cent_opt.diagnostics = options.endogenous_diagnostics;
-    center_size_factors(num, endogenous, cent_opt);
+    center_size_factors(num_cells, endogenous, cent_opt);
 
     const auto num_spikes = spike_ins.size();
     const bool use_diagnostics = (num_spikes == options.spike_in_diagnostics.size());
@@ -72,7 +72,7 @@ void center_spike_in_factors(
         if (use_diagnostics) {
             cent_opt.diagnostics = options.spike_in_diagnostics[i];
         }
-        center_size_factors(num, spike_ins[i], cent_opt);
+        center_size_factors(num_cells, spike_ins[i], cent_opt);
     }
 }
 
@@ -113,14 +113,15 @@ struct CenterSpikeInFactorsBlockedOptions {
  * @tparam SizeFactor_ Floating-point type of the size factors.
  * @tparam Block_ Integer type for the block assignments.
  *
- * @param num Number of cells.
- * @param[in,out] endogenous Pointer to an array of length `num`, containing the size factor for endogenous genes for each cell.
+ * @param num_cells Number of cells.
+ * @param[in,out] endogenous Pointer to an array of length `num_cells`, containing the size factor for endogenous genes for each cell.
  * On output, this contains size factors that are centered according to `CenterSpikeInFactorsBlockedOptions::block_mode`.
  * @param[in,out] spike_ins Vector of length equal to the number of spike-in sets (e.g., ERCCs, SIRV).
- * Each entry should be a pointer to an array of length `num`, containing the size factor for its corresponding spike-in set for each cell.
+ * Each entry should be a pointer to an array of length `num_cells`, containing the size factor for its corresponding spike-in set for each cell.
  * On output, the mean size factor within each block for each spike-in set is equal to the mean of the corresponding entries of `endogenous`.
- * @param[in] block Pointer to an array of length `num`, containing the block assignment for each cell.
+ * @param[in] block Pointer to an array of length `num_cells`, containing the block assignment for each cell.
  * Each assignment should be an integer in \f$[0, N)\f$ where \f$N\f$ is the total number of blocks.
+ * @param num_blocks Total number of blocks, i.e., \f$N\f$.
  * @param options Further options.
  *
  * @return Vector of length equal to the number of blocks.
@@ -128,10 +129,11 @@ struct CenterSpikeInFactorsBlockedOptions {
  */
 template<typename SizeFactor_, typename Block_>
 std::vector<SizeFactor_> center_spike_in_factors_blocked(
-    const std::size_t num,
+    const std::size_t num_cells,
     SizeFactor_* const endogenous,
     const std::vector<SizeFactor_*>& spike_ins,
     const Block_* const block,
+    const std::size_t num_blocks,
     const CenterSpikeInFactorsBlockedOptions& options
 ) {
     CenterSizeFactorsBlockedOptions cent_opt;
@@ -139,7 +141,7 @@ std::vector<SizeFactor_> center_spike_in_factors_blocked(
     cent_opt.block_mode = options.block_mode;
     cent_opt.diagnostics = options.endogenous_diagnostics;
     cent_opt.report_final = true;
-    auto output = center_size_factors_blocked(num, endogenous, block, cent_opt);
+    auto output = center_size_factors_blocked(num_cells, endogenous, block, num_blocks, cent_opt);
 
     cent_opt.block_mode = CenterBlockMode::CUSTOM;
     cent_opt.custom_centers = std::move(output);
@@ -150,7 +152,7 @@ std::vector<SizeFactor_> center_spike_in_factors_blocked(
         if (use_diagnostics) {
             cent_opt.diagnostics = options.spike_in_diagnostics[i];
         }
-        center_size_factors_blocked(num, spike_ins[i], block, cent_opt);
+        center_size_factors_blocked(num_cells, spike_ins[i], block, num_blocks, cent_opt);
     }
 
     output.swap(*(cent_opt.custom_centers));

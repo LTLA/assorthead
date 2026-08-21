@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <numeric>
 #include <stdexcept>
+#include <cassert>
+#include <optional>
 
 #include "sanisizer/sanisizer.hpp"
 
@@ -42,6 +44,8 @@ namespace internal {
  */
 template<typename Data_>
 Data_ derive_delta(const std::size_t num_anchors, const std::size_t num_points, const Data_* const x) {
+    assert(num_points > 0);
+
     const auto points_m1 = num_points - 1;
     auto diffs = sanisizer::create<std::vector<Data_> >(points_m1);
     for (I<decltype(points_m1)> i = 0; i < points_m1; ++i) {
@@ -76,6 +80,7 @@ Data_ derive_delta(const std::size_t num_anchors, const std::size_t num_points, 
  */
 template<typename Data_>
 void find_anchors(const std::size_t num_points, const Data_* x, Data_ delta, std::vector<std::size_t>& anchors) {
+    assert(num_points > 0);
     anchors.clear();
     anchors.push_back(0);
 
@@ -121,6 +126,8 @@ std::vector<Window<Data_> > find_limits(
     const auto nanchors = anchors.size();
     auto limits = sanisizer::create<std::vector<Window<Data_> > >(nanchors);
     const auto half_min_width = min_width / 2;
+
+    assert(num_points > 0);
     const auto points_m1 = num_points - 1;
 
     parallelize(nthreads, nanchors, [&](const int, const I<decltype(nanchors)> start, const I<decltype(nanchors)> length) {
@@ -266,30 +273,44 @@ struct PrecomputedWindows {
 template<typename Data_>
 PrecomputedWindows<Data_> define_windows(const std::size_t num_points, const Data_* const x, const Options<Data_>& opt) {
     PrecomputedWindows<Data_> output;
+    if (num_points == 0) {
+        return output;
+    }
 
-    if (num_points) {
-        if (!std::is_sorted(x, x + num_points)) {
-            throw std::runtime_error("'x' should be sorted");
-        }
+    if (!std::is_sorted(x, x + num_points)) {
+        throw std::runtime_error("'x' should be sorted");
+    }
 
-        // Finding the anchors.
-        auto& anchors = output.anchors;
-        if (opt.delta == 0 || (opt.delta < 0 && opt.anchors >= num_points)) {
+    // For back-compatibility for negative sentinel values.
+    std::optional<Data_> delta = opt.delta;
+    if (delta.has_value() && *delta < 0) {
+        delta.reset();
+    }
+
+    // Finding the anchors.
+    auto& anchors = output.anchors;
+    if (delta.has_value()) {
+        if (*delta == 0) {
             sanisizer::resize(anchors, num_points);
-            std::iota(anchors.begin(), anchors.end(), 0);
-        } else if (opt.delta < 0) {
+            std::iota(anchors.begin(), anchors.end(), static_cast<std::size_t>(0));
+        } else {
+            internal::find_anchors(num_points, x, *delta, anchors);
+        }
+    } else {
+        if (opt.anchors >= num_points) {
+            sanisizer::resize(anchors, num_points);
+            std::iota(anchors.begin(), anchors.end(), static_cast<std::size_t>(0));
+        } else {
             Data_ eff_delta = internal::derive_delta(opt.anchors, num_points, x);
             internal::find_anchors(num_points, x, eff_delta, anchors);
-        } else {
-            internal::find_anchors(num_points, x, opt.delta, anchors);
         }
-
-        /* Computing the span weight that each window must achieve. */
-        output.freq_weights = (opt.frequency_weights ? opt.weights : NULL);
-        output.total_weight = (output.freq_weights != NULL ? std::accumulate(output.freq_weights, output.freq_weights + num_points, static_cast<Data_>(0)) : num_points);
-        const Data_ span_weight = (opt.span_as_proportion ? opt.span * output.total_weight : opt.span);
-        output.limits = internal::find_limits(anchors, span_weight, num_points, x, output.freq_weights, opt.minimum_width, opt.num_threads); 
     }
+
+    // Computing the span weight that each window must achieve.
+    output.freq_weights = (opt.frequency_weights ? opt.weights : NULL);
+    output.total_weight = (output.freq_weights != NULL ? std::accumulate(output.freq_weights, output.freq_weights + num_points, static_cast<Data_>(0)) : num_points);
+    const Data_ span_weight = (opt.span_as_proportion ? opt.span * output.total_weight : opt.span);
+    output.limits = internal::find_limits(anchors, span_weight, num_points, x, output.freq_weights, opt.minimum_width, opt.num_threads); 
 
     return output;
 }

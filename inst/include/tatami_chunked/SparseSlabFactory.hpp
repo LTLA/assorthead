@@ -1,10 +1,13 @@
 #ifndef TATAMI_CHUNKED_SPARSE_SLAB_FACTORY_HPP
 #define TATAMI_CHUNKED_SPARSE_SLAB_FACTORY_HPP
 
+#include "SlabCacheStats.hpp"
+#include "utils.hpp"
+
 #include <vector>
 #include <cstddef>
 
-#include "SlabCacheStats.hpp"
+#include "sanisizer/sanisizer.hpp"
 
 /**
  * @file SparseSlabFactory.hpp 
@@ -22,32 +25,28 @@ namespace tatami_chunked {
  * This also reduces fragmentation that could increase memory usage beyond the expected cache size.
  *
  * @tparam Value_ Type of the data in each slab.
- * @tparam Index_ Integer type of the indices in each slab.
- * This should be large enough to store the extent of the non-target dimension of the slab.
+ * @tparam Index_ Integer type of the dimension extent and the type of the indices in each slab.
+ * This should also be the type of the maximum number of slabs required to span the relevant dimension, see the template parameter of the same name in `SlabCacheStats`.
  * @tparam Count_ Integer type for counting structural non-zeros.
  * This should be large enough to store the extent of the non-target dimension of the slab.
  */
 template<typename Value_, typename Index_, typename Count_ = Index_>
 class SparseSlabFactory {
 private:
-    typedef std::vector<Value_> ValuePool;
-    typedef std::vector<Index_> IndexPool;
-    typedef std::vector<Count_> NumberPool;
-
     Index_ my_target_dim, my_non_target_dim;
-    typename ValuePool::size_type my_slab_size;
     bool my_needs_value, my_needs_index;
 
-    typename NumberPool::size_type my_offset_number = 0;
-    typename ValuePool::size_type my_offset_slab = 0;
-    ValuePool my_value_pool;
-    IndexPool my_index_pool;
-    NumberPool my_number_pool;
+    // Might as well use size_t here, as we'll be doing pointer arithmetic in create().
+    std::size_t my_slab_size;
+    std::size_t my_offset_number = 0;
+    std::size_t my_offset_slab = 0;
+
+    std::vector<Value_> my_value_pool;
+    std::vector<Index_> my_index_pool;
+    std::vector<Count_> my_number_pool;
 
 public:
     /**
-     * @tparam MaxSlabs_ Integer type of the maximum number of slabs.
-     *
      * @param target_dim Extent of the target dimension of the slab,
      * i.e., the dimension that is indexed into.
      * @param non_target_dim Extent of the non-target dimension of the slab.
@@ -57,27 +56,24 @@ public:
      * @param needs_value Whether the values of the structural non-zeros should be cached.
      * @param needs_index Whether the indices of the structural non-zeros should be cached.
      */
-    template<typename MaxSlabs_>
-    SparseSlabFactory(Index_ target_dim, Index_ non_target_dim, std::size_t slab_size, MaxSlabs_ max_slabs, bool needs_value, bool needs_index) : 
+    SparseSlabFactory(Index_ target_dim, Index_ non_target_dim, std::size_t slab_size, Index_ max_slabs, bool needs_value, bool needs_index) : 
         my_target_dim(target_dim),
         my_non_target_dim(non_target_dim),
-        my_slab_size(slab_size),
         my_needs_value(needs_value),
         my_needs_index(needs_index),
-        my_number_pool(sanisizer::product<decltype(my_number_pool.size())>(max_slabs, target_dim))
+        my_slab_size(slab_size),
+        my_number_pool(sanisizer::product<I<decltype(my_number_pool.size())> >(max_slabs, target_dim))
     {
         if (needs_value) {
-            my_value_pool.resize(sanisizer::product<decltype(my_value_pool.size())>(max_slabs, slab_size));
+            my_value_pool.resize(sanisizer::product<I<decltype(my_value_pool.size())> >(max_slabs, slab_size));
         }
         if (needs_index) {
-            my_index_pool.resize(sanisizer::product<decltype(my_index_pool.size())>(max_slabs, slab_size));
+            my_index_pool.resize(sanisizer::product<I<decltype(my_index_pool.size())> >(max_slabs, slab_size));
         }
     }
 
     /**
      * Overload that computes `slab_size` automatically.
-     *
-     * @tparam MaxSlabs_ Integer type of the maximum number of slabs.
      *
      * @param target_dim Extent of the target dimension of the slab.
      * @param non_target_dim Extent of the non-target dimension of the slab.
@@ -85,14 +81,11 @@ public:
      * @param needs_value Whether the values of the structural non-zeros should be cached.
      * @param needs_index Whether the indices of the structural non-zeros should be cached.
      */
-    template<typename MaxSlabs_>
-    SparseSlabFactory(Index_ target_dim, Index_ non_target_dim, MaxSlabs_ max_slabs, bool needs_value, bool needs_index) : 
+    SparseSlabFactory(Index_ target_dim, Index_ non_target_dim, Index_ max_slabs, bool needs_value, bool needs_index) : 
         SparseSlabFactory(target_dim, non_target_dim, sanisizer::product<std::size_t>(target_dim, non_target_dim), max_slabs, needs_value, needs_index) {}
 
     /**
      * Overload that takes the relevant statistics from a `SlabCacheStats` object.
-     *
-     * @tparam MaxSlabs_ Integer type of the maximum number of slabs.
      *
      * @param target_dim Extent of the target dimension of the slab.
      * @param non_target_dim Extent of the non-target dimension of the slab.
@@ -100,8 +93,7 @@ public:
      * @param needs_value Whether the values of the structural non-zeros should be cached.
      * @param needs_index Whether the indices of the structural non-zeros should be cached.
      */
-    template<typename MaxSlabs_>
-    SparseSlabFactory(Index_ target_dim, Index_ non_target_dim, const SlabCacheStats<MaxSlabs_>& stats, bool needs_value, bool needs_index) : 
+    SparseSlabFactory(Index_ target_dim, Index_ non_target_dim, const SlabCacheStats<Index_>& stats, bool needs_value, bool needs_index) : 
         SparseSlabFactory(target_dim, non_target_dim, stats.slab_size_in_elements, stats.max_slabs_in_cache, needs_value, needs_index) {}
 
     /**
@@ -166,7 +158,7 @@ public:
         if (my_needs_value) {
             output.values.reserve(my_target_dim);
             auto vptr = my_value_pool.data() + my_offset_slab;
-            for (decltype(my_target_dim) p = 0; p < my_target_dim; ++p, vptr += my_non_target_dim) {
+            for (I<decltype(my_target_dim)> p = 0; p < my_target_dim; ++p, vptr += my_non_target_dim) {
                 output.values.push_back(vptr);
             }
         }
@@ -174,7 +166,7 @@ public:
         if (my_needs_index) {
             output.indices.reserve(my_target_dim);
             auto iptr = my_index_pool.data() + my_offset_slab;
-            for (decltype(my_target_dim) p = 0; p < my_target_dim; ++p, iptr += my_non_target_dim) {
+            for (I<decltype(my_target_dim)> p = 0; p < my_target_dim; ++p, iptr += my_non_target_dim) {
                 output.indices.push_back(iptr);
             }
         }

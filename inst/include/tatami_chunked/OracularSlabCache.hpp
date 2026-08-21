@@ -1,6 +1,8 @@
 #ifndef TATAMI_CHUNKED_ORACULAR_SLAB_CACHE_HPP
 #define TATAMI_CHUNKED_ORACULAR_SLAB_CACHE_HPP
 
+#include "utils.hpp"
+
 #include <unordered_map>
 #include <vector>
 #include <list>
@@ -22,7 +24,8 @@ namespace tatami_chunked {
  * @brief Oracular-aware cache for slabs.
  *
  * @tparam Id_ Type of slab identifier, typically integer.
- * @tparam Index_ Type of row/column index produced by the oracle.
+ * @tparam Index_ Integer type of the dimension extent and the type of row/column index produced by the oracle.
+ * This should also be the type of the maximum number of slabs required to span the relevant dimension, see the template parameter of the same name in `SlabCacheStats`.
  * @tparam Slab_ Class for a single slab.
  * @tparam track_reuse_ Whether to track slabs in the cache that are re-used.
  *
@@ -41,7 +44,7 @@ private:
     tatami::PredictionIndex my_total;
     tatami::PredictionIndex my_counter = 0;
 
-    Index_ my_last_slab_id = 0;
+    Id_ my_last_slab_id = 0;
     Slab_* my_last_slab = NULL;
 
     typedef std::vector<Slab_> SlabPool;
@@ -57,15 +60,13 @@ private:
 
 public:
     /**
-     * @tparam MaxSlabs_ Integer type of the maximum number of slabs.
      * @param oracle Pointer to an `tatami::Oracle` to be used for predictions.
      * @param max_slabs Maximum number of slabs to store in the cache.
      */
-    template<typename MaxSlabs_>
-    OracularSlabCache(std::shared_ptr<const tatami::Oracle<Index_> > oracle, MaxSlabs_ max_slabs) : 
+    OracularSlabCache(std::shared_ptr<const tatami::Oracle<Index_> > oracle, Index_ max_slabs) : 
         my_oracle(std::move(oracle)), 
         my_total(my_oracle->total()),
-        my_max_slabs(sanisizer::cast<decltype(my_max_slabs)>(max_slabs)) 
+        my_max_slabs(sanisizer::cast<I<decltype(my_max_slabs)> >(max_slabs)) 
     {
         my_all_slabs.reserve(max_slabs);
         my_current_cache.reserve(max_slabs);
@@ -158,7 +159,7 @@ public:
             // incorporated into the previous cycle. So we can skip some code.
             my_future_cache[slab_info.first] = NULL;
             my_in_need.push_back(slab_info.first);
-            decltype(my_max_slabs) used_slabs = 1;
+            I<decltype(my_max_slabs)> used_slabs = 1;
             auto last_future_slab_id = slab_info.first;
 
             while (++my_refresh_point < my_total) {

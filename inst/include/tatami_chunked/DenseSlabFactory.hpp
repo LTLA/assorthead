@@ -2,6 +2,7 @@
 #define TATAMI_CHUNKED_DENSE_SLAB_FACTORY_HPP
 
 #include "SlabCacheStats.hpp"
+#include "utils.hpp"
 
 #include <vector>
 #include <cstddef>
@@ -26,24 +27,25 @@ namespace tatami_chunked {
  * @tparam Value_ Type of the data in each slab.
  */
 template<typename Value_>
-struct DenseSlabFactory {
+class DenseSlabFactory {
+public:
     /**
-     * @tparam MaxSlabs_ Integer type of the maximum number of slabs.
+     * @tparam Index_ Integer type of the maximum number of slabs, see the template parameter of the same name in `SlabCacheStats`.
      * @param slab_size Size of the slab, in terms of data elements.
      * @param max_slabs Maximum number of slabs.
      */
-    template<typename MaxSlabs_>
-    DenseSlabFactory(std::size_t slab_size, MaxSlabs_ max_slabs) :
+    template<typename Index_>
+    DenseSlabFactory(std::size_t slab_size, Index_ max_slabs) :
         my_slab_size(slab_size),
-        my_pool(sanisizer::product<decltype(my_pool.size())>(max_slabs, slab_size))
+        my_pool(sanisizer::product<I<decltype(my_pool.size())> >(max_slabs, slab_size))
     {}
 
     /**
-     * @tparam MaxSlabs_ Integer type of the maximum number of slabs.
+     * @tparam Index_ Integer type of the dimension extent.
      * @param stats Slab cache statistics.
      */
-    template<typename MaxSlabs_>
-    DenseSlabFactory(const SlabCacheStats<MaxSlabs_>& stats) : DenseSlabFactory(stats.slab_size_in_elements, stats.max_slabs_in_cache) {}
+    template<typename Index_>
+    DenseSlabFactory(const SlabCacheStats<Index_>& stats) : DenseSlabFactory(stats.slab_size_in_elements, stats.max_slabs_in_cache) {}
 
     /**
      * @cond
@@ -60,9 +62,9 @@ struct DenseSlabFactory {
      */
 
 private:
-    typedef std::vector<Value_> Pool;
-    typename Pool::size_type my_offset = 0, my_slab_size;
-    Pool my_pool;
+    // Might as well use size_t here, as we'll be doing pointer arithmetic in create().
+    std::size_t my_offset = 0, my_slab_size;
+    std::vector<Value_> my_pool;
 
 public:
     /**

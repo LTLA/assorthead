@@ -1,107 +1,87 @@
 #ifndef TATAMI_MULT_UTILS_HPP
 #define TATAMI_MULT_UTILS_HPP
 
-#include <limits>
-#include <cmath>
+#include <type_traits>
 #include <vector>
-#include <cstddef>
+#include <cassert>
+#include <array>
 
 #include "tatami/tatami.hpp"
-#include "tatami_stats/tatami_stats.hpp"
+#include "sanisizer/sanisizer.hpp"
 
 namespace tatami_mult {
 
-namespace internal {
+template<typename Input_>
+using I = std::remove_cv_t<std::remove_reference_t<Input_> >;
 
-template<typename Value_>
-constexpr bool supports_special_values() {
-    return (std::numeric_limits<Value_>::has_infinity || std::numeric_limits<Value_>::has_quiet_NaN || std::numeric_limits<Value_>::has_signaling_NaN);
-}
-
-template<typename Value_>
-bool is_special(Value_ x) {
-    return !std::isfinite(x);
-}
-
-template<typename Index_, typename Value_>
-void fill_special_index(Index_ len, const Value_* ptr, std::vector<Index_>& specials) {
-    for (Index_ i = 0; i < len; ++i) {
-        if (is_special(ptr[i])) {
-            specials.push_back(i);
+// Mathematically equivalent to std::accumulate but reorders summations for greater instruction-level parallelism.
+template<std::size_t width_>
+double recursive_sum(std::array<double, width_>& dots) {
+    if constexpr(width_ == 1) {
+        return dots[0];
+    } else if constexpr(width_ == 2) {
+        return dots[0] + dots[1];
+    } else {
+        constexpr auto half_width = width_ / 2;
+        std::array<double, half_width> tmp;
+        for (std::size_t s = 0; s < half_width; ++s) { // Increase potential for vectorization.
+            tmp[s] = dots[s] + dots[s + half_width];
+        }
+        if constexpr(width_ % 2 == 1) {
+            return recursive_sum<width_ / 2>(tmp) + dots[width_ - 1];
+        } else {
+            return recursive_sum<width_ / 2>(tmp);
         }
     }
 }
 
-template<typename Output_, typename DenseValue_, typename Value_, typename Index_>
-Output_ dense_sparse_multiply(const DenseValue_* ptr, const tatami::SparseRange<Value_, Index_>& range) {
-    Output_ out = 0;
-    for (Index_ k = 0; k < range.number; ++k) {
-        out += range.value[k] * ptr[range.index[k]];
-    }
-    return out;
-}
+template<typename Index_>
+struct FetchNonEmptySparseBlockInfo {
+    FetchNonEmptySparseBlockInfo(const Index_ position, const Index_ num_non_empty, const bool all_non_empty) : 
+        position(position), num_non_empty(num_non_empty), all_non_empty(all_non_empty) {}
+    Index_ position, num_non_empty;
+    bool all_non_empty;
+};
 
-template<typename Output_, typename SpecialIndex_, typename SpecialValue_, typename Value_, typename Index_>
-Output_ special_dense_sparse_multiply(const std::vector<SpecialIndex_>& specials, const SpecialValue_* ptr, const tatami::SparseRange<Value_, Index_>& range) {
-    Output_ out = 0;
-    auto sIt = specials.begin(), sEnd = specials.end();
-    Index_ k = 0;
+template<typename Value_, typename Index_, class Zero_>
+FetchNonEmptySparseBlockInfo<Index_> fetch_non_empty_sparse_block(
+    tatami::OracularSparseExtractor<Value_, Index_>& ext,
+    std::vector<std::vector<Value_> >& vbuffers,
+    std::vector<std::vector<Index_> >& ibuffers,
+    std::vector<tatami::SparseRange<Value_, Index_> >& ranges,
+    std::vector<Index_>& non_empty,
+    Index_ position,
+    const Index_ length,
+    const int block_size,
+    Zero_ zero
+) { 
+    non_empty.clear();
+    Index_ num_non_empty = 0;
+    bool all_non_empty = true;
 
-    if (k < range.number && sIt != sEnd) {
-        Index_ spec = *sIt;
-        Index_ ridx = range.index[k];
-        while (1) {
-            if (ridx < spec) {
-                out += ptr[ridx] * range.value[k]; // need to multiply by zero in case the range.value is special.
-                if (++k == range.number) {
-                    break;
-                }
-                ridx = range.index[k];
-            } else if (ridx > spec) {
-                out += ptr[spec] * static_cast<Value_>(0); // it's special, so we can't assume the product would be zero.
-                if (++sIt == sEnd) {
-                    break;
-                }
-                spec = *sIt;
-            } else {
-                out += ptr[spec] * range.value[k];
-                ++k;
-                ++sIt;
-                if (k == range.number || sIt == sEnd) {
-                    break;
-                }
-                ridx = range.index[k];
-                spec = *sIt;
-            }
+    // We assume that a check for remaining dimension elements was performed before continuing the blocked loop.
+    assert(position < length);
+
+    do {
+        auto lrange = ext.fetch(vbuffers[num_non_empty].data(), ibuffers[num_non_empty].data());
+        if (lrange.number == 0) {
+            zero(position);
+            all_non_empty = false;
+            ++position;
+            continue;
         }
-    }
 
-    for (; k < range.number; ++k) {
-        out += ptr[range.index[k]] * range.value[k];
-    }
-    for (; sIt != sEnd; ++sIt) {
-        out += ptr[*sIt] * static_cast<Value_>(0);
-    }
+        ranges[num_non_empty] = std::move(lrange);
+        non_empty.push_back(position);
+        ++num_non_empty;
+        ++position;
 
-    return out;
-}
-
-// Row-major output matrices should have `col_shift = 1`, otherwise it shoud have `row_shift =  1`.
-template<typename Output_, class GetOutput_, typename Index_, typename RightIndex_>
-void non_contiguous_transfer(const tatami_stats::LocalOutputBuffers<Output_, GetOutput_>& stores, Index_ start, Index_ length, Output_* output, RightIndex_ row_shift, Index_ col_shift) {
-    auto rhs_col = stores.size();
-    for (decltype(rhs_col) j = 0; j < rhs_col; ++j) {
-        auto optr = stores.data(j);
-        auto start_offset = sanisizer::product_unsafe<std::size_t>(j, col_shift);
-        for (Index_ r = 0; r < length; ++r) {
-            // Keeping it simple and just computing the offset within the loop.
-            // This is more amenable to vectorization and the compiler can just
-            // easily optimize it out if it wants to.
-            output[start_offset + sanisizer::product_unsafe<std::size_t>(start + r, row_shift)] = optr[r];
+        if (sanisizer::is_equal(num_non_empty, block_size)) {
+            break;
         }
-    }
-}
+    } while (position < length);
 
+    return FetchNonEmptySparseBlockInfo(position, num_non_empty, all_non_empty);
 }
 
 }

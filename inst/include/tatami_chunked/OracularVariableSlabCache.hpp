@@ -23,7 +23,7 @@ namespace tatami_chunked {
  * @tparam Id_ Type of slab identifier, typically integer.
  * @tparam Index_ Type of row/column index produced by the oracle.
  * @tparam Slab_ Class for a single slab.
- * @tparam Size_ Numeric type for the slab size.
+ * @tparam Size_ Numeric type for the maximum cache size.
  *
  * Implement an oracle-aware cache for variable-size slabs.
  * Each slab is defined as the set of chunks required to read an element of the target dimension (or a contiguous block/indexed subset thereof) from a `tatami::Matrix`.
@@ -56,7 +56,7 @@ private:
     std::optional<SlabIndex> my_last_slab_num;
 
     Size_ my_max_size, my_used_size = 0;
-    std::vector<Slab_> my_all_slabs;
+    SlabPool my_all_slabs;
 
     // We need to hold an offset into 'my_all_slabs' rather than a pointer, as
     // 'my_all_slabs' might be reallocated upon addition of new slabs, given that
@@ -73,7 +73,7 @@ public:
      * @param max_size Total size of all slabs to store in the cache.
      * This may be zero, in which case no caching should be performed.
      */
-    OracularVariableSlabCache(std::shared_ptr<const tatami::Oracle<Index_> > oracle, std::size_t max_size) : 
+    OracularVariableSlabCache(std::shared_ptr<const tatami::Oracle<Index_> > oracle, Size_ max_size) : 
         my_oracle(std::move(oracle)), 
         my_total(my_oracle->total()),
         my_max_size(max_size) 
@@ -261,24 +261,22 @@ public:
     /**
      * @return Maximum total size of the cache.
      * This has the same value as the `max_size` used in the constructor.
-     * The type is an unsigned integer defined in `std::vector::size_type`.
      */
-    auto get_max_size() const {
+    Size_ get_max_size() const {
         return my_max_size;
     }
 
     /**
      * @return Current usage across all slabs in the cache.
      * This should be interpreted as an upper bound on usage if there is a difference between estimated and actual slab sizes.
-     * The type is an unsigned integer defined in `std::vector::size_type`.
      */
-    auto get_used_size() const {
+    Size_ get_used_size() const {
         return my_used_size;
     }
 
     /**
      * @return Number of slabs currently in the cache.
-     * The type is an unsigned integer defined in `std::vector::size_type`.
+     * The type is an unsigned integer, defined as `std::vector<Slab_>::size_type`.
      */
     auto get_num_slabs() const {
         return my_current_cache.size();

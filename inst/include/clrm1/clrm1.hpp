@@ -1,9 +1,11 @@
-#ifndef CLRM1_HPP
-#define CLRM1_HPP
+#ifndef CLRM1_CLRM1_HPP
+#define CLRM1_CLRM1_HPP
 
 #include "tatami/tatami.hpp"
 #include "tatami_stats/tatami_stats.hpp"
+
 #include <cmath>
+#include <vector>
 
 /**
  * @file clrm1.hpp
@@ -22,7 +24,6 @@ namespace clrm1 {
 struct Options {
     /**
      * Number of threads to use in the calculations.
-     * This is used to set `tatami_stats::sums::Options::num_threads`.
      */
     int num_threads = 1;
 
@@ -58,11 +59,18 @@ void compute(const tatami::Matrix<Value_, Index_>& matrix, const Options& option
     auto ptr = tatami::wrap_shared_ptr(&matrix);
 
     if (options.remove_all_zero) {
-        const auto num_zeros = tatami_stats::counts::zero::by_row<Index_>(matrix, [&]{
-            tatami_stats::counts::zero::Options czopt;
-            czopt.num_threads = options.num_threads;
-            return czopt;
-        }());
+        const auto num_zeros = tatami_stats::count<Index_>(
+            true,
+            matrix,
+            [&](Value_ val) -> bool {
+                return val == 0;
+            },
+            [&]{
+                tatami_stats::CountOptions czopt;
+                czopt.num_threads = options.num_threads;
+                return czopt;
+            }()
+        );
 
         const Index_ NR = matrix.nrow(), NC = matrix.ncol();
         std::vector<Index_> keep;
@@ -79,8 +87,8 @@ void compute(const tatami::Matrix<Value_, Index_>& matrix, const Options& option
     }
 
     tatami::DelayedUnaryIsometricOperation<Output_, Value_, Index_> logmat(std::move(ptr), std::make_shared<tatami::DelayedUnaryIsometricLog1p<Value_, Output_, Index_> >());
-    tatami_stats::sums::apply(false, logmat, output, [&]{
-        tatami_stats::sums::Options sopt;
+    tatami_stats::sum(false, logmat, output, [&]{
+        tatami_stats::SumOptions sopt;
         sopt.num_threads = options.num_threads;
         return sopt;
     }());
