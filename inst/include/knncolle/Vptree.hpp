@@ -12,7 +12,6 @@
 #include <vector>
 #include <random>
 #include <limits>
-#include <tuple>
 #include <memory>
 #include <cstddef>
 #include <string>
@@ -20,6 +19,7 @@
 #include <filesystem>
 #include <cassert>
 #include <optional>
+#include <algorithm>
 
 #include "sanisizer/sanisizer.hpp"
 
@@ -73,6 +73,7 @@ private:
 
 public:
     void search(Index_ i, Index_ k, std::vector<Index_>* output_indices, std::vector<Distance_>* output_distances) {
+        assert(k == 0 || k < my_parent.num_observations());
         my_nearest.reset(k + 1); // +1 is safe as k < num_obs.
         auto iptr = my_parent.my_data.data() + sanisizer::product_unsafe<std::size_t>(my_parent.my_new_locations[i], my_parent.my_dim);
         my_parent.search_nn(iptr, my_nearest, my_history);
@@ -80,6 +81,7 @@ public:
     }
 
     void search(const Data_* query, Index_ k, std::vector<Index_>* output_indices, std::vector<Distance_>* output_distances) {
+        assert(k <= my_parent.num_observations());
         // Protect the NeighborQueue from k = 0. This also protects search_nn()
         // when there are no observations (and no node 0 to start recursion). 
         if (k == 0 || my_parent.my_nodes.empty()) {
@@ -298,9 +300,9 @@ public:
             build(options);
 
             // Resorting data in place to match order of occurrence within 'nodes', for better cache locality.
-            auto used = sanisizer::create<std::vector<char> >(sanisizer::attest_gez(my_obs));
-            auto buffer = sanisizer::create<std::vector<Data_> >(sanisizer::attest_gez(my_dim));
-            sanisizer::resize(my_new_locations, sanisizer::attest_gez(my_obs));
+            auto used = sanisizer::create<std::vector<char> >(my_obs);
+            auto buffer = sanisizer::create<std::vector<Data_> >(my_dim);
+            sanisizer::resize(my_new_locations, my_obs);
             auto host = my_data.data();
 
             for (Index_ o = 0; o < num_obs; ++o) {
@@ -494,13 +496,13 @@ public:
         quick_load(dir / "NUM_OBS", &my_obs, 1);
         quick_load(dir / "NUM_DIM", &my_dim, 1);
 
-        my_data.resize(sanisizer::product<I<decltype(my_data.size())> >(sanisizer::attest_gez(my_obs), my_dim));
+        my_data.resize(sanisizer::product<I<decltype(my_data.size())> >(my_obs, my_dim));
         quick_load(dir / "DATA", my_data.data(), my_data.size());
 
-        sanisizer::resize(my_nodes, sanisizer::attest_gez(my_obs));
+        sanisizer::resize(my_nodes, my_obs);
         quick_load(dir / "NODES", my_nodes.data(), my_nodes.size());
 
-        sanisizer::resize(my_new_locations, sanisizer::attest_gez(my_obs));
+        sanisizer::resize(my_new_locations, my_obs);
         quick_load(dir / "NEW_LOCATIONS", my_new_locations.data(), my_new_locations.size());
 
         auto dptr = load_distance_metric_raw<Data_, Distance_>(dir / "DISTANCE");
@@ -611,7 +613,7 @@ public:
         auto work = data.new_known_extractor();
 
         // We assume that that vector::size_type <= size_t, otherwise data() wouldn't be a contiguous array.
-        std::vector<Data_> store(sanisizer::product<typename std::vector<Data_>::size_type>(ndim, sanisizer::attest_gez(nobs)));
+        std::vector<Data_> store(sanisizer::product<typename std::vector<Data_>::size_type>(ndim, nobs));
         for (Index_ o = 0; o < nobs; ++o) {
             std::copy_n(work->next(), ndim, store.data() + sanisizer::product_unsafe<std::size_t>(o, ndim));
         }

@@ -83,11 +83,51 @@ inline double compute_variable_weight(const double s, const VariableWeightParame
  * Weights should be interpreted as relative values within a single `compute_weights()` call, i.e., weights from different calls may not be comparable.
  * They are typically used in functions like `parallel_weighted_means()` to compute a weighted average of statistics across blocks.
  *
+ * @tparam GetBlockSize_ Function that accepts a `size_t` and returns a number.
+ * @tparam SetBlockWeight_ Function that accepts a `size_t` and the block weight.
+ * The return value is ignored.
+ *
+ * @param num_blocks Number of blocks.
+ * @param get_block_size Function that accepts a block index in `[0, num_blocks)` and returns the size of that block.
+ * @param policy Policy for weighting blocks of different sizes.
+ * @param variable Parameters for the variable block weights.
+ * @param set_block_weight Function that accepts a block index in `[0, num_blocks)` and the associated block weight.
+ * It is expected to store the block weight in some data structure.
+ */
+template<typename GetBlockSize_, typename SetBlockWeight_>
+void compute_weights(
+    const std::size_t num_blocks,
+    GetBlockSize_ get_block_size,
+    const WeightPolicy policy,
+    const VariableWeightParameters& variable,
+    SetBlockWeight_ set_block_weight
+) {
+    if (policy == WeightPolicy::NONE || policy == WeightPolicy::SIZE) {
+        for (I<decltype(num_blocks)> s = 0; s < num_blocks; ++s) {
+            set_block_weight(s, get_block_size(s));
+        }
+
+    } else if (policy == WeightPolicy::EQUAL) {
+        for (I<decltype(num_blocks)> s = 0; s < num_blocks; ++s) {
+            set_block_weight(s, get_block_size(s) > 0);
+        }
+
+    } else {
+        for (I<decltype(num_blocks)> s = 0; s < num_blocks; ++s) {
+            set_block_weight(s, compute_variable_weight(get_block_size(s), variable));
+        }
+    }
+}
+
+/**
+ * A convenience overload for `compute_weights()` that accepts an array of block sizes and fills an array of block weights.
+ *
  * @tparam Size_ Numeric type of the block size.
  * @tparam Weight_ Floating-point type of the output weights.
  *
  * @param num_blocks Number of blocks.
  * @param[in] sizes Pointer to an array of length `num_blocks`, containing the size of each block.
+ * @param sizes Vector containing the size of each block.
  * @param policy Policy for weighting blocks of different sizes.
  * @param variable Parameters for the variable block weights.
  * @param[out] weights Pointer to an array of length `num_blocks`.
@@ -95,17 +135,13 @@ inline double compute_variable_weight(const double s, const VariableWeightParame
  */
 template<typename Size_, typename Weight_>
 void compute_weights(const std::size_t num_blocks, const Size_* const sizes, const WeightPolicy policy, const VariableWeightParameters& variable, Weight_* const weights) {
-    if (policy == WeightPolicy::NONE || policy == WeightPolicy::SIZE) {
-        std::copy_n(sizes, num_blocks, weights);
-    } else if (policy == WeightPolicy::EQUAL) {
-        for (I<decltype(num_blocks)> s = 0; s < num_blocks; ++s) {
-            weights[s] = sizes[s] > 0;
-        }
-    } else {
-        for (I<decltype(num_blocks)> s = 0; s < num_blocks; ++s) {
-            weights[s] = compute_variable_weight(sizes[s], variable);
-        }
-    }
+    compute_weights(
+        num_blocks,
+        [&](std::size_t s) -> Size_ { return sizes[s]; },
+        policy,
+        variable,
+        [&](std::size_t s, Weight_ w) -> void { weights[s] = w; }
+    );
 }
 
 /**

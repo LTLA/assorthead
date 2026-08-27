@@ -12,6 +12,7 @@
 #include "subpar/subpar.hpp"
 #endif
 
+#include "cap_k.hpp"
 
 /**
  * @file find_nearest_neighbors.hpp
@@ -56,44 +57,6 @@ template<typename Index_, typename Distance_>
 using NeighborList = std::vector<std::vector<std::pair<Index_, Distance_> > >;
 
 /**
- * Cap the number of neighbors to use in `Searcher::search()` with an index `i`.
- *
- * @tparam Index_ Integer type for the number of observations.
- * @param k Number of nearest neighbors, should be non-negative.
- * @param num_observations Number of observations in the dataset.
- *
- * @return Capped number of neighbors to search for.
- * This is equal to `k` if it is less than `num_observations`;
- * otherwise it is equal to `num_observations - 1` if `num_observations > 0`;
- * otherwise it is equal to zero.
- */
-template<typename Index_>
-int cap_k(int k, Index_ num_observations) {
-    if (sanisizer::is_less_than(sanisizer::attest_gez(k), sanisizer::attest_gez(num_observations))) {
-        return k;
-    } else if (num_observations) {
-        return num_observations - 1;
-    } else {
-        return 0;
-    }
-}
-
-/**
- * Cap the number of neighbors to use in `Searcher::search()` with a pointer `query`.
- *
- * @tparam Index_ Integer type for the number of observations.
- * @param k Number of nearest neighbors, should be non-negative.
- * @param num_observations Number of observations in the dataset.
- *
- * @return Capped number of neighbors to query.
- * This is equal to the smaller of `k` and `num_observations`.
- */
-template<typename Index_>
-int cap_k_query(int k, Index_ num_observations) {
-    return sanisizer::min(sanisizer::attest_gez(k), sanisizer::attest_gez(num_observations));
-}
-
-/**
  * Find the nearest neighbors within a pre-built index.
  * This is a convenient wrapper around `Searcher::search` that saves the caller the trouble of writing a loop.
  *
@@ -116,7 +79,7 @@ template<typename Index_, typename Data_, typename Distance_>
 NeighborList<Index_, Distance_> find_nearest_neighbors(const Prebuilt<Index_, Data_, Distance_>& index, int k, int num_threads = 1) {
     const Index_ nobs = index.num_observations();
     k = cap_k(k, nobs);
-    auto output = sanisizer::create<NeighborList<Index_, Distance_> >(sanisizer::attest_gez(nobs));
+    auto output = sanisizer::create<NeighborList<Index_, Distance_> >(nobs);
 
     parallelize(num_threads, nobs, [&](int, Index_ start, Index_ length) -> void {
         auto sptr = index.initialize_known();
@@ -158,7 +121,7 @@ template<typename Index_, typename Data_, typename Distance_>
 std::vector<std::vector<Index_> > find_nearest_neighbors_index_only(const Prebuilt<Index_, Data_, Distance_>& index, int k, int num_threads = 1) {
     const Index_ nobs = index.num_observations();
     k = cap_k(k, nobs);
-    auto output = sanisizer::create<std::vector<std::vector<Index_> > >(sanisizer::attest_gez(nobs));
+    auto output = sanisizer::create<std::vector<std::vector<Index_> > >(nobs);
 
     parallelize(num_threads, nobs, [&](int, Index_ start, Index_ length) -> void {
         auto sptr = index.initialize_known();
