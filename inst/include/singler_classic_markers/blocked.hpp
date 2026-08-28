@@ -9,7 +9,6 @@
 
 #include "sanisizer/sanisizer.hpp"
 #include "tatami/tatami.hpp"
-#include "tatami_stats/tatami_stats.hpp"
 
 #include "queue.hpp"
 #include "scan.hpp"
@@ -55,23 +54,25 @@ template<bool include_stat_, typename Stat_, typename Value_, typename Index_, t
 Markers<include_stat_, Index_, Stat_> choose_blocked_raw(
     const tatami::Matrix<Value_, Index_>& matrix, 
     const Label_* label,
+    const Label_ num_labels,
     const Block_* block,
+    const Block_ num_blocks,
     const ChooseBlockedOptions& options
 ) {
     const auto NC = matrix.ncol();
-    const std::size_t ngroups = tatami_stats::total_groups/*<std::size_t>*/(label, NC);
-    const std::size_t nblocks = tatami_stats::total_groups/*<std::size_t>*/(block, NC);
-
-    const auto num_keep = get_num_keep<Index_>(ngroups, options.number);
+    const auto num_keep = get_num_keep<Index_>(num_labels, options.number);
     auto pqueues = sanisizer::create<std::vector<std::optional<PairwiseTopQueues<Stat_, Index_> > > >(options.num_threads);
 
     // Creating the combinations between block and not.
-    const auto ncombos = sanisizer::product<std::size_t>(ngroups, nblocks); // check that all producs below are safe.
+    const auto ncombos = sanisizer::product<std::size_t>(num_labels, num_blocks); // check that all producs below are safe.
     auto combinations = sanisizer::create<std::vector<std::size_t> >(NC);
     for (I<decltype(NC)> c = 0; c < NC; ++c) {
-        combinations[c] = sanisizer::nd_offset<std::size_t>(label[c], ngroups, block[c]); // group is the faster changing dimension.
+        combinations[c] = sanisizer::nd_offset<std::size_t>(label[c], num_labels, block[c]); // group is the faster changing dimension.
     }
-    auto combo_sizes = tatami_stats::tabulate_groups(combinations.data(), NC);
+    auto combo_sizes = sanisizer::create<std::vector<Index_> >(ncombos);
+    for (const auto com : combinations) {
+        combo_sizes[com] += 1;
+    }
 
     const auto num_used = scan_matrix<Stat_>(
         matrix,
@@ -81,19 +82,19 @@ Markers<include_stat_, Index_, Stat_> choose_blocked_raw(
 
         /* setup = */ [&]() -> PairwiseTopQueues<Stat_, Index_> {
             PairwiseTopQueues<Stat_, Index_> output;
-            allocate_pairwise_queues(output, num_keep, ngroups, options.keep_ties, /* check_nan = */ false); // we'll check it ourselves.
+            allocate_pairwise_queues(output, num_keep, num_labels, options.keep_ties, /* check_nan = */ false); // we'll check it ourselves.
             return output;
         },
 
         /* fun = */ [&](const Index_ r, const std::vector<Stat_>& medians, PairwiseTopQueues<Stat_, Index_>& curqueues) -> void {
-            for (I<decltype(ngroups)> g1 = 1; g1 < ngroups; ++g1) {
-                for (I<decltype(ngroups)> g2 = 0; g2 < g1; ++g2) {
+            for (I<decltype(num_labels)> g1 = 1; g1 < num_labels; ++g1) {
+                for (I<decltype(num_labels)> g2 = 0; g2 < g1; ++g2) {
 
                     if (options.use_minimum) {
                         Stat_ xval = std::numeric_limits<Stat_>::infinity();
                         Stat_ yval = std::numeric_limits<Stat_>::infinity();
-                        for (I<decltype(nblocks)> b = 0; b < nblocks; ++b) {
-                            const auto delta = medians[sanisizer::nd_offset<std::size_t>(g1, ngroups, b)] - medians[sanisizer::nd_offset<std::size_t>(g2, ngroups, b)];
+                        for (I<decltype(num_blocks)> b = 0; b < num_blocks; ++b) {
+                            const auto delta = medians[sanisizer::nd_offset<std::size_t>(g1, num_labels, b)] - medians[sanisizer::nd_offset<std::size_t>(g2, num_labels, b)];
                             if (!std::isnan(delta)) {
                                 xval = std::min(xval, delta);
                                 yval = std::min(yval, -delta);
@@ -108,8 +109,8 @@ Markers<include_stat_, Index_, Stat_> choose_blocked_raw(
                     } else {
                         Stat_ val = 0;
                         std::size_t denom = 0;
-                        for (I<decltype(nblocks)> b = 0; b < nblocks; ++b) {
-                            const auto delta = medians[sanisizer::nd_offset<std::size_t>(g1, ngroups, b)] - medians[sanisizer::nd_offset<std::size_t>(g2, ngroups, b)];
+                        for (I<decltype(num_blocks)> b = 0; b < num_blocks; ++b) {
+                            const auto delta = medians[sanisizer::nd_offset<std::size_t>(g1, num_labels, b)] - medians[sanisizer::nd_offset<std::size_t>(g2, num_labels, b)];
                             if (!std::isnan(delta)) {
                                 ++denom;
                                 val += delta; 
@@ -136,7 +137,7 @@ Markers<include_stat_, Index_, Stat_> choose_blocked_raw(
 
     pqueues.resize(num_used); 
     Markers<include_stat_, Index_, Stat_> output;
-    report_best_top_queues<include_stat_>(pqueues, ngroups, output);
+    report_best_top_queues<include_stat_>(pqueues, num_labels, output);
     return output;
 }
 /**
@@ -158,10 +159,12 @@ Markers<include_stat_, Index_, Stat_> choose_blocked_raw(
  * Each column should correspond to a sample while each row should represent a gene.
  * @param label Pointer to an array of length equal to the number of columns in `matrix`.
  * Each value of the array should specify the label for the corresponding column. 
- * Values should lie in \f$[0, L)\f$ for \f$L\f$ unique labels. 
+ * Values should lie in `[0, num_labels)`.
+ * @param num_labels Number of labels.
  * @param block Pointer to an array of length equal to the number of columns in `matrix`.
  * Each value of the array should specify the block for the corresponding column. 
- * Values should lie in \f$[0, B)\f$ for \f$B\f$ unique blocks. 
+ * Values should lie in `[0, num_blocks)`.
+ * @param num_blocks Number of blocks.
  * @param options Further options.
  * 
  * @return Top markers for each pairwise comparison between labels.
@@ -172,10 +175,12 @@ template<typename Stat_ = double, typename Value_, typename Index_, typename Lab
 std::vector<std::vector<std::vector<std::pair<Index_, Stat_> > > > choose_blocked(
     const tatami::Matrix<Value_, Index_>& matrix, 
     const Label_* label,
+    const Label_ num_labels,
     const Block_* block,
+    const Block_ num_blocks,
     const ChooseBlockedOptions& options
 ) {
-    return choose_blocked_raw<true, Stat_>(matrix, label, block, options);
+    return choose_blocked_raw<true, Stat_>(matrix, label, num_labels, block, num_blocks, options);
 }
 
 /**
@@ -191,10 +196,12 @@ std::vector<std::vector<std::vector<std::pair<Index_, Stat_> > > > choose_blocke
  * Each column should correspond to a sample while each row should represent a gene.
  * @param label Pointer to an array of length equal to the number of columns in `matrix`.
  * Each value of the array should specify the label for the corresponding column. 
- * Values should lie in \f$[0, L)\f$ for \f$L\f$ unique labels. 
+ * Values should lie in `[0, num_labels)`.
+ * @param num_labels Number of labels.
  * @param block Pointer to an array of length equal to the number of columns in `matrix`.
  * Each value of the array should specify the block for the corresponding column. 
- * Values should lie in \f$[0, B)\f$ for \f$B\f$ unique blocks. 
+ * Values should lie in `[0, num_blocks)`.
+ * @param num_blocks Number of blocks.
  * @param options Further options.
  * 
  * @return Top markers for each pairwise comparison between labels.
@@ -204,10 +211,12 @@ template<typename Stat_ = double, typename Value_, typename Index_, typename Lab
 std::vector<std::vector<std::vector<Index_> > > choose_blocked_index(
     const tatami::Matrix<Value_, Index_>& matrix, 
     const Label_* label,
+    const Label_ num_labels,
     const Block_* block,
+    const Block_ num_blocks,
     const ChooseBlockedOptions& options
 ) {
-    return choose_blocked_raw<false, Stat_>(matrix, label, block, options);
+    return choose_blocked_raw<false, Stat_>(matrix, label, num_labels, block, num_blocks, options);
 }
 
 }

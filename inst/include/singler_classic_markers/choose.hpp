@@ -7,7 +7,6 @@
 
 #include "sanisizer/sanisizer.hpp"
 #include "tatami/tatami.hpp"
-#include "tatami_stats/tatami_stats.hpp"
 
 #include "queue.hpp"
 #include "scan.hpp"
@@ -51,30 +50,33 @@ template<bool include_stat_, typename Stat_, typename Value_, typename Index_, t
 Markers<include_stat_, Index_, Stat_> choose_raw(
     const tatami::Matrix<Value_, Index_>& matrix, 
     const Label_* label,
+    const Label_ num_labels,
     const ChooseOptions& options
 ) {
     const auto NC = matrix.ncol();
-    auto group_sizes = tatami_stats::tabulate_groups(label, NC);
-    const auto ngroups = group_sizes.size();
+    auto group_sizes = sanisizer::create<std::vector<Index_> >(num_labels);
+    for (Index_ c = 0; c < NC; ++c) {
+        group_sizes[label[c]] += 1;
+    }
 
-    const auto num_keep = get_num_keep<Index_>(ngroups, options.number);
+    const auto num_keep = get_num_keep<Index_>(num_labels, options.number);
     auto pqueues = sanisizer::create<std::vector<std::optional<PairwiseTopQueues<Stat_, Index_> > > >(options.num_threads);
 
     const auto num_used = scan_matrix<Stat_>(
         matrix,
-        sanisizer::cast<std::size_t>(ngroups),
+        sanisizer::cast<std::size_t>(num_labels),
         label,
         group_sizes,
 
         /* setup = */ [&]() -> PairwiseTopQueues<Stat_, Index_> {
             PairwiseTopQueues<Stat_, Index_> output;
-            allocate_pairwise_queues(output, num_keep, ngroups, options.keep_ties, /* check_nan = */ true);
+            allocate_pairwise_queues(output, num_keep, num_labels, options.keep_ties, /* check_nan = */ true);
             return output;
         },
 
         /* fun = */ [&](const Index_ r, const std::vector<Stat_>& medians, PairwiseTopQueues<Stat_, Index_>& curqueues) -> void {
-            for (I<decltype(ngroups)> g1 = 1; g1 < ngroups; ++g1) {
-                for (I<decltype(ngroups)> g2 = 0; g2 < g1; ++g2) {
+            for (I<decltype(num_labels)> g1 = 1; g1 < num_labels; ++g1) {
+                for (I<decltype(num_labels)> g2 = 0; g2 < g1; ++g2) {
                     const auto delta = medians[g1] - medians[g2];
                     curqueues[g1][g2].emplace(delta, r); 
                     curqueues[g2][g1].emplace(-delta, r); 
@@ -91,7 +93,7 @@ Markers<include_stat_, Index_, Stat_> choose_raw(
 
     pqueues.resize(num_used); 
     Markers<include_stat_, Index_, Stat_> output;
-    report_best_top_queues<include_stat_>(pqueues, ngroups, output);
+    report_best_top_queues<include_stat_>(pqueues, num_labels, output);
     return output;
 }
 /**
@@ -113,7 +115,8 @@ Markers<include_stat_, Index_, Stat_> choose_raw(
  * Each column should correspond to a sample while each row should represent a gene.
  * @param label Pointer to an array of length equal to the number of columns in `matrix`.
  * Each value of the array should specify the label for the corresponding column. 
- * Values should lie in \f$[0, L)\f$ for \f$L\f$ unique labels. 
+ * Values should lie in `[0, num_labels)`.
+ * @param num_labels Number of unique labels.
  * @param options Further options.
  *
  * @return Top markers for each pairwise comparison between labels.
@@ -126,9 +129,10 @@ template<typename Stat_ = double, typename Value_, typename Index_, typename Lab
 std::vector<std::vector<std::vector<std::pair<Index_, Stat_> > > > choose(
     const tatami::Matrix<Value_, Index_>& matrix, 
     const Label_* label,
+    const Label_ num_labels,
     const ChooseOptions& options
 ) {
-    return choose_raw<true, Stat_>(matrix, label, options);
+    return choose_raw<true, Stat_>(matrix, label, num_labels, options);
 }
 
 /**
@@ -144,7 +148,8 @@ std::vector<std::vector<std::vector<std::pair<Index_, Stat_> > > > choose(
  * Each column should correspond to a sample while each row should represent a gene.
  * @param label Pointer to an array of length equal to the number of columns in `matrix`.
  * Each value of the array should specify the label for the corresponding column. 
- * Values should lie in \f$[0, L)\f$ for \f$L\f$ unique labels. 
+ * Values should lie in `[0, num_labels)`.
+ * @param num_labels Number of unique labels.
  * @param options Further options.
  *
  * @return Top markers for each pairwise comparison between labels.
@@ -154,9 +159,10 @@ template<typename Stat_ = double, typename Value_, typename Index_, typename Lab
 std::vector<std::vector<std::vector<Index_> > > choose_index(
     const tatami::Matrix<Value_, Index_>& matrix, 
     const Label_* label,
+    const Label_ num_labels,
     const ChooseOptions& options
 ) {
-    return choose_raw<false, Stat_>(matrix, label, options);
+    return choose_raw<false, Stat_>(matrix, label, num_labels, options);
 }
 
 }
